@@ -11,25 +11,73 @@ import io, zipfile
 from st_components.download_video_section import download_video_section
 from st_components.sidebar_setting import page_setting
 
+import os
+import io
+import shutil
+import zipfile
+import streamlit as st
+
 def download_subtitle_zip_button(text: str):
     zip_buffer = io.BytesIO()
     output_dir = "output"
-    
+    log_dir = os.path.join(output_dir, "log")
+    video_file_name = get_video_file_without_with_subs(output_dir)
+    video_name = replace_underscore_with_space(video_file_name[0].split('.', 1)[0])
+
+    # 复制一份需求字幕作为默认字幕
+    target_file_path = os.path.join(output_dir, "bilingual_trans_src_subtitles.srt")
+    if os.path.isfile(target_file_path):
+        shutil.copy(target_file_path, os.path.join(output_dir, video_name + ".srt"))
+
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
         for file_name in os.listdir(output_dir):
-            if file_name.endswith(".srt"):
-                file_path = os.path.join(output_dir, file_name)
-                with open(file_path, "rb") as file:
-                    zip_file.writestr(file_name, file.read())
-    
+            file_path = os.path.join(output_dir, file_name)
+            if file_name.endswith(".srt") and os.path.isfile(file_path):
+                if file_name == "src_subtitles.srt":
+                    new_name = video_name + "_src.srt"
+                elif file_name == "trans_subtitles.srt":
+                    new_name = video_name + "_trans.srt"
+                elif file_name == "bilingual_src_trans_subtitles.srt":
+                    new_name = video_name + "_bilingual_src_trans.srt"
+                elif file_name == "bilingual_trans_src_subtitles.srt":
+                    new_name = video_name + "_bilingual_trans_src.srt"
+                else:
+                    new_name = file_name
+                
+                zip_file.write(file_path, new_name)
+        
+        # 添加log文件夹下的转录文件，用于后续AI总结
+        specific_txt_file = "sentence_splitbymeaning.txt"
+        specific_txt_path = os.path.join(log_dir, specific_txt_file)
+        new_txt_name = video_name + '.txt'
+        if os.path.isfile(specific_txt_path):
+            zip_file.write(specific_txt_path, new_txt_name)
+
     zip_buffer.seek(0)
     
     st.download_button(
         label=text,
         data=zip_buffer,
-        file_name="subtitles.zip",
+        file_name= video_name + "_subtitles" + ".zip",
         mime="application/zip"
     )
+
+
+def get_video_file_without_with_subs(output_dir):
+    video_files = []
+    
+    # 遍历output文件夹
+    for file_name in os.listdir(output_dir):
+        file_path = os.path.join(output_dir, file_name)
+        
+        # 检查文件是否为视频文件且不包含"with_subs"
+        if os.path.isfile(file_path) and not "with_subs" in file_name and file_name.endswith(('.mp4', '.avi', '.mov', '.mkv')):
+            video_files.append(file_name)
+    
+    return video_files
+
+def replace_underscore_with_space(input_string):
+    return input_string.replace("_", " ")
 
 # st.markdown
 give_star_button = """

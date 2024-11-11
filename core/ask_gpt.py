@@ -58,7 +58,8 @@ def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default'):
     
     base_url = api_set["base_url"].strip('/') + '/v1' if 'v1' not in api_set["base_url"] else api_set["base_url"]
     client = OpenAI(api_key=api_set["key"], base_url=base_url)
-    response_format = {"type": "json_object"} if response_json and api_set["model"] in llm_support_json else None
+    # response_format = {"type": "json_object"} if response_json and api_set["model"] in llm_support_json else None
+    response_format = {"type": "json_object"} if response_json else None
 
     max_retries = 3
     for attempt in range(max_retries):

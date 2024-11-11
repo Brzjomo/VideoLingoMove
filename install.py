@@ -8,15 +8,21 @@ import shutil
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 def install_package(*packages):
+    # 添加项目目录下的Python环境到PATH环境变量
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    python_path = os.path.join(project_dir, "runtime", "python")
+    os.environ["PATH"] = python_path + os.pathsep + os.environ["PATH"]
+
+    # 使用项目目录下的Python环境安装包
     subprocess.check_call([sys.executable, "-m", "pip", "install", *packages])
 
 install_package("requests", "rich", "ruamel.yaml")
 from pypi_autochoose import main as choose_mirror
 
 def check_gpu():
-    """Check if NVIDIA GPU is available"""
+    """检查是否有 NVIDIA GPU 可用"""
     try:
-        # 🔍 Try running nvidia-smi command to detect GPU
+        # 🔍 尝试运行 nvidia-smi 命令来检测 GPU
         subprocess.run(['nvidia-smi'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -27,27 +33,27 @@ def main():
     from rich.panel import Panel
     
     console = Console()
-    console.print(Panel.fit("🚀 Starting Installation", style="bold magenta"))
+    console.print(Panel.fit("🚀 开始安装", style="bold magenta"))
 
-    # Configure mirrors
-    console.print(Panel("⚙️ Configuring mirrors", style="bold yellow"))
+    # 配置镜像源
+    console.print(Panel("⚙️ 正在配置镜像源", style="bold yellow"))
     choose_mirror()
 
-    # Detect system and GPU
+    # 检测系统和 GPU
     if platform.system() == 'Darwin':
-        console.print(Panel("🍎 MacOS detected, installing CPU version of PyTorch...", style="cyan"))
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2"])
+        console.print(Panel("🍎 检测到 MacOS，正在安装 CPU 版本的 PyTorch...", style="cyan"))
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch", "torchaudio"])
     else:
         has_gpu = check_gpu()
         if has_gpu:
-            console.print(Panel("🎮 NVIDIA GPU detected, installing CUDA version of PyTorch...", style="cyan"))
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.0.0", "torchaudio==2.0.0", "--index-url", "https://download.pytorch.org/whl/cu118"])
+            console.print(Panel("🎮 检测到 NVIDIA GPU，正在安装 CUDA 版本的 PyTorch...", style="cyan"))
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2", "--index-url", "https://download.pytorch.org/whl/cu118"])
         else:
-            console.print(Panel("💻 No NVIDIA GPU detected, installing CPU version of PyTorch...", style="cyan"))
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2"])
+            console.print(Panel("💻 未检测到 NVIDIA GPU，正在安装 CPU 版本的 PyTorch...", style="cyan"))
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch", "torchaudio"])
     
-    # Install WhisperX
-    console.print(Panel("📦 Installing WhisperX...", style="cyan"))
+    # 安装 WhisperX
+    console.print(Panel("📦 正在安装 WhisperX...", style="cyan"))
     current_dir = os.getcwd()
     whisperx_dir = os.path.join(current_dir, "third_party", "whisperX")
     os.chdir(whisperx_dir)
@@ -61,7 +67,7 @@ def main():
             with open("requirements.txt", "w", encoding="gbk") as file:
                 file.write(content)
         except Exception as e:
-            print(f"Error converting requirements.txt: {str(e)}")
+            print(f"转换 requirements.txt 时出错: {str(e)}")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
 
     def download_and_extract_ffmpeg():
@@ -80,18 +86,18 @@ def main():
             return
 
         if os.path.exists(ffmpeg_exe):
-            print(f"{ffmpeg_exe} already exists")
+            print(f"{ffmpeg_exe} 已存在")
             return
 
-        print("Downloading FFmpeg")
+        print("正在下载 FFmpeg")
         response = requests.get(url)
         if response.status_code == 200:
             filename = "ffmpeg.zip" if system in ["Windows", "Darwin"] else "ffmpeg.tar.xz"
             with open(filename, 'wb') as f:
                 f.write(response.content)
-            print(f"FFmpeg downloaded: {filename}")
+            print(f"FFmpeg 下载完成: {filename}")
         
-            print("Extracting FFmpeg")
+            print("正在解压 FFmpeg")
             if system == "Linux":
                 import tarfile
                 with tarfile.open(filename) as tar_ref:
@@ -106,36 +112,36 @@ def main():
                             zip_ref.extract(file)
                             shutil.move(os.path.join(*file.split('/')[:-1], os.path.basename(file)), os.path.basename(file))
             
-            print("Cleaning up")
+            print("正在清理")
             os.remove(filename)
             if system == "Windows":
                 for item in os.listdir():
                     if os.path.isdir(item) and "ffmpeg" in item.lower():
                         shutil.rmtree(item)
-            print("FFmpeg extraction completed")
+            print("FFmpeg 解压完成")
         else:
-            print("Failed to download FFmpeg")
+            print("FFmpeg 下载失败")
 
     def install_noto_font():
         if platform.system() == 'Linux':
             try:
-                # Try apt-get first (Debian-based systems)
+                # 首先尝试 apt-get (基于 Debian 的系统)
                 subprocess.run(['sudo', 'apt-get', 'install', '-y', 'fonts-noto'], check=True)
-                print("Noto fonts installed successfully using apt-get.")
+                print("使用 apt-get 成功安装了 Noto 字体。")
             except subprocess.CalledProcessError:
                 try:
-                    # If apt-get fails, try yum (RPM-based systems)
+                    # 如果 apt-get 失败，尝试 yum (基于 RPM 的系统)
                     subprocess.run(['sudo', 'yum', 'install', '-y', 'fonts-noto'], check=True)
-                    print("Noto fonts installed successfully using yum.")
+                    print("使用 yum 成功安装了 Noto 字体。")
                 except subprocess.CalledProcessError:
-                    print("Failed to install Noto fonts automatically. Please install them manually.")
+                    print("自动安装 Noto 字体失败。请手动安装。")
 
     install_noto_font()
     install_requirements()
     download_and_extract_ffmpeg()
     
-    console.print(Panel.fit("Installation completed", style="bold green"))
-    console.print("To start the application, run:")
+    console.print(Panel.fit("安装完成", style="bold green"))
+    console.print("要启动应用程序，请运行：")
     console.print("[bold cyan]streamlit run st.py[/bold cyan]")
 
 if __name__ == "__main__":

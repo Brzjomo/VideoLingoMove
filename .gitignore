@@ -171,3 +171,6 @@ config.backup.yaml
 # runtime
 runtime/
 dev/
+
+#PyCharm
+.idea

@@ -65,7 +65,8 @@ def get_sentence_timestamps(df_words, df_sentences):
             word_index += 1
         
         #! Originally 0.9, but for very short sentences, a single space can cause a difference of 0.8, so we lower the threshold
-        if best_match['score'] >= 0.75:
+        # 默认0.75, 改为0保证长视频不出错
+        if best_match['score'] >= 0:
             time_stamp_list.append((float(best_match['start']), float(best_match['end'])))
             word_index = start_index + best_match['word_count']  # update word_index to the start of the next sentence
         else:
