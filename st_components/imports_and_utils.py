@@ -71,7 +71,7 @@ def get_video_file_without_with_subs(output_dir):
         file_path = os.path.join(output_dir, file_name)
         
         # 检查文件是否为视频文件且不包含"with_subs"
-        if os.path.isfile(file_path) and not "with_subs" in file_name and file_name.endswith(('.mp4', '.avi', '.mov', '.mkv')):
+        if os.path.isfile(file_path) and not "with_subs" in file_name and file_name.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
             video_files.append(file_name)
     
     return video_files

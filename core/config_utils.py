@@ -57,3 +57,33 @@ def get_joiner(language):
 
 if __name__ == "__main__":
     print(load_key('language_split_with_space'))
+
+def assign_key(target_key: str, source_key: str) -> bool:
+    with config_lock:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as file:
+            data = yaml.load(file)
+
+        source_keys = source_key.split('.')
+        target_keys = target_key.split('.')
+        source_value = data
+        for k in source_keys:
+            if isinstance(source_value, dict) and k in source_value:
+                source_value = source_value[k]
+            else:
+                raise KeyError(f"Key '{k}' not found in configuration")
+
+        current = data
+        for k in target_keys[:-1]:
+            if isinstance(current, dict) and k in current:
+                current = current[k]
+            else:
+                return False
+
+        if isinstance(current, dict) and target_keys[-1] in current:
+            current[target_keys[-1]] = source_value
+            with open(CONFIG_PATH, 'w', encoding='utf-8') as file:
+                yaml.dump(data, file)
+            return True
+        else:
+            raise KeyError(f"Key '{target_keys[-1]}' not found in configuration")
+

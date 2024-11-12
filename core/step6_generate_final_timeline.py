@@ -3,10 +3,12 @@ import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from difflib import SequenceMatcher
 import re
+import time
 from core.config_utils import load_key, get_joiner
 from rich.panel import Panel
 from rich.console import Console
 import autocorrect_py as autocorrect
+from st import read_elapsed_time
 
 console = Console()
 
@@ -147,7 +149,29 @@ def align_timestamp_main():
     ]
     align_timestamp(df_text, df_translate_for_audio, subtitle_output_configs, 'output/audio')
     console.print(Panel("[bold green]🎉📝 Audio subtitles generation completed! Please check in the `output/audio` folder 👀[/bold green]"))
-    
+
+    record_elapsed_time()
+    console.print(Panel("[bold green]处理完成，耗时：{}[/bold green]".format(read_elapsed_time())))
+
+def record_elapsed_time():
+        with open("output/timecost.txt", "r") as f:
+            start_time = float(f.read().strip())
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        with open("output/timecost.txt", "w") as f:
+            f.write(str(convert_seconds(elapsed_time)))
+
+def convert_seconds(seconds):
+    minutes = int(seconds // 60)
+    seconds = int(seconds % 60)
+    if minutes >= 60:
+        hours = minutes // 60
+        minutes = minutes % 60
+        return f"{hours}小时{minutes}分{seconds}秒"
+    elif minutes > 0:
+        return f"{minutes}分{seconds}秒"
+    else:
+        return f"{seconds}秒"
 
 if __name__ == '__main__':
     align_timestamp_main()

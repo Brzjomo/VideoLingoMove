@@ -2,10 +2,16 @@ import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from st_components.imports_and_utils import ask_gpt
 import streamlit as st
-from core.config_utils import update_key, load_key
+from core.config_utils import update_key, load_key, assign_key
 import requests
 
 def page_setting():
+    with st.expander("一键切换配置", expanded=True):
+        config_options = ["Deepseek", "千问-vl-max", "Ollama"]
+        selected_config = st.selectbox("选择配置", options=config_options)
+    if st.button("应用配置"):
+        apply_config(selected_config)
+
     with st.expander("LLM 配置", expanded=True):
         api_key = st.text_input("API_KEY", value=load_key("api.key"))
         if api_key != load_key("api.key"):
@@ -174,3 +180,18 @@ def valid_replicate_token(token):
     headers = {"Authorization": f"Token {token}"}
     response = requests.get(url, headers=headers)
     return response.status_code == 200
+
+def apply_config(config_name):
+    # 根据配置名称来设置API_KEY, BASE_URL, 模型等
+    if config_name == "Deepseek":
+        assign_key("api.key", "deepseek_api.key")
+        assign_key("api.base_url", "deepseek_api.base_url")
+        assign_key("api.model", "deepseek_api.model")
+    elif config_name == "千问-vl-max":
+        assign_key("api.key", "qwen_api.key")
+        assign_key("api.base_url", "qwen_api.base_url")
+        assign_key("api.model", "qwen_api.model")
+    elif config_name == "Ollama":
+        assign_key("api.key", "ollama_api.key")
+        assign_key("api.base_url", "ollama_api.base_url")
+        assign_key("api.model", "ollama_api.model")
