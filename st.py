@@ -1,5 +1,6 @@
 import streamlit as st
 import os, sys, time
+import easy_util as eu
 from st_components.imports_and_utils import *
 from core.config_utils import load_key
 
@@ -26,11 +27,12 @@ def text_processing_section():
         if not os.path.exists("output/output_video_with_subs.mp4"):
             if st.button("开始处理字幕", key="text_processing_button"):
                 record_start_time()
+                reset_tokens()
                 process_text()
                 st.rerun()
         else:
-            elapsed_time = read_elapsed_time()
-            st.success(f"字幕翻译完成！建议下载 srt 文件并自行处理。耗时：{elapsed_time} ")
+            time_duration = read_time_duration()
+            st.success(f"字幕翻译完成！建议下载 srt 文件并自行处理。耗时：{time_duration} ")
             if load_key("resolution") != "0x0":
                 st.video("output/output_video_with_subs.mp4")
             download_subtitle_zip_button(text="下载所有字幕")
@@ -41,14 +43,15 @@ def text_processing_section():
             return True
 
 def record_start_time():
-    start_time = time.time()
-    with open("output/timecost.txt", "w") as f:
-        f.write(str(start_time))
+    eu.start_time = time.time()
 
-def read_elapsed_time():
-    with open("output/timecost.txt", "r") as f:
-        elapsed_time = f.read().strip()
-    return elapsed_time
+def read_time_duration():
+    return eu.convert_seconds(eu.time_duration)
+
+def reset_tokens():
+    eu.prompt_tokens = 0
+    eu.completion_tokens = 0
+    eu.total_tokens = 0
 
 def process_text():
     with st.spinner("使用 Whisper 进行转录中..."):

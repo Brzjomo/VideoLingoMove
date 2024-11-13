@@ -5,6 +5,7 @@ import json_repair
 import json 
 from openai import OpenAI
 import time
+import easy_util as eu
 from requests.exceptions import RequestException
 from core.config_utils import load_key
 
@@ -43,6 +44,14 @@ def check_ask_gpt_history(prompt, model, log_title):
                     return item["response"]
     return False
 
+def increase_prompt_tokens(value):
+    with eu.lock:
+        eu.prompt_tokens += value
+
+def increase_completion_tokens(value):
+    with eu.lock:
+        eu.completion_tokens += value
+
 def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default'):
     api_set = load_key("api")
     llm_support_json = load_key("llm_support_json")
@@ -73,6 +82,12 @@ def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default'):
             
             if response_json:
                 try:
+                    # 记录token
+                    prompt_tokens_cost = int(response.usage.prompt_tokens)
+                    completion_tokens_cost = int(response.usage.completion_tokens)
+                    increase_prompt_tokens(prompt_tokens_cost)
+                    increase_completion_tokens(completion_tokens_cost)
+
                     response_data = json_repair.loads(response.choices[0].message.content)
                     
                     # check if the response is valid, otherwise save the log and raise error and retry
