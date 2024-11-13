@@ -8,8 +8,6 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 os.environ['PATH'] += os.pathsep + current_dir
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
-
 def text_processing_section():
     st.header("翻译和生成字幕")
     with st.container(border=True):
@@ -112,6 +110,7 @@ def process_audio():
     st.balloons()
 
 def main():
+    st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
     logo_col, _ = st.columns([2,1])
     with logo_col:
         st.image("docs/logo.png", use_column_width=True)
