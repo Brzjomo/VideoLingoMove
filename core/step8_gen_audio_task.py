@@ -13,6 +13,10 @@ from core.config_utils import load_key
 console = Console()
 speed_factor = load_key("speed_factor")
 
+TRANS_SUBS_FOR_AUDIO_FILE = 'output/audio/trans_subs_for_audio.srt'
+SRC_SUBS_FOR_AUDIO_FILE = 'output/audio/src_subs_for_audio.srt'
+SOVITS_TASKS_FILE = 'output/audio/sovits_tasks.xlsx'
+
 def check_len_then_trim(text, duration):
     multiplier = speed_factor['normal'] * speed_factor['max']
     # Define speech speed: characters/second or words/second, punctuation/second
@@ -44,12 +48,12 @@ def check_len_then_trim(text, duration):
         original_text = text
         prompt = get_subtitle_trim_prompt(text, duration)
         def valid_trim(response):
-            if 'trans_text_processed' not in response:
-                return {'status': 'error', 'message': 'No trans_text_processed in response'}
+            if 'result' not in response:
+                return {'status': 'error', 'message': 'No result in response'}
             return {'status': 'success', 'message': ''}
         try:    
             response = ask_gpt(prompt, response_json=True, log_title='subtitle_trim', valid_def=valid_trim)
-            shortened_text = response['trans_text_processed']
+            shortened_text = response['result']
         except Exception:
             rprint("[bold red]🚫 AI refused to answer due to sensitivity, so manually remove punctuation[/bold red]")
             shortened_text = re.sub(r'[,.!?;:，。！？；：]', ' ', text).strip()
@@ -60,15 +64,10 @@ def check_len_then_trim(text, duration):
 
 def process_srt():
     """Process srt file, generate audio tasks"""
-    output_dir = 'output/audio'
-    trans_subs = os.path.join(output_dir, 'trans_subs_for_audio.srt')
-
-    src_file_path = os.path.join(output_dir, 'src_subs_for_audio.srt')
-    
-    with open(trans_subs, 'r', encoding='utf-8') as file:
+    with open(TRANS_SUBS_FOR_AUDIO_FILE, 'r', encoding='utf-8') as file:
         content = file.read()
     
-    with open(src_file_path, 'r', encoding='utf-8') as src_file:
+    with open(SRC_SUBS_FOR_AUDIO_FILE, 'r', encoding='utf-8') as src_file:
         src_content = src_file.read()
     
     subtitles = []
@@ -155,17 +154,14 @@ def process_srt():
     return df
 
 def gen_audio_task_main():
-    output_dir = 'output/audio'
-    tasks_file = os.path.join(output_dir, 'sovits_tasks.xlsx')
-    
-    if os.path.exists(tasks_file):
-        rprint(Panel(f"{tasks_file} already exists, skip.", title="Info", border_style="blue"))
+    if os.path.exists(SOVITS_TASKS_FILE):
+        rprint(Panel(f"{SOVITS_TASKS_FILE} already exists, skip.", title="Info", border_style="blue"))
     else:
         df = process_srt()
         console.print(df)
-        df.to_excel(tasks_file, index=False)
+        df.to_excel(SOVITS_TASKS_FILE, index=False)
 
-        rprint(Panel(f"Successfully generated {tasks_file}", title="Success", border_style="green"))
+        rprint(Panel(f"Successfully generated {SOVITS_TASKS_FILE}", title="Success", border_style="green"))
 
 if __name__ == '__main__':
     gen_audio_task_main()

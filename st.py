@@ -32,7 +32,7 @@ def text_processing_section():
                 st.rerun()
         else:
             time_duration = read_time_duration()
-            st.success(f"字幕翻译完成！建议下载 srt 文件并自行处理。耗时：{time_duration} ")
+            st.success(f"字幕翻译完成！耗时：{time_duration} ")
             if load_key("resolution") != "0x0":
                 st.video("output/output_video_with_subs.mp4")
             download_subtitle_zip_button(text="下载所有字幕")
@@ -55,8 +55,8 @@ def reset_tokens():
 
 def process_text():
     with st.spinner("使用 Whisper 进行转录中..."):
-        step2_whisper.transcribe()
-    with st.spinner("分割长句中..."):  
+        step2_whisperX.transcribe()
+    with st.spinner("分割长句中..."):
         step3_1_spacy_split.split_by_spacy()
         step3_2_splitbymeaning.split_sentences_by_meaning()
     with st.spinner("总结和翻译中..."):
@@ -64,7 +64,7 @@ def process_text():
         if load_key("pause_before_translate"):
             input("⚠️ 翻译前暂停。请前往 `output/log/terminology.json` 编辑术语。完成后按回车继续...")
         step4_2_translate_all.translate_all()
-    with st.spinner("处理和对齐字幕中..."): 
+    with st.spinner("处理和对齐字幕中..."):
         step5_splitforsub.split_for_sub_main()
         step6_generate_final_timeline.align_timestamp_main()
     with st.spinner("将字幕合并到视频中..."):
@@ -100,7 +100,7 @@ def audio_processing_section():
                 st.rerun()
 
 def process_audio():
-    with st.spinner("生成音频任务中"): 
+    with st.spinner("生成音频任务中"):
         step8_gen_audio_task.gen_audio_task_main()
     with st.spinner("提取参考音频中"):
         step9_extract_refer_audio.extract_refer_audio_main()
@@ -114,7 +114,7 @@ def process_audio():
 
 def main():
     st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
-    logo_col, _ = st.columns([2,1])
+    logo_col, _ = st.columns([1,1])
     with logo_col:
         st.image("docs/logo.png", use_column_width=True)
     st.markdown(button_style, unsafe_allow_html=True)

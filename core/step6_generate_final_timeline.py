@@ -1,7 +1,6 @@
 import pandas as pd
 import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from difflib import SequenceMatcher
 import re
 import time
 import easy_util as eu
@@ -11,6 +10,25 @@ from rich.console import Console
 import autocorrect_py as autocorrect
 
 console = Console()
+
+CLEANED_CHUNKS_FILE = 'output/log/cleaned_chunks.xlsx'
+TRANSLATION_RESULTS_FOR_SUBTITLES_FILE = 'output/log/translation_results_for_subtitles.xlsx'
+TRANSLATION_RESULTS_REMERGED_FILE = 'output/log/translation_results_remerged.xlsx'
+
+OUTPUT_DIR = 'output'
+AUDIO_OUTPUT_DIR = 'output/audio'
+
+SUBTITLE_OUTPUT_CONFIGS = [
+    ('src.srt', ['Source']),
+    ('trans.srt', ['Translation']),
+    ('src_trans.srt', ['Source', 'Translation']),
+    ('trans_src.srt', ['Translation', 'Source'])
+]
+
+AUDIO_SUBTITLE_OUTPUT_CONFIGS = [
+    ('src_subs_for_audio.srt', ['Source']),
+    ('trans_subs_for_audio.srt', ['Translation'])
+]
 
 def convert_to_srt_format(start_time, end_time):
     """Convert time (in seconds) to the format: hours:minutes:seconds,milliseconds"""
@@ -30,52 +48,65 @@ def remove_punctuation(text):
     text = re.sub(r'[^\w\s]', '', text)
     return text.strip()
 
+def show_difference(str1, str2):
+    """Show the difference positions between two strings"""
+    min_len = min(len(str1), len(str2))
+    diff_positions = []
+
+    for i in range(min_len):
+        if str1[i] != str2[i]:
+            diff_positions.append(i)
+
+    if len(str1) != len(str2):
+        diff_positions.extend(range(min_len, max(len(str1), len(str2))))
+
+    print("Difference positions:")
+    print(f"Expected sentence: {str1}")
+    print(f"Actual match: {str2}")
+    print("Position markers: " + "".join("^" if i in diff_positions else " " for i in range(max(len(str1), len(str2)))))
+    print(f"Difference indices: {diff_positions}")
+
 def get_sentence_timestamps(df_words, df_sentences):
     time_stamp_list = []
-    word_index = 0
-    whisper_language = load_key("whisper.language")
-    language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language
-    joiner = get_joiner(language)
 
-    for idx,sentence in df_sentences['Source'].items():
-        sentence = remove_punctuation(sentence.lower())
-        best_match = {'score': 0, 'start': 0, 'end': 0, 'word_count': 0}
-        decreasing_count = 0
-        current_phrase = ""
-        start_index = word_index  # record the index of the word where the current sentence starts
+    # Build complete string and position mapping
+    full_words_str = ''
+    position_to_word_idx = {}
 
-        while word_index < len(df_words):
-            word = remove_punctuation(df_words['text'][word_index].lower())
+    for idx, word in enumerate(df_words['text']):
+        clean_word = remove_punctuation(word.lower())
+        start_pos = len(full_words_str)
+        full_words_str += clean_word
+        for pos in range(start_pos, len(full_words_str)):
+            position_to_word_idx[pos] = idx
 
-            current_phrase += word + joiner
+    current_pos = 0
+    for idx, sentence in df_sentences['Source'].items():
+        clean_sentence = remove_punctuation(sentence.lower()).replace(" ", "")
+        sentence_len = len(clean_sentence)
 
-            similarity = SequenceMatcher(None, sentence, current_phrase.strip()).ratio()
-            if similarity > best_match['score']:
-                best_match = {
-                    'score': similarity,
-                    'start': df_words['start'][start_index],
-                    'end': df_words['end'][word_index],
-                    'word_count': word_index - start_index + 1,
-                    'phrase': current_phrase
-                }
-                decreasing_count = 0
-            else:
-                decreasing_count += 1
-            # if 5 consecutive words don't match, break the loop
-            if decreasing_count >= 5:
+        match_found = False
+        while current_pos <= len(full_words_str) - sentence_len:
+            if full_words_str[current_pos:current_pos+sentence_len] == clean_sentence:
+                start_word_idx = position_to_word_idx[current_pos]
+                end_word_idx = position_to_word_idx[current_pos + sentence_len - 1]
+
+                time_stamp_list.append((
+                    float(df_words['start'][start_word_idx]),
+                    float(df_words['end'][end_word_idx])
+                ))
+
+                current_pos += sentence_len
+                match_found = True
                 break
-            word_index += 1
-        
-        #! Originally 0.9, but for very short sentences, a single space can cause a difference of 0.8, so we lower the threshold
-        # 默认0.75, 改为0保证长视频不出错
-        if best_match['score'] >= 0:
-            time_stamp_list.append((float(best_match['start']), float(best_match['end'])))
-            word_index = start_index + best_match['word_count']  # update word_index to the start of the next sentence
-        else:
-            print(f"⚠️ Warning: No match found for sentence: {sentence}\nOriginal: {repr(sentence)}\nMatched: {best_match['phrase']}\nSimilarity: {best_match['score']:.2f}\n{'─' * 50}")
-            raise ValueError("❎ Failed to match sentence with timestamps. This typically occurs when background music is too loud or the source language is not English. Currently no workaround available. Please raise an Issue!")
-        
-        start_index = word_index  # update start_index for the next sentence
+            current_pos += 1
+
+        if not match_found:
+            print(f"\n⚠️ 警告：未找到与句子完全匹配的结果: {sentence}")
+            show_difference(clean_sentence,
+                          full_words_str[current_pos:current_pos+len(clean_sentence)])
+            print("\n原句:", df_sentences['Source'][idx])
+            raise ValueError("❎ 未找到与句子匹配的内容。")
     
     return time_stamp_list
 
@@ -127,27 +158,19 @@ def clean_translation(x):
     return autocorrect.format(cleaned)
 
 def align_timestamp_main():
-    df_text = pd.read_excel('output/log/cleaned_chunks.xlsx')
+    df_text = pd.read_excel(CLEANED_CHUNKS_FILE)
     df_text['text'] = df_text['text'].str.strip('"').str.strip()
-    df_translate = pd.read_excel('output/log/translation_results_for_subtitles.xlsx')
+    df_translate = pd.read_excel(TRANSLATION_RESULTS_FOR_SUBTITLES_FILE)
     df_translate['Translation'] = df_translate['Translation'].apply(clean_translation)
-    subtitle_output_configs = [ 
-        ('src_subtitles.srt', ['Source']),
-        ('trans_subtitles.srt', ['Translation']),
-        ('bilingual_src_trans_subtitles.srt', ['Source', 'Translation']),
-        ('bilingual_trans_src_subtitles.srt', ['Translation', 'Source'])
-    ]
-    align_timestamp(df_text, df_translate, subtitle_output_configs, 'output')
+
+    align_timestamp(df_text, df_translate, SUBTITLE_OUTPUT_CONFIGS, OUTPUT_DIR)
     console.print(Panel("[bold green]🎉📝 Subtitles generation completed! Please check in the `output` folder 👀[/bold green]"))
 
     # for audio
-    df_translate_for_audio = pd.read_excel('output/log/translation_results.xlsx')
+    df_translate_for_audio = pd.read_excel(TRANSLATION_RESULTS_REMERGED_FILE) # use remerged file to avoid unmatched lines when dubbing
     df_translate_for_audio['Translation'] = df_translate_for_audio['Translation'].apply(clean_translation)
-    subtitle_output_configs = [
-        ('src_subs_for_audio.srt', ['Source']),
-        ('trans_subs_for_audio.srt', ['Translation'])
-    ]
-    align_timestamp(df_text, df_translate_for_audio, subtitle_output_configs, 'output/audio')
+
+    align_timestamp(df_text, df_translate_for_audio, AUDIO_SUBTITLE_OUTPUT_CONFIGS, AUDIO_OUTPUT_DIR)
     console.print(Panel("[bold green]🎉📝 Audio subtitles generation completed! Please check in the `output/audio` folder 👀[/bold green]"))
 
     record_end_time_and_duration()

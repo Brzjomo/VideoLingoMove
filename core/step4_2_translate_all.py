@@ -11,13 +11,19 @@ from core.config_utils import load_key
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
+from difflib import SequenceMatcher
 
 console = Console()
 
+SENTENCE_SPLIT_FILE = "output/log/sentence_splitbymeaning.txt"
+TRANSLATION_RESULTS_FILE = "output/log/translation_results.xlsx"
+TERMINOLOGY_FILE = "output/log/terminology.json"
+CLEANED_CHUNKS_FILE = "output/log/cleaned_chunks.xlsx"
+
 # Function to split text into chunks
-def split_chunks_by_chars(chunk_size=500, max_i=10): 
+def split_chunks_by_chars(chunk_size=400, max_i=8): 
     """Split text into chunks based on character count, return a list of multi-line text chunks"""
-    with open("output/log/sentence_splitbymeaning.txt", "r", encoding="utf-8") as file:
+    with open(SENTENCE_SPLIT_FILE, "r", encoding="utf-8") as file:
         sentences = file.read().strip().split('\n')
 
     chunks = []
@@ -48,16 +54,20 @@ def translate_chunk(chunk, chunks, theme_prompt, i):
     translation, english_result = translate_lines(chunk, previous_content_prompt, after_content_prompt, things_to_note_prompt, theme_prompt, i)
     return i, english_result, translation
 
+# Add similarity calculation function
+def similar(a, b):
+    return SequenceMatcher(None, a, b).ratio()
+
 # 🚀 Main function to translate all chunks
 def translate_all():
     # Check if the file exists
-    if os.path.exists("output/log/translation_results.xlsx"):
+    if os.path.exists(TRANSLATION_RESULTS_FILE):
         console.print(Panel("🚨 File `translation_results.xlsx` already exists, skipping TRANSLATE ALL.", title="Warning", border_style="yellow"))
         return
     
     console.print("[bold green]Start Translating All...[/bold green]")
     chunks = split_chunks_by_chars(chunk_size=500, max_i=10)
-    with open('output/log/terminology.json', 'r', encoding='utf-8') as file:
+    with open(TERMINOLOGY_FILE, 'r', encoding='utf-8') as file:
         theme_prompt = json.load(file).get('theme')
 
     # 🔄 Use concurrent execution for translation
@@ -82,12 +92,27 @@ def translate_all():
     
     # 💾 Save results to lists and Excel file
     src_text, trans_text = [], []
-    for _, chunk, translation in results:
-        src_text.extend(chunk.split('\n'))
-        trans_text.extend(translation.split('\n'))
+    for i, chunk in enumerate(chunks):
+        chunk_lines = chunk.split('\n')
+        src_text.extend(chunk_lines)
+        
+        # Calculate similarity between current chunk and translation results
+        chunk_text = ''.join(chunk_lines).lower()
+        matching_results = [(r, similar(''.join(r[1].split('\n')).lower(), chunk_text)) 
+                          for r in results]
+        best_match = max(matching_results, key=lambda x: x[1])
+        
+        # Check similarity and handle exceptions
+        if best_match[1] < 0.9:
+            console.print(f"[yellow]Warning: No matching translation found for chunk {i}[/yellow]")
+            raise ValueError(f"Translation matching failed (chunk {i})")
+        elif best_match[1] < 1.0:
+            console.print(f"[yellow]Warning: Similar match found (chunk {i}, similarity: {best_match[1]:.3f})[/yellow]")
+            
+        trans_text.extend(best_match[0][2].split('\n'))
     
     # Trim long translation text
-    df_text = pd.read_excel('output/log/cleaned_chunks.xlsx')
+    df_text = pd.read_excel(CLEANED_CHUNKS_FILE)
     df_text['text'] = df_text['text'].str.strip('"').str.strip()
     df_translate = pd.DataFrame({'Source': src_text, 'Translation': trans_text})
     subtitle_output_configs = [('trans_subs_for_audio.srt', ['Translation'])]
@@ -97,7 +122,7 @@ def translate_all():
     df_time['Translation'] = df_time.apply(lambda x: check_len_then_trim(x['Translation'], x['duration']) if x['duration'] > load_key("min_trim_duration") else x['Translation'], axis=1)
     console.print(df_time)
     
-    df_time.to_excel("output/log/translation_results.xlsx", index=False)
+    df_time.to_excel(TRANSLATION_RESULTS_FILE, index=False)
     console.print("[bold green]✅ Translation completed and results saved.[/bold green]")
 
 if __name__ == '__main__':

@@ -1,6 +1,6 @@
 import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import step2_whisper, step1_ytdlp, step3_1_spacy_split, step3_2_splitbymeaning, step9_extract_refer_audio
+from core import step1_ytdlp, step2_whisperX, step3_1_spacy_split, step3_2_splitbymeaning, step9_extract_refer_audio
 from core import step4_1_summarize, step4_2_translate_all, step5_splitforsub, step6_generate_final_timeline 
 from core import step7_merge_sub_to_vid, step8_gen_audio_task, step10_gen_audio, step11_merge_audio_to_vid
 from core.onekeycleanup import cleanup  
@@ -24,28 +24,26 @@ def download_subtitle_zip_button(text: str):
     video_file_name = get_video_file_without_with_subs(output_dir)
     video_name = replace_underscore_with_space(video_file_name[0].split('.', 1)[0])
 
-    # 复制一份需求字幕作为默认字幕
-    target_file_path = os.path.join(output_dir, "bilingual_trans_src_subtitles.srt")
-    if os.path.isfile(target_file_path):
-        shutil.copy(target_file_path, os.path.join(output_dir, video_name + ".srt"))
-
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
         for file_name in os.listdir(output_dir):
             file_path = os.path.join(output_dir, file_name)
             if file_name.endswith(".srt") and os.path.isfile(file_path):
-                if file_name == "src_subtitles.srt":
+                if "src_trans" in file_name:
+                    new_name = video_name + "_src_trans.srt"
+                elif "trans_src" in file_name:
+                    new_name = video_name + "_trans_src.srt"
+                    # 复制一份默认字幕
+                    copy_as_default_subbtitle(output_dir, file_name, video_name + ".srt")
+                    # zip_file.write(file_path, video_name + ".srt")
+                elif "src" in file_name:
                     new_name = video_name + "_src.srt"
-                elif file_name == "trans_subtitles.srt":
+                elif "trans" in file_name:
                     new_name = video_name + "_trans.srt"
-                elif file_name == "bilingual_src_trans_subtitles.srt":
-                    new_name = video_name + "_bilingual_src_trans.srt"
-                elif file_name == "bilingual_trans_src_subtitles.srt":
-                    new_name = video_name + "_bilingual_trans_src.srt"
                 else:
                     new_name = file_name
                 
                 zip_file.write(file_path, new_name)
-        
+
         # 添加log文件夹下的转录文件，用于后续AI总结
         specific_txt_file = "sentence_splitbymeaning.txt"
         specific_txt_path = os.path.join(log_dir, specific_txt_file)
@@ -62,6 +60,12 @@ def download_subtitle_zip_button(text: str):
         mime="application/zip"
     )
 
+def copy_as_default_subbtitle(folder_path, file_name, file_new_name):
+    file_path = os.path.join(folder_path, file_name)
+    if os.path.isfile(file_path):
+        shutil.copy(file_path, os.path.join(folder_path, file_new_name))
+    else:
+        print(f"{folder_path} 不存在文件 {file_name}")
 
 def get_video_file_without_with_subs(output_dir):
     video_files = []

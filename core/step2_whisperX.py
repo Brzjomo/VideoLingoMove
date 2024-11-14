@@ -1,19 +1,21 @@
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import warnings
 warnings.filterwarnings("ignore")
-import os,sys
+
 import whisperx
 import torch
 from typing import Dict
 import librosa
 from rich import print as rprint
-from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 import subprocess
 import tempfile
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
+
 from core.config_utils import load_key
-from core.all_whisper_methods.demucs_vl import demucs_main
-from core.all_whisper_methods.whisperXapi import process_transcription, convert_video_to_audio, split_audio, save_results, save_language
-from core.all_whisper_methods.whisperXapi import RAW_AUDIO_FILE, BACKGROUND_AUDIO_FILE, VOCAL_AUDIO_FILE, AUDIO_DIR
+from core.all_whisper_methods.demucs_vl import demucs_main, RAW_AUDIO_FILE, VOCAL_AUDIO_FILE
+from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language
+from core.step1_ytdlp import find_video_files
 
 MODEL_DIR = load_key("model_dir")
 
@@ -56,6 +58,7 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
                 "initial_prompt": "",
             }
         whisper_language = None if 'auto' in WHISPER_LANGUAGE else WHISPER_LANGUAGE
+        rprint("[bold yellow]**You can ignore warning of `Model was trained with torch 1.10.0+cu102, yours is 2.0.0+cu118...`**[/bold yellow]")
         model = whisperx.load_model(model_name, device, compute_type=compute_type, language=whisper_language, vad_options=vad_options, asr_options=asr_options, download_root=MODEL_DIR)
 
         # Create temporary file to store audio segment
@@ -70,16 +73,8 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
         # Delete temporary file
         os.unlink(temp_audio_path)
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            TimeElapsedColumn(),
-            transient=True
-        ) as progress:
-            task = progress.add_task("[cyan]Transcribing...", total=None)
-            
-            result = model.transcribe(audio_segment, batch_size=batch_size)
-            progress.update(task, completed=True)
+        rprint("[bold green]note: You will see Progress if working correctly[/bold green]")
+        result = model.transcribe(audio_segment, batch_size=batch_size, print_progress=True)
 
         # Free GPU resources
         del model
@@ -112,34 +107,28 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
         rprint(f"[red]WhisperX processing error:[/red] {e}")
         raise
 
-def transcribe(video_file: str):
+def transcribe():
     if os.path.exists("output/log/cleaned_chunks.xlsx"):
         rprint("[yellow]⚠️ Transcription results already exist, skipping transcription step.[/yellow]")
         return
     
-    audio_file = convert_video_to_audio(video_file)
+    # step0 Convert video to audio
+    video_file = find_video_files()
+    convert_video_to_audio(video_file)
 
-    # step1 Demucs vocal separation
-    if os.path.exists(os.path.join(AUDIO_DIR, BACKGROUND_AUDIO_FILE)):
-        rprint(f"[yellow]⚠️ {os.path.join(AUDIO_DIR, BACKGROUND_AUDIO_FILE)} already exists, skip Demucs processing.[/yellow]")
-    else:
-        demucs_main(
-            os.path.join(AUDIO_DIR, RAW_AUDIO_FILE),
-            AUDIO_DIR,
-            os.path.join(AUDIO_DIR, BACKGROUND_AUDIO_FILE),
-            os.path.join(AUDIO_DIR, VOCAL_AUDIO_FILE)
-        )
-        print("Demucs processing completed, original_vocal.mp3 and background.mp3 saved")
+    # step1 Demucs vocal separation:
+    if load_key("demucs"):
+        demucs_main()
     
-    audio_file = os.path.join(AUDIO_DIR, VOCAL_AUDIO_FILE)
+    whisper_file = VOCAL_AUDIO_FILE if load_key("demucs") else RAW_AUDIO_FILE
 
     # step2 Extract audio
-    segments = split_audio(audio_file)
+    segments = split_audio(whisper_file)
     
     # step3 Transcribe audio
     all_results = []
     for start, end in segments:
-        result = transcribe_audio(audio_file, start, end)
+        result = transcribe_audio(whisper_file, start, end)
         all_results.append(result)
     
     # step4 Combine results
@@ -150,9 +139,5 @@ def transcribe(video_file: str):
     df = process_transcription(combined_result)
     save_results(df)
         
-
 if __name__ == "__main__":
-    from core.step1_ytdlp import find_video_files
-    video_file = find_video_files()
-    rprint(f"[green]📁 Found video file:[/green] {video_file}, [green]starting transcription...[/green]")
-    transcribe(video_file)
+    transcribe()
