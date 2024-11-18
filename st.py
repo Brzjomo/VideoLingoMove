@@ -29,6 +29,8 @@ def text_processing_section():
 
         if not os.path.exists(SUB_VIDEO):
             if st.button("开始处理字幕", key="text_processing_button"):
+                record_start_time()
+                reset_tokens()
                 process_text()
                 st.rerun()
         else:
