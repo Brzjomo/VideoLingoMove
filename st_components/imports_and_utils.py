@@ -34,7 +34,7 @@ def download_subtitle_zip_button(text: str):
                     new_name = video_name + "_trans_src.srt"
                     # 复制一份默认字幕
                     copy_as_default_subbtitle(output_dir, file_name, video_name + ".srt")
-                    # zip_file.write(file_path, video_name + ".srt")
+                    zip_file.write(file_path, video_name + ".srt")
                 elif "src" in file_name:
                     new_name = video_name + "_src.srt"
                 elif "trans" in file_name:
