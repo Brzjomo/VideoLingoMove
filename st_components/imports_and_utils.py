@@ -1,8 +1,31 @@
 import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core import step1_ytdlp, step2_whisperX, step3_1_spacy_split, step3_2_splitbymeaning, step9_extract_refer_audio
-from core import step4_1_summarize, step4_2_translate_all, step5_splitforsub, step6_generate_final_timeline 
-from core import step7_merge_sub_to_vid, step8_gen_audio_task, step10_gen_audio, step11_merge_audio_to_vid
+from core import (
+    # Download & Transcribe 📥
+    step11_merge_full_audio,
+    step1_ytdlp,
+    step2_whisperX,
+    
+    # Text Processing & Analysis 📝
+    step3_1_spacy_split,
+    step3_2_splitbymeaning,
+    step4_1_summarize,
+    step4_2_translate_all,
+    step5_splitforsub,
+    
+    # Subtitle Timeline & Merging 🎬
+    step6_generate_final_timeline,
+    step7_merge_sub_to_vid,
+    
+    # Audio Generation & Processing 🎵
+    step8_1_gen_audio_task,
+    step8_2_gen_dub_chunks,
+    step9_extract_refer_audio,
+    step10_gen_audio,
+    
+    # Final Video Composition 🎥
+    step12_merge_dub_to_vid
+)
 from core.onekeycleanup import cleanup  
 from core.delete_retry_dubbing import delete_dubbing_files
 from core.ask_gpt import ask_gpt
@@ -21,7 +44,7 @@ def download_subtitle_zip_button(text: str):
     zip_buffer = io.BytesIO()
     output_dir = "output"
     log_dir = os.path.join(output_dir, "log")
-    video_file_name = get_video_file_without_with_subs(output_dir)
+    video_file_name = get_correct_video_file(output_dir)
     video_name = replace_underscore_with_space(video_file_name[0].split('.', 1)[0])
 
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
@@ -67,7 +90,7 @@ def copy_as_default_subbtitle(folder_path, file_name, file_new_name):
     else:
         print(f"{folder_path} 不存在文件 {file_name}")
 
-def get_video_file_without_with_subs(output_dir):
+def get_correct_video_file(output_dir):
     video_files = []
     
     # 遍历output文件夹
@@ -75,7 +98,7 @@ def get_video_file_without_with_subs(output_dir):
         file_path = os.path.join(output_dir, file_name)
         
         # 检查文件是否为视频文件且不包含"with_subs"
-        if os.path.isfile(file_path) and not "with_subs" in file_name and file_name.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
+        if os.path.isfile(file_path) and not "_sub" in file_name and not "_dub" in file_name and file_name.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
             video_files.append(file_name)
     
     return video_files

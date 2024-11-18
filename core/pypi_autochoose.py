@@ -5,21 +5,19 @@ import os
 import concurrent.futures
 from rich.console import Console
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.panel import Panel
+import sys
 
 MIRRORS = {
-    "Alibaba Cloud": "https://mirrors.aliyun.com/pypi/simple",
-    "Tsinghua University": "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple",
-    "Huawei Cloud": "https://repo.huaweicloud.com/repository/pypi/simple",
-    "Tencent Cloud": "https://mirrors.cloud.tencent.com/pypi/simple",
-    "163 Cloud": "https://mirrors.163.com/pypi/simple",
+    "Tsinghua Mirror": "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple",
     "PyPI Official": "https://pypi.org/simple"
 }
 
 console = Console()
 
-FAST_THRESHOLD = 1000  # ms
-SLOW_THRESHOLD = 1500  # ms
+FAST_THRESHOLD = 3000  # ms
+SLOW_THRESHOLD = 5000  # ms
 
 def get_optimal_thread_count():
     try:
@@ -41,56 +39,39 @@ def test_mirror_speed(name, url):
     except requests.RequestException:
         return name, float('inf')
 
-def set_pip_mirror(url, host):
+def set_pip_mirror(url):
     try:
-        subprocess.run(["pip", "config", "set", "global.index-url", url], check=True, capture_output=True)
-        subprocess.run(["pip", "config", "set", "install.trusted-host", host], check=True, capture_output=True)
+        subprocess.run([sys.executable, "-m", "pip", "config", "set", "global.index-url", url],
+                      check=True,
+                      capture_output=True)
         return True
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to set pip mirror: {e}")
         return False
 
 def get_current_pip_mirror():
     try:
-        result = subprocess.run(["pip", "config", "get", "global.index-url"], capture_output=True, text=True, check=True)
+        result = subprocess.run([sys.executable, "-m", "pip", "config", "get", "global.index-url"],
+                              capture_output=True, text=True, check=True)
         return result.stdout.strip()
     except subprocess.CalledProcessError:
         return None
 
 def main():
-    console.print("[yellow]开始新的镜像速度测试[/yellow]")
-    
-    # First test PyPI official mirror
-    pypi_name = next(name for name, url in MIRRORS.items() if "pypi.org" in url)
-    pypi_url = MIRRORS[pypi_name]
-    console.print("[cyan]测试PyPI官方镜像...[/cyan]")
-    
-    optimal_thread_count = get_optimal_thread_count()
-    console.print(f"使用 {optimal_thread_count} 个线程进行测试")
-    
-    _, pypi_speed = test_mirror_speed(pypi_name, pypi_url)
-    
-    if pypi_speed < FAST_THRESHOLD:
-        console.print(f"PyPI官方镜像速度很快 ({pypi_speed:.2f} ms)。使用官方镜像。")
-        set_pip_mirror(pypi_url, "pypi.org")
-        return
-    elif pypi_speed < SLOW_THRESHOLD:
-        console.print(f"PyPI官方镜像速度可以接受 ({pypi_speed:.2f} ms)。您可以继续使用它。")
-        return
+    console.print(Panel.fit("🚀 PyPI Mirror Speed Test", style="bold cyan"))
 
-    console.print(f"PyPI官方镜像速度较慢 ({pypi_speed:.2f} ms)。测试其他镜像...")
-
-    # Test other mirrors
+    # Test all mirrors simultaneously
     speeds = {}
     with Progress(
         SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TextColumn("[cyan]Testing mirrors...[/cyan]"),
     ) as progress:
-        task = progress.add_task("[cyan]测试镜像...", total=len(MIRRORS) - 1)  # -1 because we already tested PyPI
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=optimal_thread_count) as executor:
-            future_to_mirror = {executor.submit(test_mirror_speed, name, url): name for name, url in MIRRORS.items() if name != pypi_name}
+        progress.add_task("", total=None)  # Indeterminate spinner
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=get_optimal_thread_count()) as executor:
+            future_to_mirror = {executor.submit(test_mirror_speed, name, url): name
+                              for name, url in MIRRORS.items()}
+
             for future in concurrent.futures.as_completed(future_to_mirror):
                 name = future_to_mirror[future]
                 try:
@@ -98,43 +79,32 @@ def main():
                     if speed != float('inf'):
                         speeds[name] = speed
                 except Exception as exc:
-                    print(f'{name} 生成了一个异常: {exc}')
-                finally:
-                    progress.update(task, advance=1)
+                    print(f'{name} generated an exception: {exc}')
 
-    table = Table(title="镜像速度测试结果")
-    table.add_column("镜像", style="cyan")
-    table.add_column("响应时间 (ms)", justify="right", style="magenta")
+    # Results display
+    table = Table(show_header=False)
+    table.add_column(style="cyan")
+    table.add_column(justify="right", style="magenta")
 
     for name, speed in sorted(speeds.items(), key=lambda x: x[1]):
-        table.add_row(name, f"{speed:.2f}")
+        table.add_row(name, f"{speed:.0f}ms")
 
     console.print(table)
 
     if speeds:
         fastest_mirror = min(speeds, key=speeds.get)
         fastest_url = MIRRORS[fastest_mirror]
-        console.print(f"\n[green]最快的镜像: {fastest_mirror} ({fastest_url})[/green]")
-        console.print(f"[green]响应时间: {speeds[fastest_mirror]:.2f} ms[/green]")
         
-        host = fastest_url.split("//")[1].split("/")[0]
-        if set_pip_mirror(fastest_url, host):
+        if set_pip_mirror(fastest_url):
             current_mirror = get_current_pip_mirror()
-            console.print(f"\n[yellow]当前pip源: {current_mirror}[/yellow]")
-            
             if current_mirror == fastest_url:
-                console.print(f"[bold green]成功切换到 {fastest_mirror} 镜像。[/bold green]")
+                console.print(f"✅ Switched to {fastest_mirror}\n🔗 {fastest_url}", style="green")
             else:
-                console.print("[bold red]切换失败。当前pip源与预期不符。[/bold red]")
-                console.print(f"[yellow]预期的pip源: {fastest_url}[/yellow]")
-                console.print("[yellow]请手动检查配置或尝试以管理员权限运行此脚本。[/yellow]")
+                console.print(f"❌ Switch failed\nExpected: {fastest_url}\nCurrent: {current_mirror}\n💡 Try running with admin privileges", style="red")
         else:
-            console.print("[bold red]切换镜像失败，将继续使用当前源。[/bold red]")
-            current_mirror = get_current_pip_mirror()
-            console.print(f"[yellow]当前pip源: {current_mirror}[/yellow]")
-            console.print("[yellow]请检查是否有足够的权限修改pip配置。[/yellow]")
+            console.print(f"❌ Failed to switch mirror\n💡 Check permissions and try again", style="red")
     else:
-        console.print("[bold red]所有镜像都无法访问。请检查您的网络连接。[/bold red]")
+        console.print("❌ All mirrors unreachable\n💡 Check network connection", style="red")
 
 if __name__ == "__main__":
     main()
