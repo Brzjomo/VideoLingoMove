@@ -17,6 +17,7 @@ streamlit==1.38.0
 yt-dlp
 json-repair
 ruamel.yaml
+plyer
 autocorrect-py
 demucs[dev] @ git+https://github.com/adefossez/demucs
 

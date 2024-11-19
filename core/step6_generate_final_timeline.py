@@ -8,6 +8,7 @@ from core.config_utils import load_key, get_joiner
 from rich.panel import Panel
 from rich.console import Console
 import autocorrect_py as autocorrect
+from plyer import notification
 
 console = Console()
 
@@ -177,10 +178,24 @@ def align_timestamp_main():
     console.print(Panel("[bold green]处理完成，耗时：{}\n消耗prompt tokens: {}\n消耗completion tokens: {}\n共消耗tokens: {}[/bold green]"
                         .format(eu.convert_seconds(eu.time_duration), eu.prompt_tokens, eu.completion_tokens, eu.get_total_tokens())))
     eu.record_messages()
+    send_tanslation_complete_notification()
 
 def record_end_time_and_duration():
         eu.end_time = time.time()
         eu.time_duration = eu.end_time - eu.start_time
+
+def read_time_duration():
+    return eu.convert_seconds(eu.time_duration)
+
+def send_tanslation_complete_notification():
+    send_notification("字幕翻译完成", f"耗时：{read_time_duration()}")
+
+def send_notification(title, message):
+    notification.notify(
+        title=title,
+        message=message,
+        timeout=6
+    )
 
 if __name__ == '__main__':
     align_timestamp_main()

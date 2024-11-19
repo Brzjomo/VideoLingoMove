@@ -178,3 +178,6 @@ installer_files/
 
 # Visual Studio Code
 .vscode
+
+# torch
+*.whl

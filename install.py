@@ -62,7 +62,8 @@ def main():
         has_gpu = check_gpu()
         if has_gpu:
             console.print(Panel("🎮 NVIDIA GPU detected, installing CUDA version of PyTorch...", style="cyan"))
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2", "--index-url", "https://download.pytorch.org/whl/cu118"])
+            # subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2", "--index-url", "https://download.pytorch.org/whl/cu118"])
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2", "torch-2.1.2+cu118-cp310-cp310-win_amd64.whl"])
         else:
             console.print(Panel("💻 No NVIDIA GPU detected, installing CPU version of PyTorch... However, it would be extremely slow for transcription.", style="cyan"))
             subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2"])
@@ -99,60 +100,60 @@ def main():
                     subprocess.check_call(["sudo", "yum", "install", "-y", "ffmpeg"], shell=True)
                 except subprocess.CalledProcessError:
                     console.print(Panel("❌ Failed to install ffmpeg through package manager", style="red"))
-        else:
+        # else:
             # Windows/MacOS: use conda to install ffmpeg
-            console.print(Panel("📦 Installing ffmpeg through conda...", style="cyan"))
-            subprocess.check_call(["conda", "install", "-y", "ffmpeg"], shell=True)
+            # console.print(Panel("📦 Installing ffmpeg through conda...", style="cyan"))
+            # subprocess.check_call(["conda", "install", "-y", "ffmpeg"], shell=True)
 
-        import requests
-        if system == "Windows":
-            ffmpeg_exe = "ffmpeg.exe"
-            url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-        elif system == "Darwin":
-            ffmpeg_exe = "ffmpeg"
-            url = "https://evermeet.cx/ffmpeg/getrelease/zip"
-        elif system == "Linux":
-            ffmpeg_exe = "ffmpeg"
-            url = "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz"
-        else:
-            return
+        # import requests
+        # if system == "Windows":
+        #     ffmpeg_exe = "ffmpeg.exe"
+        #     url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+        # elif system == "Darwin":
+        #     ffmpeg_exe = "ffmpeg"
+        #     url = "https://evermeet.cx/ffmpeg/getrelease/zip"
+        # elif system == "Linux":
+        #     ffmpeg_exe = "ffmpeg"
+        #     url = "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz"
+        # else:
+        #     return
 
-        if os.path.exists(ffmpeg_exe):
-            print(f"{ffmpeg_exe} already exists")
-            return
+        # if os.path.exists(ffmpeg_exe):
+        #     print(f"{ffmpeg_exe} already exists")
+        #     return
 
-        console.print(Panel("📦 Downloading FFmpeg...", style="cyan"))
-        response = requests.get(url)
-        if response.status_code == 200:
-            filename = "ffmpeg.zip" if system in ["Windows", "Darwin"] else "ffmpeg.tar.xz"
-            with open(filename, 'wb') as f:
-                f.write(response.content)
-            console.print(Panel(f"FFmpeg downloaded: {filename}", style="cyan"))
+        # console.print(Panel("📦 Downloading FFmpeg...", style="cyan"))
+        # response = requests.get(url)
+        # if response.status_code == 200:
+        #     filename = "ffmpeg.zip" if system in ["Windows", "Darwin"] else "ffmpeg.tar.xz"
+        #     with open(filename, 'wb') as f:
+        #         f.write(response.content)
+        #     console.print(Panel(f"FFmpeg downloaded: {filename}", style="cyan"))
         
-            console.print(Panel("📦 Extracting FFmpeg...", style="cyan"))
-            if system == "Linux":
-                import tarfile
-                with tarfile.open(filename) as tar_ref:
-                    for member in tar_ref.getmembers():
-                        if member.name.endswith("ffmpeg"):
-                            member.name = os.path.basename(member.name)
-                            tar_ref.extract(member)
-            else:
-                with zipfile.ZipFile(filename, 'r') as zip_ref:
-                    for file in zip_ref.namelist():
-                        if file.endswith(ffmpeg_exe):
-                            zip_ref.extract(file)
-                            shutil.move(os.path.join(*file.split('/')[:-1], os.path.basename(file)), os.path.basename(file))
+        #     console.print(Panel("📦 Extracting FFmpeg...", style="cyan"))
+        #     if system == "Linux":
+        #         import tarfile
+        #         with tarfile.open(filename) as tar_ref:
+        #             for member in tar_ref.getmembers():
+        #                 if member.name.endswith("ffmpeg"):
+        #                     member.name = os.path.basename(member.name)
+        #                     tar_ref.extract(member)
+        #     else:
+        #         with zipfile.ZipFile(filename, 'r') as zip_ref:
+        #             for file in zip_ref.namelist():
+        #                 if file.endswith(ffmpeg_exe):
+        #                     zip_ref.extract(file)
+        #                     shutil.move(os.path.join(*file.split('/')[:-1], os.path.basename(file)), os.path.basename(file))
             
-            console.print(Panel("📦 Cleaning up...", style="cyan"))
-            os.remove(filename)
-            if system == "Windows":
-                for item in os.listdir():
-                    if os.path.isdir(item) and "ffmpeg" in item.lower():
-                        shutil.rmtree(item)
-            console.print(Panel("FFmpeg extraction completed", style="cyan"))
-        else:
-            console.print(Panel("❌ Failed to download FFmpeg", style="red"))
+        #     console.print(Panel("📦 Cleaning up...", style="cyan"))
+        #     os.remove(filename)
+        #     if system == "Windows":
+        #         for item in os.listdir():
+        #             if os.path.isdir(item) and "ffmpeg" in item.lower():
+        #                 shutil.rmtree(item)
+        #     console.print(Panel("FFmpeg extraction completed", style="cyan"))
+        # else:
+        #     console.print(Panel("❌ Failed to download FFmpeg", style="red"))
 
     def install_noto_font():
         if platform.system() == 'Linux':
