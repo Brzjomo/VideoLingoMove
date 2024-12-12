@@ -1,4 +1,4 @@
-import threading
+import threading, os
 
 # 线程锁
 lock = threading.Lock()
@@ -12,6 +12,20 @@ time_duration = 0
 prompt_tokens = 0
 completion_tokens = 0
 total_tokens = 0
+
+# 预估单价（每百万）
+price_input_uncached = 1
+price_input_cached = 0.1
+price_output = 2
+
+# 命中缓存的token比例
+cached_token_rate = 0.3
+
+# 预估花费
+estimated_cost = 0
+
+# 文件名
+original_name = ""
 
 # 方法
 def convert_seconds(seconds):
@@ -29,10 +43,22 @@ def convert_seconds(seconds):
 def get_total_tokens():
     return prompt_tokens + completion_tokens
 
+def get_estimated_cost():
+    cost_input_uncached = prompt_tokens / 1000000 * (1 - cached_token_rate) * price_input_uncached
+    cost_inpur_cached = prompt_tokens / 1000000 * cached_token_rate * price_input_cached
+    cost_output = completion_tokens / 1000000 * price_output
+    total_cost = cost_input_uncached + cost_inpur_cached + cost_output
+    return "{:.5f}".format(total_cost) + "元"
+
 def record_messages():
     output = "消耗时长: " + convert_seconds(time_duration)
     output += "\n" + "消耗 prompt tokens: " + str(prompt_tokens)
     output += "\n" + "消耗 completion tokens: " + str(completion_tokens)
     output += "\n" + "共消耗tokens: " + str(get_total_tokens())
-    with open("output/cost.txt", "w") as f:
+    output += "\n" + "预计花费: " + str(get_estimated_cost())
+    with open("output/cost.txt", "w", encoding="utf-8") as f:
         f.write(str(output))
+
+def record_file_name(file):
+    file_name = os.path.splitext(file.split("/")[1])[0]
+    return file_name

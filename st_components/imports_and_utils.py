@@ -31,6 +31,7 @@ from core.delete_retry_dubbing import delete_dubbing_files
 from core.ask_gpt import ask_gpt
 import streamlit as st
 import io, zipfile
+import easy_util as eu
 from st_components.download_video_section import download_video_section
 from st_components.sidebar_setting import page_setting
 
@@ -44,8 +45,8 @@ def download_subtitle_zip_button(text: str):
     zip_buffer = io.BytesIO()
     output_dir = "output"
     log_dir = os.path.join(output_dir, "log")
-    video_file_name = get_correct_video_file(output_dir)
-    video_name = replace_underscore_with_space(video_file_name[0].split('.', 1)[0])
+    # video_file_name = get_correct_video_file(output_dir)
+    video_name = eu.original_name
 
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
         for file_name in os.listdir(output_dir):

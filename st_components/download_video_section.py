@@ -6,6 +6,7 @@ from core.step1_ytdlp import download_video_ytdlp, find_video_files
 from time import sleep
 import re
 import subprocess
+import easy_util as eu
 
 def download_video_section():
     st.header("下载或上传视频")
@@ -13,6 +14,7 @@ def download_video_section():
         try:
             video_file = find_video_files()
             st.video(video_file)
+            eu.original_name = eu.record_file_name(video_file)
             if st.button("删除并重新选择", key="delete_video_button"):
                 os.remove(video_file)
                 if os.path.exists("output"):
