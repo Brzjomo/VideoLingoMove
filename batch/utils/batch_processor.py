@@ -9,6 +9,7 @@ from rich.console import Console
 from rich.panel import Panel
 import time
 import shutil
+import easy_util as eu
 
 console = Console()
 
@@ -26,6 +27,8 @@ def record_and_update_config(source_language, target_language):
 def process_batch():
     if not check_settings():
         raise Exception("Settings check failed")
+
+    eu.total_time_duration = 0
 
     df = pd.read_excel('batch/tasks_setting.xlsx')
     for index, row in df.iterrows():
@@ -93,6 +96,11 @@ def process_batch():
 
     console.print(Panel("All tasks processed!\nCheck out in `batch/output`!", 
                        title="[bold green]Batch Processing Complete", expand=False))
+    output_total_cost()
+
+def output_total_cost():
+    console.print(Panel("[bold green]视频全部处理完成，总耗时：{}[/bold green]"
+                        .format(eu.convert_seconds(eu.total_time_duration))))
 
 if __name__ == "__main__":
     process_batch()

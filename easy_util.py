@@ -7,6 +7,7 @@ lock = threading.Lock()
 start_time = 0
 end_time = 0
 time_duration = 0
+total_time_duration = 0
 
 # token记录
 prompt_tokens = 0
@@ -60,5 +61,5 @@ def record_messages():
         f.write(str(output))
 
 def record_file_name(file):
-    file_name = os.path.splitext(file.split("/")[1])[0]
+    file_name = os.path.splitext(os.path.basename(file))[0]
     return file_name

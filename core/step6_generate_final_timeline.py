@@ -184,6 +184,7 @@ def align_timestamp_main():
 def record_end_time_and_duration():
         eu.end_time = time.time()
         eu.time_duration = eu.end_time - eu.start_time
+        eu.total_time_duration += eu.time_duration
 
 def read_time_duration():
     return eu.convert_seconds(eu.time_duration)
