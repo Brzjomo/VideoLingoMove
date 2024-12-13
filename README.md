@@ -66,7 +66,6 @@ VideoLingo 是一站式视频翻译本地化配音工具，能够一键生成 Ne
 - 记录并显示视频翻译的时间消耗和token消耗
 - 优化打包字幕的名称
 - 打包时额外包含视频转录文本，便于后续用于AI视频总结
-- 支持DeepSeek
 - 支持qwen-vl-max
 
 
@@ -80,17 +79,7 @@ VideoLingo 是一站式视频翻译本地化配音工具，能够一键生成 Ne
 
 注：CUDNN可能需要修改默认环境变量。
 
-2.在项目根目录新建一个runtime文件夹，将python 3.10.0安装到此。
-
-[python 3.10.0](https://www.python.org/downloads/release/python-3100/)
-
-3.在项目根目录打开控制台，运行安装脚本。
-
-```python
-runtime\python.exe install.py
-```
-
-4.完毕后，运行`一键启动.bat`启动服务。
+2.完毕后，运行`OneKeyStart.bat`启动服务。
 
 
 
