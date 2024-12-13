@@ -51,13 +51,13 @@ def adjust_audio_speed(input_file: str, output_file: str, speed_factor: float) -
             expected_duration = input_duration / speed_factor
             diff = output_duration - expected_duration
             # If the output duration exceeds the expected duration, but the input audio is less than 3 seconds, and the error is within 0.1 seconds, truncate to the expected length
-            if output_duration >= expected_duration * 1.01 and input_duration < 3 and diff <= 0.1:
+            if output_duration >= expected_duration * 1.02 and input_duration < 3 and diff <= 0.1:
                 audio = AudioSegment.from_wav(output_file)
                 trimmed_audio = audio[:(expected_duration * 1000)]  # pydub uses milliseconds
                 trimmed_audio.export(output_file, format="wav")
                 print(f"✂️ Trimmed to expected duration: {expected_duration:.2f} seconds")
                 return
-            elif output_duration >= expected_duration * 1.01:
+            elif output_duration >= expected_duration * 1.02:
                 raise Exception(f"Audio duration abnormal: input file={input_file}, output file={output_file}, speed factor={speed_factor}, input duration={input_duration:.2f}s, output duration={output_duration:.2f}s")
             return
         except subprocess.CalledProcessError as e:
@@ -185,7 +185,28 @@ def merge_chunks(tasks_df: pd.DataFrame) -> pd.DataFrame:
                 rprint(f"[cyan]{emoji} Processed chunk {chunk_start} to {index} with speed factor {speed_factor}[/cyan]")
             # 🔄 Step5: Check if the last row exceeds the range
             if cur_time > chunk_end_time:
-                raise Exception(f"Chunk {chunk_start} to {index} exceeds the chunk end time {chunk_end_time:.2f} seconds with current time {cur_time:.2f} seconds")
+                time_diff = cur_time - chunk_end_time
+                if time_diff <= 0.6:  # If exceeding time is within 0.6 seconds, truncate the last audio
+                    rprint(f"[yellow]⚠️ Chunk {chunk_start} to {index} exceeds by {time_diff:.3f}s, truncating last audio[/yellow]")
+                    # Get the last audio file
+                    last_number = tasks_df.iloc[index]['number']
+                    last_lines = eval(tasks_df.iloc[index]['lines']) if isinstance(tasks_df.iloc[index]['lines'], str) else tasks_df.iloc[index]['lines']
+                    last_line_index = len(last_lines) - 1
+                    last_file = OUTPUT_FILE_TEMPLATE.format(f"{last_number}_{last_line_index}")
+                    
+                    # Calculate the duration to keep
+                    audio = AudioSegment.from_wav(last_file)
+                    original_duration = len(audio) / 1000  # Convert to seconds
+                    new_duration = original_duration - time_diff
+                    trimmed_audio = audio[:(new_duration * 1000)]  # pydub uses milliseconds
+                    trimmed_audio.export(last_file, format="wav")
+                    
+                    # Update the last timestamp
+                    last_times = tasks_df.at[index, 'new_sub_times']
+                    last_times[-1][1] = chunk_end_time
+                    tasks_df.at[index, 'new_sub_times'] = last_times
+                else:
+                    raise Exception(f"Chunk {chunk_start} to {index} exceeds the chunk end time {chunk_end_time:.2f} seconds with current time {cur_time:.2f} seconds")
             chunk_start = index+1
     
     rprint("[bold green]✅ Audio chunks processing completed![/bold green]")

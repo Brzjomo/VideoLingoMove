@@ -1,34 +1,34 @@
 # 🚀 开始使用
 
 ## 📋 API 配置指南
-本项目需使用大模型 和 TTS ，**推荐使用 [硅基流动](https://cloud.siliconflow.cn/i/ttKDEsxE)**，注册送积分，只需要一个 Key 即可体验全部功能。
+本项目需使用大模型和 TTS。追求最佳质量请使用 claude-3-5-sonnet-20240620 与 Azure TTS。推荐使用 [302AI](https://gpt302.saaslink.net/C2oHR9)，一个 API key 即可使用所有服务。也可以选择完全本地化体验，使用 Ollama 作为大模型，Edge TTS 作为配音，无需任何 API key（此时需要在 `config.yaml` 中将 `max_workers` 设为 1，`summary_length` 调低至 2000）。
 
-### 1. **获取大模型的 API_KEY**：
+### 1. **大模型的 API_KEY**：
 
 | 推荐模型 | 推荐提供商 | base_url | 价格 | 效果 |
 |:-----|:---------|:---------|:-----|:---------|
-| Qwen/Qwen2.5-72B-Instruct | [硅基流动](https://cloud.siliconflow.cn/i/ttKDEsxE) | https://api.siliconflow.cn | ￥4 / 1M tokens | 😃 |
-| claude-3-5-sonnet | [Deepbricks](https://deepbricks.ai/) | https://api.deepbricks.ai | $10 / 1M tokens | 🤩 |
-| gemini-1.5-pro-latest | [云雾 api](https://yunwu.zeabur.app/register?aff=TXMB) | https://yunwu.zeabur.app | ￥10 / 1M tokens | 😄 |
+| gemini-2.0-flash-exp | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | $0.3 / 1M tokens | 🥳 |
+| claude-3-5-sonnet-20240620 | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | $15 / 1M tokens | 🤩 |
+| deepseek-coder | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | ¥2 / 1M tokens | 😃 |
+| qwen2.5-coder:32b | [Ollama](https://ollama.ai) | http://localhost:11434 | 本地 | 😃 |
 
-注：支持 Openai 格式接口，可自行尝试不同模型。但处理过程涉及多步思维链和复杂的json格式，**不建议使用小于 30B 的模型**。
-
+注：支持 OpenAI 格式接口，可自行尝试不同模型。但处理过程涉及多步思维链和复杂的json格式，**不建议使用小于 30B 的模型**。
 
 ### 2. **TTS 的 API**
-VideoLingo提供了多种 tts 接入方式，以下是对比（如不使用配音仅翻译请跳过）
+VideoLingo提供了多种 tts 接入方式，以下是对比（如不使用配音可跳过）
 
-| TTS 方案 | 优点 | 缺点 | 中文效果 | 非中文效果 |
-|:---------|:-----|:-----|:---------|:-----------|
-| 🎙️ SiliconFlow FishTTS (推荐) | 支持克隆配置简单 | 克隆效果不稳定 | 😃 | 😃 |
-| 🎙️ OpenAI TTS | 情感真实 | 中文听起来像外国人 | 😕 | 🤩 |
-| 🔊 Azure TTS | 效果自然 | 情感不够丰富 | 🤩 | 😃 |
-| 🎤 Fish TTS  | 真是本地人 | 官方模型有限 | 😂 | 😂 |
-| 🗣️ GPT-SoVITS | 最强语音克隆 | 只支持中英文，需要本地推理，配置麻烦 | 🏆 | 🚫 |
+| TTS 方案 | 提供商 | 优点 | 缺点 | 中文效果 | 非中文效果 |
+|:---------|:---------|:-----|:-----|:---------|:-----------|
+| 🔊 Azure TTS ⭐ | [302AI](https://gpt302.saaslink.net/C2oHR9) | 效果自然 | 情感不够丰富 | 🤩 | 😃 |
+| 🎙️ OpenAI TTS | [302AI](https://gpt302.saaslink.net/C2oHR9) | 情感真实 | 中文听起来像外国人 | 😕 | 🤩 |
+| 🎤 Fish TTS | [302AI](https://gpt302.saaslink.net/C2oHR9) | 真是本地人 | 官方模型有限 | 😂 | 😂 |
+| 🎙️ SiliconFlow FishTTS | [硅基流动](https://cloud.siliconflow.cn/i/ttKDEsxE) | 语音克隆 | 克隆效果不稳定 | 😃 | 😃 |
+| 🗣 Edge TTS | 本地 | 完全免费 | 效果一般 | 😐 | 😐 |
+| 🗣️ GPT-SoVITS | 本地 | 最强语音克隆 | 只支持中英文，需要本地训练推理，配置麻烦 | 🏆 | 🚫 |
 
 - SiliconFlow FishTTS 请在 [硅基流动](https://cloud.siliconflow.cn/i/ttKDEsxE) 获取key，注意克隆功能需要付费充值积分；
-- OpenAI TTS，推荐使用 [云雾 api](https://yunwu.zeabur.app/register?aff=TXMB)；
-- Azure TTS 可以在官网注册获取key，也可以淘宝购买；
-- Fish TTS 可以在 [官网](https://fish.audio/zh-CN/go-api/) 注册（送10刀额度）
+- OpenAI TTS、Azure TTS 和 Fish TTS，仅支持 [302AI](https://gpt302.saaslink.net/C2oHR9) - 一个 API key 即可使用所有服务
+> 现在还可以在 `core/all_tts_functions/custom_tts.py` 里自定义tts渠道！
 
 <details>
 <summary>SiliconFlow FishTTS 使用教程</summary>
@@ -72,7 +72,7 @@ VideoLingo提供了多种 tts 接入方式，以下是对比（如不使用配�
 
    a. 自训练模型：
    - 训练好模型后， `GPT-SoVITS-v2-xxx\GPT_SoVITS\configs` 下的 `tts_infer.yaml` 已自动填写好你的模型地址，将其复制并重命名为 `你喜欢的英文角色名.yaml`
-   - 在和 `yaml` 文件同个目录下，放入后续使用的参考音频，命名为 `你喜欢的英文角色名_参考音频的文字内容.wav` 或 `.mp3`，例如 `Huanyuv2_你好，这是一条测试音频.wav`
+   - 在和 `yaml` 文件同个目录下，放入后续使用的参考音，命名为 `你喜欢的英文角色名_参考音频的文字内容.wav` 或 `.mp3`，例如 `Huanyuv2_你好，这是一条测试音频.wav`
    - 在 VideoLingo 网页的侧边栏中，将 `GPT-SoVITS 角色` 配置为 `你喜欢的英文角色名`。
 
    b. 使用预训练模型：
@@ -116,82 +116,64 @@ VideoLingo提供了多种 tts 接入方式，以下是对比（如不使用配�
 
 VideoLingo 支持 Windows、macOS 和 Linux 系统，可使用 CPU 或 GPU 运行。
 
-对于 Windows 系统使用 GPU 加速，需要安装以下依赖：
+> **注意:** 在 Windows 上使用 NVIDIA GPU 加速，请先完成以下步骤:
+> 1. 安装 [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe)
+> 2. 安装 [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
+> 3. 将 `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` 添加到系统 PATH
+> 4. 重启电脑
 
-- [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe)
-- [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
+> **注意:** FFmpeg 是必需的，请通过包管理器安装：
+> - Windows：```choco install ffmpeg```（通过 [Chocolatey](https://chocolatey.org/)）
+> - macOS：```brew install ffmpeg```（通过 [Homebrew](https://brew.sh/)）
+> - Linux：```sudo apt install ffmpeg```（Debian/Ubuntu）或 ```sudo dnf install ffmpeg```（Fedora）
 
-> 注意：安装后需要将 `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` 添加至系统环境变量，并重启计算机 🔄
+开始安装 VideoLingo 之前，请确保安装了 Git 和 Anaconda。
 
-### Windows 一键安装
-
-请确保已安装 [Git](https://git-scm.com/downloads)，
-
-1. 下载源码到本地
-
-2. （可选）应用汉化补丁：
-   - 打开项目根目录下的 `i18n/中文` 文件夹
-   - 将该文件夹中的所有内容复制到项目根目录
-   - 在弹出的提示中选择"替换目标中的文件"
-
-3. 双击 `OneKeyInstall&Start.bat` 即可完成安装并启动网页
-
-### 源码安装
-
-开始安装 VideoLingo 之前，请确保:
-1. 预留 **25G** 硬盘空间
-2. 已安装 [Anaconda](https://www.anaconda.com/download) (用于 Python 环境管理)
-3. 已安装 [Git](https://git-scm.com/downloads) (用于克隆项目代码，也可以手动下载)
-
-需要一定的 python 基础，遇到任何问题可以询问官方网站 [videolingo.io](https://videolingo.io) 右下角的AI助手~
-
-1. 打开 `Anaconda Prompt` 并切换到你想安装的目录，例如桌面：
-   ```bash
-   cd desktop
-   ```
-
-2. 克隆项目并切换至项目目录：
+1. 克隆项目：
    ```bash
    git clone https://github.com/Huanshere/VideoLingo.git
    cd VideoLingo
    ```
 
-3. 创建并激活虚拟环境（**必须 3.10.0**）：
+2. 创建并活虚拟环境（**必须 3.10.0**）：
    ```bash
    conda create -n videolingo python=3.10.0 -y
    conda activate videolingo
    ```
 
-4. （可选）应用汉化补丁：
+3. （可选）应用汉化补丁：
 
-    参照 **一键安装** 中的说明
+    将 `i18n/中文` 文件夹下的所有文件复制到 `VideoLingo` 目录下，替换重复的文件。
 
    （注意：Mac系统会删除整个目标文件夹后再复制，而Windows只会替换重复的文件。Mac用户建议手动将文件逐个移动到目标位置）
 
-5. 运行安装脚本：
+4. 运行安装脚本：
    ```bash
    python install.py
    ```
-   脚本将自动安装相应的 torch 版本
 
-6. 🎉 输入命令或点击 `一键启动.bat` 启动 Streamlit 应用：
+5. 🎉 输入命令或点击 `一键启动.bat` 启动 Streamlit 应用：
    ```bash
    streamlit run st.py
    ```
 
-7. 在弹出网页的侧边栏中设置key，开始使用~
+6. 在弹出网页的侧边栏中设置key，开始使用~
 
    ![tutorial](https://github.com/user-attachments/assets/983ba58b-5ae3-4132-90f5-6d48801465dd)
 
-8. 转录步骤会自动从 huggingface 下载模型，也可以手动下载，将 `_model_cache` 文件夹放置在 VideoLingo 目录下：[百度网盘](https://pan.baidu.com/s/1Igo_FvFV4Xcb8tSYT0ktpA?pwd=e1c7)
+7. （可选）更多设置可以在 `config.yaml` 中手动修改，运行过程请注意命令行输出。如需使用自定义术语，请在处理前将术语添加到 `custom_terms.xlsx` 中，例如 `Biden | 登子 | 美国的瞌睡总统`。
 
-9. （可选）更多设置可以在 `config.yaml` 中手动修改，运行过程请注意命令行输出
+## 🏭 批量模式（beta）
+
+使用说明: [English](/batch/README.md) | [简体中文](/batch/README.zh.md)
 
 ## 🚨 常见报错
 
-1. **翻译过程的 'Key Error'**: 
-   - 原因1：同上，弱模型遵循JSON格式能力有误。
+1. **翻译过程的 'All array must be of the same length' 或 'Key Error'**: 
+   - 原因1：弱模型遵循JSON格式能力较弱导致响应解析错误。
    - 原因2：对于敏感内容，LLM可能拒绝翻译。
-   解决方案：请检查 `output/gpt_log/error.json` 的 `response` 和 `msg` 字段。
+   解决方案：检查 `output/gpt_log/error.json` 的 `response` 和 `msg` 字段，删掉 `output/gpt_log` 文件夹后重试。
 
 2. **'Retry Failed', 'SSL', 'Connection', 'Timeout'**: 通常是网络问题。解决方案：中国大陆用户请切换网络节点重试。
+
+3. **local_files_only=True**：网络问题引起的模型下载失败，需要确认网络能 ping 通 `huggingface.co`。

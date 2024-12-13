@@ -1,33 +1,34 @@
 # 🚀 Getting Started
 
 ## 📋 API Configuration
-This project requires Large Language Models and TTS. **Recommended to use [SiliconFlow](https://cloud.siliconflow.cn/i/ttKDEsxE)**, which offers free credits upon registration and only needs one key for all features.
+This project requires Large Language Models and TTS. For best quality, please use claude-3-5-sonnet-20240620 with Azure TTS. Recommended to use [302AI](https://gpt302.saaslink.net/C2oHR9), which offers both LLM and TTS services with a single API key. You can also choose a fully local experience by using Ollama for LLM and Edge TTS for dubbing, with no API key required (In this case, you need to set `max_workers` to 1 and `summary_length` low to 2000 in `config.yaml`).
 
 ### 1. **Get API_KEY for Large Language Models**:
 
 | Recommended Model | Recommended Provider | base_url | Price | Effect |
 |:-----|:---------|:---------|:-----|:---------|
-| Qwen/Qwen2.5-72B-Instruct | [SiliconFlow](https://cloud.siliconflow.cn/i/ttKDEsxE) | https://api.siliconflow.cn | ¥4 / 1M tokens | 😃 |
-| claude-3-5-sonnet | [Deepbricks](https://deepbricks.ai/) | https://api.deepbricks.ai | $10 / 1M tokens | 🤩 |
-| gemini-1.5-pro-latest | [Yunwu API](https://yunwu.zeabur.app/register?aff=TXMB) | https://yunwu.zeabur.app | ¥10 / 1M tokens | 😄 |
+| gemini-2.0-flash-exp | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | $0.3 / 1M tokens | 🥳 |
+| claude-3-5-sonnet-20240620 | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | $15 / 1M tokens | 🤩 |
+| deepseek-coder | [302AI](https://gpt302.saaslink.net/C2oHR9) | https://api.302.ai | ¥2 / 1M tokens | 😃 |
+| qwen2.5-coder:32b | [Ollama](https://ollama.ai) | http://localhost:11434 | Local | 😃 |
 
 Note: Supports OpenAI interface, you can try different models. However, the process involves multi-step reasoning chains and complex JSON formats, **not recommended to use models smaller than 30B**.
 
 ### 2. **TTS API**
 VideoLingo provides multiple TTS integration methods. Here's a comparison (skip if only using translation without dubbing)
 
-| TTS Solution | Pros | Cons | Chinese Effect | Non-Chinese Effect |
-|:---------|:-----|:-----|:---------|:-----------|
-| 🎙️ SiliconFlow FishTTS (Recommended) | Supports cloning, simple setup | Unstable cloning effect | 😃 | 😃 |
-| 🎙️ OpenAI TTS | Realistic emotions | Chinese sounds foreign | 😕 | 🤩 |
-| 🔊 Azure TTS | Natural effect | Limited emotions | 🤩 | 😃 |
-| 🎤 Fish TTS | Authentic native | Limited official models | 😂 | 😂 |
-| 🗣️ GPT-SoVITS | Best voice cloning | Only supports Chinese/English, requires local inference, complex setup | 🏆 | 🚫 |
+| TTS Solution | Provider | Pros | Cons | Chinese Effect | Non-Chinese Effect |
+|:---------|:---------|:-----|:-----|:---------|:-----------|
+| 🔊 Azure TTS ⭐ | [302AI](https://gpt302.saaslink.net/C2oHR9) | Natural effect | Limited emotions | 🤩 | 😃 |
+| 🎙️ OpenAI TTS | [302AI](https://gpt302.saaslink.net/C2oHR9) | Realistic emotions | Chinese sounds foreign | 😕 | 🤩 |
+| 🎤 Fish TTS | [302AI](https://gpt302.saaslink.net/C2oHR9) | Authentic native | Limited official models | 🤩 | 😂 |
+| 🎙️ SiliconFlow FishTTS | [SiliconFlow](https://cloud.siliconflow.cn/i/ttKDEsxE) | Voice Clone | Unstable cloning effect | 😃 | 😃 |
+| 🗣 Edge TTS | Local | Completely free | Average effect | 😐 | 😐 |
+| 🗣️ GPT-SoVITS | Local | Best voice cloning | Only supports Chinese/English, requires local inference, complex setup | 🏆 | 🚫 |
 
 - For SiliconFlow FishTTS, get key from [SiliconFlow](https://cloud.siliconflow.cn/i/ttKDEsxE), note that cloning feature requires paid credits;
-- For OpenAI TTS, recommended to use [Yunwu API](https://yunwu.zeabur.app/register?aff=TXMB);
-- For Azure TTS, register on official website or purchase from third parties;
-- For Fish TTS, register on [official website](https://fish.audio/en/go-api/) (comes with $10 credit)
+- For OpenAI TTS, Azure TTS, and Fish TTS, use [302AI](https://gpt302.saaslink.net/C2oHR9) - one API key provides access to all three services
+> Want to use your own TTS API? Edit in `core/all_tts_functions/custom_tts.py`!
 
 <details>
 <summary>SiliconFlow FishTTS Tutorial</summary>
@@ -115,71 +116,58 @@ After configuration, select `Reference Audio Mode` in the sidebar (see Yuque doc
 
 VideoLingo supports Windows, macOS and Linux systems, and can run on CPU or GPU.
 
-For GPU acceleration on Windows, install these dependencies:
+> **Note:** To use NVIDIA GPU acceleration on Windows, please complete the following steps first:
+> 1. Install [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe)
+> 2. Install [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
+> 3. Add `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` to your system PATH
+> 4. Restart your computer
 
-- [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe)
-- [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
+> **Note:** FFmpeg is required. Please install it via package managers:
+> - Windows: ```choco install ffmpeg``` (via [Chocolatey](https://chocolatey.org/))
+> - macOS: ```brew install ffmpeg``` (via [Homebrew](https://brew.sh/))
+> - Linux: ```sudo apt install ffmpeg``` (Debian/Ubuntu) or ```sudo dnf install ffmpeg``` (Fedora)
 
-> Note: After installing, add `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` to system path and restart computer 🔄
+Before installing VideoLingo, ensure you have installed Git and Anaconda.
 
-### Windows One-Click Install
-
-Make sure [Git](https://git-scm.com/downloads) is installed,
-
-1. Download source code locally
-
-2. Double click `OneKeyInstall&Start.bat` to complete installation and launch webpage
-
-### Source Installation
-
-Before installing VideoLingo, ensure:
-1. **25GB** free disk space
-2. [Anaconda](https://www.anaconda.com/download) installed (for Python environment management)
-3. [Git](https://git-scm.com/downloads) installed (for cloning project code, or download manually)
-
-Basic Python knowledge required. For any issues, ask the AI assistant at [videolingo.io](https://videolingo.io) bottom right~
-
-1. Open Anaconda Prompt and navigate to installation directory, e.g. desktop:
-   ```bash
-   cd desktop
-   ```
-
-2. Clone project and enter directory:
+1. Clone the project:
    ```bash
    git clone https://github.com/Huanshere/VideoLingo.git
    cd VideoLingo
    ```
 
-3. Create and activate virtual environment (**must be 3.10.0**):
+2. Create and activate virtual environment (**must be python=3.10.0**):
    ```bash
    conda create -n videolingo python=3.10.0 -y
    conda activate videolingo
    ```
 
-4. Run installation script:
+3. Run installation script:
    ```bash
    python install.py
    ```
-   Script will automatically install appropriate torch version
 
-5. 🎉 Enter command to launch Streamlit app:
+4. 🎉 Launch Streamlit app:
    ```bash
    streamlit run st.py
    ```
 
-6. Set key in sidebar of popup webpage and start using~
+5. Set key in sidebar of popup webpage and start using~
 
    ![tutorial](https://github.com/user-attachments/assets/983ba58b-5ae3-4132-90f5-6d48801465dd)
 
-7. Transcription step will automatically download models from huggingface, or you can download manually and place `_model_cache` folder in VideoLingo directory: [Baidu Drive](https://pan.baidu.com/s/1Igo_FvFV4Xcb8tSYT0ktpA?pwd=e1c7)
+6. (Optional) More settings can be manually modified in `config.yaml`, watch command line output during operation. To use custom terms, add them to `custom_terms.xlsx` before processing, e.g. `Baguette | French bread | Not just any bread!`.
 
-8. (Optional) More settings can be manually modified in `config.yaml`, watch command line output during operation
+## 🏭 Batch Mode (beta)
+
+Documentation: [English](/batch/README.md) | [Chinese](/batch/README.zh.md)
 
 ## 🚨 Common Errors
 
-1. **'Key Error' during translation**: 
-   - Reason 1: Same as above, weaker models have poor JSON format compliance.
+1. **'All array must be of the same length' or 'Key Error' during translation**: 
+   - Reason 1: Weaker models have poor JSON format compliance causing response parsing errors.
    - Reason 2: LLM may refuse to translate sensitive content.
-   Solution: Check `response` and `msg` fields in `output/gpt_log/error.json`.
+   Solution: Check `response` and `msg` fields in `output/gpt_log/error.json`, delete the `output/gpt_log` folder and retry.
 
 2. **'Retry Failed', 'SSL', 'Connection', 'Timeout'**: Usually network issues. Solution: Users in mainland China please switch network nodes and retry.
+
+3. **local_files_only=True**: Model download failure due to network issues, need to verify network can ping `huggingface.co`.

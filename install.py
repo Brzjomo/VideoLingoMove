@@ -2,8 +2,6 @@ import os
 import platform
 import subprocess
 import sys
-import zipfile
-import shutil
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 ascii_logo = """
@@ -24,12 +22,60 @@ def install_package(*packages):
     # 使用项目目录下的Python环境安装包
     subprocess.check_call([sys.executable, "-m", "pip", "install", *packages])
 
-def check_gpu():
+def check_nvidia_gpu():
+    install_package("pynvml")
+    import pynvml
     try:
-        subprocess.run(['nvidia-smi'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        pynvml.nvmlInit()
+        device_count = pynvml.nvmlDeviceGetCount()
+        if device_count > 0:
+            print(f"Detected NVIDIA GPU(s)")
+            for i in range(device_count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                name = pynvml.nvmlDeviceGetName(handle)
+                print(f"GPU {i}: {name}")
+            return True
+        else:
+            print("No NVIDIA GPU detected")
+            return False
+    except pynvml.NVMLError:
+        print("No NVIDIA GPU detected or NVIDIA drivers not properly installed")
+        return False
+    finally:
+        pynvml.nvmlShutdown()
+
+def check_ffmpeg():
+    from rich.console import Console
+    from rich.panel import Panel
+    console = Console()
+    
+    try:
+        # Check if ffmpeg is installed
+        subprocess.run(['ffmpeg', '-version'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
+        console.print(Panel("✅ FFmpeg is already installed", style="green"))
         return True
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
+        system = platform.system()
+        install_cmd = ""
+        
+        if system == "Windows":
+            install_cmd = "choco install ffmpeg"
+            extra_note = "Install Chocolatey first (https://chocolatey.org/)"
+        elif system == "Darwin":
+            install_cmd = "brew install ffmpeg"
+            extra_note = "Install Homebrew first (https://brew.sh/)"
+        elif system == "Linux":
+            install_cmd = "sudo apt install ffmpeg  # Ubuntu/Debian\nsudo yum install ffmpeg  # CentOS/RHEL"
+            extra_note = "Use your distribution's package manager"
+        
+        console.print(Panel.fit(
+            f"❌ FFmpeg not found\n\n"
+            f"🛠️ Install using:\n[bold cyan]{install_cmd}[/bold cyan]\n\n"
+            f"💡 Note: {extra_note}\n\n"
+            f"🔄 After installing FFmpeg, please run this installer again: [bold cyan]python install.py[/bold cyan]",
+            style="red"
+        ))
+        raise SystemExit("FFmpeg is required. Please install it and run the installer again.")
 
 def main():
     install_package("requests", "rich", "ruamel.yaml")
@@ -55,127 +101,67 @@ def main():
     choose_mirror()
 
     # Detect system and GPU
-    if platform.system() == 'Darwin':
-        console.print(Panel("🍎 MacOS detected, installing CPU version of PyTorch... However, it would be extremely slow for transcription.", style="cyan"))
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2"])
+    has_gpu = platform.system() != 'Darwin' and check_nvidia_gpu()
+    if has_gpu:
+        console.print(Panel("🎮 NVIDIA GPU detected, installing CUDA version of PyTorch...", style="cyan"))
+        # subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.0.0", "torchaudio==2.0.0", "--index-url", "https://download.pytorch.org/whl/cu118"])
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2", "torch-2.1.2+cu118-cp310-cp310-win_amd64.whl"])
     else:
-        has_gpu = check_gpu()
-        if has_gpu:
-            console.print(Panel("🎮 NVIDIA GPU detected, installing CUDA version of PyTorch...", style="cyan"))
-            # subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2", "--index-url", "https://download.pytorch.org/whl/cu118"])
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2", "torch-2.1.2+cu118-cp310-cp310-win_amd64.whl"])
-        else:
-            console.print(Panel("💻 No NVIDIA GPU detected, installing CPU version of PyTorch... However, it would be extremely slow for transcription.", style="cyan"))
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2"])
-    
-    # Install WhisperX
-    console.print(Panel("📦 Installing WhisperX...", style="cyan"))
-    current_dir = os.getcwd()
-    whisperx_dir = os.path.join(current_dir, "third_party", "whisperX")
-    os.chdir(whisperx_dir)
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "-e", "."])
-    os.chdir(current_dir)
+        system_name = "🍎 MacOS" if platform.system() == 'Darwin' else "💻 No NVIDIA GPU"
+        console.print(Panel(f"{system_name} detected, installing CPU version of PyTorch... However, it would be extremely slow for transcription.", style="cyan"))
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2"])
 
     def install_requirements():
         try:
-            with open("requirements.txt", "r", encoding="utf-8") as file:
-                content = file.read()
-            with open("requirements.txt", "w", encoding="gbk") as file:
-                file.write(content)
-        except Exception as e:
-            print(f"Error converting requirements.txt: {str(e)}")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
-
-    def download_and_extract_ffmpeg():
-        # VL requires both conda/system ffmpeg and ffmpeg.exe...
-        system = platform.system()
-        if system == "Linux":
-            # Linux: use apt or yum to install ffmpeg
-            try:
-                console.print(Panel("📦 Installing ffmpeg through apt...", style="cyan"))
-                subprocess.check_call(["sudo", "apt", "install", "-y", "ffmpeg"])
-            except subprocess.CalledProcessError:
-                try:
-                    console.print(Panel("📦 Installing ffmpeg through yum...", style="cyan"))
-                    subprocess.check_call(["sudo", "yum", "install", "-y", "ffmpeg"], shell=True)
-                except subprocess.CalledProcessError:
-                    console.print(Panel("❌ Failed to install ffmpeg through package manager", style="red"))
-        # else:
-            # Windows/MacOS: use conda to install ffmpeg
-            # console.print(Panel("📦 Installing ffmpeg through conda...", style="cyan"))
-            # subprocess.check_call(["conda", "install", "-y", "ffmpeg"], shell=True)
-
-        # import requests
-        # if system == "Windows":
-        #     ffmpeg_exe = "ffmpeg.exe"
-        #     url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
-        # elif system == "Darwin":
-        #     ffmpeg_exe = "ffmpeg"
-        #     url = "https://evermeet.cx/ffmpeg/getrelease/zip"
-        # elif system == "Linux":
-        #     ffmpeg_exe = "ffmpeg"
-        #     url = "https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz"
-        # else:
-        #     return
-
-        # if os.path.exists(ffmpeg_exe):
-        #     print(f"{ffmpeg_exe} already exists")
-        #     return
-
-        # console.print(Panel("📦 Downloading FFmpeg...", style="cyan"))
-        # response = requests.get(url)
-        # if response.status_code == 200:
-        #     filename = "ffmpeg.zip" if system in ["Windows", "Darwin"] else "ffmpeg.tar.xz"
-        #     with open(filename, 'wb') as f:
-        #         f.write(response.content)
-        #     console.print(Panel(f"FFmpeg downloaded: {filename}", style="cyan"))
-        
-        #     console.print(Panel("📦 Extracting FFmpeg...", style="cyan"))
-        #     if system == "Linux":
-        #         import tarfile
-        #         with tarfile.open(filename) as tar_ref:
-        #             for member in tar_ref.getmembers():
-        #                 if member.name.endswith("ffmpeg"):
-        #                     member.name = os.path.basename(member.name)
-        #                     tar_ref.extract(member)
-        #     else:
-        #         with zipfile.ZipFile(filename, 'r') as zip_ref:
-        #             for file in zip_ref.namelist():
-        #                 if file.endswith(ffmpeg_exe):
-        #                     zip_ref.extract(file)
-        #                     shutil.move(os.path.join(*file.split('/')[:-1], os.path.basename(file)), os.path.basename(file))
-            
-        #     console.print(Panel("📦 Cleaning up...", style="cyan"))
-        #     os.remove(filename)
-        #     if system == "Windows":
-        #         for item in os.listdir():
-        #             if os.path.isdir(item) and "ffmpeg" in item.lower():
-        #                 shutil.rmtree(item)
-        #     console.print(Panel("FFmpeg extraction completed", style="cyan"))
-        # else:
-        #     console.print(Panel("❌ Failed to download FFmpeg", style="red"))
+            subprocess.check_call([
+                sys.executable, 
+                "-m", 
+                "pip", 
+                "install", 
+                "-r", 
+                "requirements.txt"
+            ], env={**os.environ, "PIP_NO_CACHE_DIR": "0", "PYTHONIOENCODING": "utf-8"})
+        except subprocess.CalledProcessError as e:
+            console.print(Panel(f"❌ Failed to install requirements: {str(e)}", style="red"))
 
     def install_noto_font():
-        if platform.system() == 'Linux':
-            try:
-                # Try apt-get first (Debian-based systems)
-                subprocess.run(['sudo', 'apt-get', 'install', '-y', 'fonts-noto'], check=True)
-                print("Noto fonts installed successfully using apt-get.")
-            except subprocess.CalledProcessError:
-                try:
-                    # If apt-get fails, try yum (RPM-based systems)
-                    subprocess.run(['sudo', 'yum', 'install', '-y', 'fonts-noto'], check=True)
-                    print("Noto fonts installed successfully using yum.")
-                except subprocess.CalledProcessError:
-                    print("Failed to install Noto fonts automatically. Please install them manually.")
+        # Detect Linux distribution type
+        if os.path.exists('/etc/debian_version'):
+            # Debian/Ubuntu systems
+            cmd = ['sudo', 'apt-get', 'install', '-y', 'fonts-noto']
+            pkg_manager = "apt-get"
+        elif os.path.exists('/etc/redhat-release'):
+            # RHEL/CentOS/Fedora systems
+            cmd = ['sudo', 'yum', 'install', '-y', 'google-noto*']
+            pkg_manager = "yum"
+        else:
+            console.print("⚠️ Unrecognized Linux distribution, please install Noto fonts manually", style="yellow")
+            return
+            
+        try:
+            subprocess.run(cmd, check=True)
+            console.print(f"✅ Successfully installed Noto fonts using {pkg_manager}", style="green")
+        except subprocess.CalledProcessError:
+            console.print("❌ Failed to install Noto fonts, please install manually", style="red")
 
-    install_noto_font()
+    if platform.system() == 'Linux':
+        install_noto_font()
+    
     install_requirements()
-    download_and_extract_ffmpeg()
+    check_ffmpeg()
     
     console.print(Panel.fit("Installation completed", style="bold green"))
     console.print("To start the application, run:")
     console.print("[bold cyan]streamlit run st.py[/bold cyan]")
+    console.print("[yellow]Note: First startup may take up to 1 minute[/yellow]")
+    
+    # Add troubleshooting tips
+    console.print("\n[yellow]If the application fails to start:[/yellow]")
+    console.print("1. [yellow]Check your network connection[/yellow]")
+    console.print("2. [yellow]Re-run the installer: [bold]python install.py[/bold][/yellow]")
+
+    # start the application
+    subprocess.Popen(["streamlit", "run", "st.py"])
 
 if __name__ == "__main__":
     main()

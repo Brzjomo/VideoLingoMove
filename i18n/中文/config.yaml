@@ -1,16 +1,16 @@
 # * 标有 * 的设置是高级设置，不会出现在 Streamlit 页面中，只能在 config.py 中手动修改
-version: "2.0.0"
+version: "2.1.2"
 ## ======================== 基本设置 ======================== ##
 # API 设置
 api:
   key: 'YOUR_API_KEY'
-  base_url: 'https://api.siliconflow.cn'
-  model: 'Qwen/Qwen2.5-72B-Instruct'
+  base_url: 'https://api.302.ai'
+  model: 'gemini-2.0-flash-exp'
 
 # 语言设置，写入提示词，可以用自然语言描述
 target_language: '简体中文'
 
-# 是否在转录前进行人声分离，警告这可能会减慢过程并导致行缺失！
+# 是否在转录前进行人声分离
 demucs: false
 
 whisper:
@@ -33,16 +33,22 @@ subtitle:
   # *翻译后的字幕比源字幕略大，影响字幕分割的参考长度
   target_multiplier: 1.2
 
-# *LLM 多线程访问数量
-max_workers: 8
+# *总结长度，如果使用本地 LLM 设置为 2k
+summary_length: 8000
+
+# *LLM 多线程访问数量，如果使用本地 LLM 设置为 1
+max_workers: 4
 # *第一次粗分的最大字数，低于 18 会切得太细影响翻译，高于 22 太长会导致后续字幕分割难以对齐
 max_split_length: 20
+
+# *是否进行反思翻译，false 只进行一次翻译
+reflect_translate: true
 
 # *是否在提取专业术语后、翻译前暂停，让用户手动调整术语表 output\log\terminology.json
 pause_before_translate: false
 
 ## ======================== 配音设置 ======================== ##
-# TTS 选择 [sf_fish_tts, openai_tts, gpt_sovits, azure_tts, fish_tts]
+# TTS 选择 [sf_fish_tts, openai_tts, gpt_sovits, azure_tts, fish_tts, edge_tts, custom_tts]
 tts_method: 'sf_fish_tts'
 
 # SiliconFlow FishTTS
@@ -57,30 +63,32 @@ sf_fish_tts:
   # preset, custom, dynamic
   mode: "preset"
 
-# OpenAI TTS-1 API 配置
+# OpenAI TTS-1 API 配置, 仅限 302.ai API
 openai_tts:
+  api_key: 'YOUR_302_API_KEY'
   voice: 'alloy'
-  api_key: 'YOUR_KEY'
-  base_url: 'https://yunwu.zeabur.app'
 
-# Azure 配置
+# Azure 配置, 仅限 302.ai API
 azure_tts:
-  key: 'YOUR_KEY'
-  region: 'eastasia'
+  api_key: 'YOUR_302_API_KEY'
   voice: 'zh-CN-YunfengNeural'
+
+# FishTTS 配置, 仅限 302.ai API
+fish_tts:
+  api_key: 'YOUR_302_API_KEY'
+  character: 'AD学姐'
+  character_id_dict:
+    'AD学姐': '7f92f8afb8ec43bf81429cc1c9199cb1'
+    '丁真': '54a5170264694bfc8e9ad98df7bd89c3'
+
+# Edge TTS 配置
+edge_tts:
+  voice: 'zh-CN-XiaoxiaoNeural'
 
 # SoVITS 配置
 gpt_sovits:
   character: 'Huanyuv2'
   refer_mode: 3
-
-# FishTTS 配置
-fish_tts:
-  api_key: 'YOUR_FISH_API_KEY'
-  character: 'AD学姐'
-  character_id_dict:
-    'AD学姐': '7f92f8afb8ec43bf81429cc1c9199cb1'
-    '丁真': '54a5170264694bfc8e9ad98df7bd89c3'
 
 # *音频速度范围
 speed_factor:
@@ -125,10 +133,8 @@ allowed_audio_formats:
 llm_support_json:
 - 'gpt-4o'
 - 'gpt-4o-mini'
-- 'grok-beta'
-- 'gemini-1.5-flash-latest'
-- 'gemini-1.5-pro-latest'
-- 'gemini-1.5-pro-002'
+- 'gemini-2.0-flash-exp'
+- 'deepseek-coder'
 
 # 存在问题
 # - 'Qwen/Qwen2.5-72B-Instruct'

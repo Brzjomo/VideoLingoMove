@@ -98,7 +98,7 @@ runtime\python.exe install.py
 
 本项目采用 Apache 2.0 许可证，我们衷心感谢以下开源项目的贡献：
 
-[whisperX](https://github.com/m-bain/whisperX) ｜ [yt-dlp](https://github.com/yt-dlp/yt-dlp) ｜ [json_repair](https://github.com/mangiucugna/json_repair) ｜ [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS) ｜ [BELLE](https://github.com/LianjiaTech/BELLE)
+[whisperX](https://github.com/m-bain/whisperX), [yt-dlp](https://github.com/yt-dlp/yt-dlp), [json_repair](https://github.com/mangiucugna/json_repair), [BELLE](https://github.com/LianjiaTech/BELLE)
 
 ## 📬 官方联系方式
 

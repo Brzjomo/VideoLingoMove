@@ -14,11 +14,11 @@ def config_input(label, key, help=None):
 def page_setting():
     with st.expander("LLM 配置", expanded=True):
         config_input("API_KEY", "api.key")
-        config_input("BASE_URL", "api.base_url", help="API请求的基础URL")
+        config_input("BASE_URL", "api.base_url", help="Openai格式，将自动添加/v1/chat/completions")
         
         c1, c2 = st.columns([4, 1])
         with c1:
-            config_input("模型", "api.model")
+            config_input("模型", "api.model", help="点击右侧按钮检查API有效性")
         with c2:
             if st.button("📡", key="api"):
                 st.toast("API密钥有效" if check_api() else "API密钥无效", 
@@ -50,36 +50,38 @@ def page_setting():
             if target_language != load_key("target_language"):
                 update_key("target_language", target_language)
 
-        c1, c2 = st.columns(2)
-        with c1:
-            burn_subtitles = st.toggle("烧录字幕", value=load_key("resolution") != "0x0")
+        demucs = st.toggle("人声分离增强", value=load_key("demucs"), help="推荐用于背景噪音较大的视频，但会增加处理时间")
+        if demucs != load_key("demucs"):
+            update_key("demucs", demucs)
+
+        burn_subtitles = st.toggle("压制字幕", value=load_key("resolution") != "0x0", help="需要更长处理时间")
         
         resolution_options = {
             "1080p": "1920x1080",
             "360p": "640x360"
         }
-        
-        with c2:
-            if burn_subtitles:
-                selected_resolution = st.selectbox(
-                    "视频分辨率",
-                    options=list(resolution_options.keys()),
-                    index=list(resolution_options.values()).index(load_key("resolution")) if load_key("resolution") != "0x0" else 0
-                )
-                resolution = resolution_options[selected_resolution]
-            else:
-                resolution = "0x0"
+            
+        if burn_subtitles:
+            selected_resolution = st.selectbox(
+                "视频分辨率",
+                options=list(resolution_options.keys()),
+                index=list(resolution_options.values()).index(load_key("resolution")) if load_key("resolution") != "0x0" else 0
+            )
+            resolution = resolution_options[selected_resolution]
+        else:
+            resolution = "0x0"
 
         if resolution != load_key("resolution"):
             update_key("resolution", resolution)
         
     with st.expander("配音设置", expanded=True):
-        tts_methods = ["sf_fish_tts", "openai_tts", "azure_tts", "gpt_sovits", "fish_tts"]
-        selected_tts_method = st.selectbox("TTS方法", options=tts_methods, index=tts_methods.index(load_key("tts_method")))
-        if selected_tts_method != load_key("tts_method"):
-            update_key("tts_method", selected_tts_method)
+        tts_methods = ["azure_tts", "openai_tts", "fish_tts", "sf_fish_tts", "edge_tts", "gpt_sovits", "custom_tts"]
+        select_tts = st.selectbox("TTS方法", options=tts_methods, index=tts_methods.index(load_key("tts_method")))
+        if select_tts != load_key("tts_method"):
+            update_key("tts_method", select_tts)
 
-        if selected_tts_method == "sf_fish_tts":
+        # sub settings for each tts method
+        if select_tts == "sf_fish_tts":
             config_input("SiliconFlow API密钥", "sf_fish_tts.api_key")
             
             # Add mode selection dropdown
@@ -100,23 +102,21 @@ def page_setting():
             if selected_mode == "preset":
                 config_input("语音", "sf_fish_tts.voice")
 
-        elif selected_tts_method == "openai_tts":
+        elif select_tts == "openai_tts":
+            config_input("302ai API", "openai_tts.api_key")
             config_input("OpenAI语音", "openai_tts.voice")
-            config_input("OpenAI TTS API密钥", "openai_tts.api_key")
-            config_input("OpenAI TTS API基础URL", "openai_tts.base_url")
 
-        elif selected_tts_method == "fish_tts":
-            config_input("Fish TTS API密钥", "fish_tts.api_key")
+        elif select_tts == "fish_tts":
+            config_input("302ai API", "fish_tts.api_key")
             fish_tts_character = st.selectbox("Fish TTS角色", options=list(load_key("fish_tts.character_id_dict").keys()), index=list(load_key("fish_tts.character_id_dict").keys()).index(load_key("fish_tts.character")))
             if fish_tts_character != load_key("fish_tts.character"):
                 update_key("fish_tts.character", fish_tts_character)
 
-        elif selected_tts_method == "azure_tts":
-            config_input("Azure密钥", "azure_tts.key")
-            config_input("Azure区域", "azure_tts.region")
+        elif select_tts == "azure_tts":
+            config_input("302ai API", "azure_tts.api_key")
             config_input("Azure语音", "azure_tts.voice")
-
-        elif selected_tts_method == "gpt_sovits":
+        
+        elif select_tts == "gpt_sovits":
             st.info("配置GPT_SoVITS，请参考Github主页")
             config_input("SoVITS角色", "gpt_sovits.character")
             
@@ -130,6 +130,8 @@ def page_setting():
             )
             if selected_refer_mode != load_key("gpt_sovits.refer_mode"):
                 update_key("gpt_sovits.refer_mode", selected_refer_mode)
+        elif select_tts == "edge_tts":
+            config_input("Edge TTS语音", "edge_tts.voice")
 
 def check_api():
     try:

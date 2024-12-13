@@ -20,6 +20,7 @@ from core.step1_ytdlp import find_video_files
 
 MODEL_DIR = load_key("model_dir")
 WHISPER_FILE = "output/audio/for_whisper.mp3"
+ENHANCED_VOCAL_PATH = "output/audio/enhanced_vocals.mp3"
 
 def check_hf_mirror() -> str:
     """Check and return the fastest HF mirror"""
@@ -88,17 +89,21 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
         rprint("[bold yellow]**You can ignore warning of `Model was trained with torch 1.10.0+cu102, yours is 2.0.0+cu118...`**[/bold yellow]")
         model = whisperx.load_model(model_name, device, compute_type=compute_type, language=whisper_language, vad_options=vad_options, asr_options=asr_options, download_root=MODEL_DIR)
 
-        # Create temporary file to store audio segment
-        temp_audio = tempfile.NamedTemporaryFile(suffix='.mp3', delete=False)
-        temp_audio_path = temp_audio.name
-        temp_audio.close()
-        # Use ffmpeg to cut audio
-        ffmpeg_cmd = f'ffmpeg -y -i "{audio_file}" -ss {start} -t {end-start} -vn -b:a 64k -ar 16000 -ac 1 -metadata encoding=UTF-8 -f mp3 "{temp_audio_path}"'
+        # Create temp file with wav format for better compatibility
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_audio:
+            temp_audio_path = temp_audio.name
+        
+        # Extract audio segment using ffmpeg
+        ffmpeg_cmd = f'ffmpeg -y -i "{audio_file}" -ss {start} -t {end-start} -vn -ar 32000 -ac 1 "{temp_audio_path}"'
         subprocess.run(ffmpeg_cmd, shell=True, check=True, capture_output=True)
-        # Load the cut audio
-        audio_segment, sample_rate = librosa.load(temp_audio_path, sr=16000)
-        # Delete temporary file
-        os.unlink(temp_audio_path)
+        
+        try:
+            # Load audio segment with librosa
+            audio_segment, sample_rate = librosa.load(temp_audio_path, sr=16000)
+        finally:
+            # Clean up temp file
+            if os.path.exists(temp_audio_path):
+                os.unlink(temp_audio_path)
 
         rprint("[bold green]note: You will see Progress if working correctly[/bold green]")
         result = model.transcribe(audio_segment, batch_size=batch_size, print_progress=True)
@@ -110,7 +115,7 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
         # Save language
         save_language(result['language'])
         if result['language'] == 'zh' and WHISPER_LANGUAGE != 'zh':
-            raise ValueError("请指定转录语言为 zh 后重试！")
+            raise ValueError("Please specify the transcription language as zh and try again!")
 
         # Align whisper output
         model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
@@ -134,6 +139,25 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
         rprint(f"[red]WhisperX processing error:[/red] {e}")
         raise
 
+def enhance_vocals(vocals_ratio=2.50):
+    """Enhance vocals audio volume"""
+    if not load_key("demucs"):
+        return RAW_AUDIO_FILE
+        
+    try:
+        print(f"[cyan]🎙️ Enhancing vocals with volume ratio: {vocals_ratio}[/cyan]")
+        ffmpeg_cmd = (
+            f'ffmpeg -y -i "{VOCAL_AUDIO_FILE}" '
+            f'-filter:a "volume={vocals_ratio}" '
+            f'"{ENHANCED_VOCAL_PATH}"'
+        )
+        subprocess.run(ffmpeg_cmd, shell=True, check=True, capture_output=True)
+        
+        return ENHANCED_VOCAL_PATH
+    except subprocess.CalledProcessError as e:
+        print(f"[red]Error enhancing vocals: {str(e)}[/red]")
+        return VOCAL_AUDIO_FILE  # Fallback to original vocals if enhancement fails
+    
 def transcribe():
     if os.path.exists(CLEANED_CHUNKS_EXCEL_PATH):
         rprint("[yellow]⚠️ Transcription results already exist, skipping transcription step.[/yellow]")
@@ -148,7 +172,7 @@ def transcribe():
         demucs_main()
     
     # step2 Compress audio
-    choose_audio = VOCAL_AUDIO_FILE if load_key("demucs") else RAW_AUDIO_FILE
+    choose_audio = enhance_vocals() if load_key("demucs") else RAW_AUDIO_FILE
     whisper_audio = compress_audio(choose_audio, WHISPER_FILE)
 
     # step3 Extract audio

@@ -40,7 +40,7 @@ def check_ask_gpt_history(prompt, model, log_title):
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
             for item in data:
-                if item["prompt"] == prompt and item["model"] == model:
+                if item["prompt"] == prompt:
                     return item["response"]
     return False
 
@@ -72,12 +72,14 @@ def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default'):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            response = client.chat.completions.create(
-                model=api_set["model"],
-                messages=messages,
-                response_format=response_format,
-                timeout=150 #! set timeout
-            )
+            completion_args = {
+                "model": api_set["model"],
+                "messages": messages
+            }
+            if response_format is not None:
+                completion_args["response_format"] = response_format
+                
+            response = client.chat.completions.create(**completion_args)
             
             if response_json:
                 try:
