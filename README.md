@@ -79,7 +79,21 @@ VideoLingo 是一站式视频翻译本地化配音工具，能够一键生成 Ne
 
 注：CUDNN可能需要修改默认环境变量。
 
-2.完毕后，运行`OneKeyStart.bat`启动服务。
+2.安装依赖：
+
+```shell
+conda create -n videolingo python=3.10.0 -y
+conda activate videolingo
+conda install git -y
+```
+
+3.运行安装脚本：
+
+```shell
+python install.py
+```
+
+4.完毕后，运行`OneKeyStart.bat`启动服务。
 
 
 
