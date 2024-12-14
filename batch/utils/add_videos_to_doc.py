@@ -5,7 +5,7 @@ from rich.panel import Panel
 
 console = Console()
 
-def add_all_videos_to_doc():
+def add_all_videos_to_doc(folder_path):
     # 切换目录
     os.chdir('batch')
     # 显示当前目录
@@ -23,20 +23,21 @@ def add_all_videos_to_doc():
     # 读取tasks_setting.xlsx文件
     df = pd.read_excel('tasks_setting.xlsx')
     video_files = []
-    # 查看是否存在input文件夹，如果不存在则创建
-    if not os.path.exists('input'):
-        os.mkdir('input')
-    # 遍历input下的所有支持的视频文件('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')，并将文件名添加到video_files列表中
-    for file in os.listdir('input'):
+    video_storage_folder = folder_path
+
+    # 查看是否存在指定的文件夹，如果不存在则创建
+    if not os.path.exists(video_storage_folder):
+        os.mkdir(video_storage_folder)
+    # 遍历目录下的所有支持的视频文件(不包含子目录)('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')，并将文件名添加到video_files列表中
+    for file in os.listdir(video_storage_folder):
         if file.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
             video_files.append(file)
+            console.print(Panel(f"已找到视频文件：{file}", title="提示", style="bold white"))
     # 将video_files列表中的文件添加到tasks_setting.xlsx文件
     for video in video_files:
         df = add_videos_to_doc(df, video, 'en', '简体中文', 0)
 
     console.print(Panel(f"已将所有视频文件添加到tasks_setting.xlsx文件中", title="提示", style="bold green"))
-
-
 
 def add_videos_to_doc(df, video, source_language, target_language, dubbing):
     # video文件和配置添加到tasks_setting.xlsx文件中相应列的新行
@@ -55,4 +56,9 @@ def add_videos_to_doc(df, video, source_language, target_language, dubbing):
     return df
 
 if __name__ == "__main__":
-    add_all_videos_to_doc()
+    if len(sys.argv) > 1:
+        folder_path = sys.argv[1]
+        # console.print(Panel(f"视频存储文件夹路径：{folder_path}", title="提示", style="bold green"))
+        add_all_videos_to_doc(folder_path)
+    else:
+        console.print(Panel("未提供视频存储文件夹路径", title="错误", style="bold red"))

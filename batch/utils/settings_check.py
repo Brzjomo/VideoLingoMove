@@ -11,10 +11,16 @@ VALID_DUBBING_VALUES = [0, 1]
 
 console = Console()
 
-def check_settings():
+def check_settings(folder_path):
+    INPUT_FOLDER = folder_path
     os.makedirs(INPUT_FOLDER, exist_ok=True)
     df = pd.read_excel(SETTINGS_FILE)
-    input_files = set(os.listdir(INPUT_FOLDER))
+    input_files = []
+    for file in os.listdir(INPUT_FOLDER):
+        if file.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
+            input_files.append(file)
+            
+    input_files = set(input_files)
     excel_files = set(df['Video File'].tolist())
     files_not_in_excel = input_files - excel_files
 
@@ -55,4 +61,4 @@ def check_settings():
 
 
 if __name__ == "__main__":  
-    check_settings()
+    check_settings(folder_path)

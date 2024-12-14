@@ -17,7 +17,10 @@ SAVE_DIR = 'batch/output'
 ERROR_OUTPUT_DIR = 'batch/output/ERROR'
 YTB_RESOLUTION_KEY = "ytb_resolution"
 
-def process_video(file, dubbing=False, is_retry=False):
+def process_video(video_storage_folder, file, dubbing=False, is_retry=False):
+    global INPUT_DIR
+    INPUT_DIR = video_storage_folder
+
     if not is_retry:
         prepare_output_folder(OUTPUT_DIR)
 
@@ -85,7 +88,7 @@ def process_input_file(file):
         video_file = step1_ytdlp.find_video_files()
         eu.original_name = eu.record_file_name(video_file)
     else:
-        input_file = os.path.join('batch', 'input', file)
+        input_file = os.path.join(INPUT_DIR, file)
         output_file = os.path.join(OUTPUT_DIR, file)
         shutil.copy(input_file, output_file)
         video_file = output_file

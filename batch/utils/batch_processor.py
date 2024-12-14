@@ -24,8 +24,9 @@ def record_and_update_config(source_language, target_language):
     
     return original_source_lang, original_target_lang
 
-def process_batch():
-    if not check_settings():
+def process_batch(folder_path):
+    video_storage_folder = folder_path
+    if not check_settings(folder_path):
         raise Exception("Settings check failed")
 
     eu.total_time_duration = 0
@@ -77,7 +78,7 @@ def process_batch():
             try:
                 dubbing = 0 if pd.isna(row['Dubbing']) else int(row['Dubbing'])
                 is_retry = not pd.isna(row['Status']) and 'Error' in str(row['Status'])
-                status, error_step, error_message = process_video(video_file, dubbing, is_retry)
+                status, error_step, error_message = process_video(video_storage_folder, video_file, dubbing, is_retry)
                 status_msg = "Done" if status else f"Error: {error_step} - {error_message}"
             except Exception as e:
                 status_msg = f"Error: Unhandled exception - {str(e)}"
@@ -104,4 +105,9 @@ def output_total_cost():
                         .format(eu.convert_seconds(eu.total_time_duration), eu.get_formated_total_estimated_cost())))
 
 if __name__ == "__main__":
-    process_batch()
+    if len(sys.argv) > 1:
+        folder_path = sys.argv[1]
+        # console.print(Panel(f"视频存储文件夹路径：{folder_path}", title="提示", style="bold green"))
+        process_batch(folder_path)
+    else:
+        console.print(Panel("未提供视频存储文件夹路径", title="错误", style="bold red"))
