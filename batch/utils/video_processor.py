@@ -17,7 +17,7 @@ SAVE_DIR = 'batch/output'
 ERROR_OUTPUT_DIR = 'batch/output/ERROR'
 YTB_RESOLUTION_KEY = "ytb_resolution"
 
-def process_video(video_storage_folder, file, dubbing=False, is_retry=False):
+def process_video(video_storage_folder, file, dubbing=False, is_retry=False, save_to_video_storage_folder=True):
     global INPUT_DIR
     INPUT_DIR = video_storage_folder
 
@@ -73,7 +73,7 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False):
                 ))
     
     console.print(Panel("[bold green]All steps completed successfully! 🎉[/]", border_style="green"))
-    save_subbtitles()
+    save_subbtitles(save_to_video_storage_folder)
     cleanup(SAVE_DIR)
     return True, "", ""
 
@@ -123,7 +123,7 @@ def reset_tokens():
     eu.completion_tokens = 0
     eu.total_tokens = 0
 
-def save_subbtitles():
+def save_subbtitles(save_to_video_storage_folder):
     console.print("Saving subtitles...")
     subbtitles_save_dir = "batch/output/SavedSubbtitles"
     os.makedirs(subbtitles_save_dir, exist_ok=True)
@@ -158,6 +158,14 @@ def save_subbtitles():
         new_txt_name = video_name + '.txt'
         if os.path.isfile(specific_txt_path):
             zip_file.write(specific_txt_path, new_txt_name)
+            shutil.copy(specific_txt_path, os.path.join(output_dir, new_txt_name))
+
+    if save_to_video_storage_folder:
+        # 将与video_name同名的srt文件和txt文件复制到视频存储文件夹INPUT_DIR
+        if os.path.isfile(os.path.join(output_dir, video_name + ".srt")):
+            shutil.copy(os.path.join(output_dir, video_name + ".srt"), os.path.join(INPUT_DIR, video_name + ".srt"))
+        if os.path.isfile(os.path.join(output_dir, video_name + '.txt')):
+            shutil.copy(os.path.join(output_dir, video_name + '.txt'), os.path.join(INPUT_DIR, video_name + '.txt'))
 
     zip_buffer.seek(0)
     with open(os.path.join(subbtitles_save_dir, video_name + "_subtitles" + ".zip"), 'wb') as f:
