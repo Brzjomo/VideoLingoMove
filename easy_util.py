@@ -24,6 +24,7 @@ cached_token_rate = 0.3
 
 # 预估花费
 estimated_cost = 0
+estimated_total_cost = 0
 
 # 文件名
 original_name = ""
@@ -49,14 +50,23 @@ def get_estimated_cost():
     cost_inpur_cached = prompt_tokens / 1000000 * cached_token_rate * price_input_cached
     cost_output = completion_tokens / 1000000 * price_output
     total_cost = cost_input_uncached + cost_inpur_cached + cost_output
-    return "{:.5f}".format(total_cost) + "元"
+    return total_cost
+
+def get_total_estimated_cost():
+    return estimated_total_cost
+
+def get_formated_estimated_cost():
+    return "{:.5f}".format(get_estimated_cost()) + "元"
+
+def get_formated_total_estimated_cost():
+    return "{:.5f}".format(get_total_estimated_cost()) + "元"
 
 def record_messages():
     output = "消耗时长: " + convert_seconds(time_duration)
     output += "\n" + "消耗 prompt tokens: " + str(prompt_tokens)
     output += "\n" + "消耗 completion tokens: " + str(completion_tokens)
     output += "\n" + "共消耗tokens: " + str(get_total_tokens())
-    output += "\n" + "预计花费: " + str(get_estimated_cost())
+    output += "\n" + "预计花费: " + get_formated_estimated_cost()
     with open("output/cost.txt", "w", encoding="utf-8") as f:
         f.write(str(output))
 

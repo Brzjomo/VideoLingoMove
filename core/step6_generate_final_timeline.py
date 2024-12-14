@@ -174,17 +174,18 @@ def align_timestamp_main():
     # align_timestamp(df_text, df_translate_for_audio, AUDIO_SUBTITLE_OUTPUT_CONFIGS, AUDIO_OUTPUT_DIR)
     console.print(Panel("[bold green]🎉📝 Audio subtitles generation completed! Please check in the `output/audio` folder 👀[/bold green]"))
 
-    record_end_time_and_duration()
+    record_summary_info()
     console.print(Panel("[bold green]处理完成，耗时：{}\n消耗prompt tokens: {}\n消耗completion tokens: {}\n共消耗tokens: {}\n预计花费: {}[/bold green]"
                         .format(eu.convert_seconds(eu.time_duration), eu.prompt_tokens, eu.completion_tokens, 
-                                eu.get_total_tokens(), eu.get_estimated_cost())))
+                                eu.get_total_tokens(), eu.get_formated_estimated_cost())))
     eu.record_messages()
     send_tanslation_complete_notification()
 
-def record_end_time_and_duration():
+def record_summary_info():
         eu.end_time = time.time()
         eu.time_duration = eu.end_time - eu.start_time
         eu.total_time_duration += eu.time_duration
+        eu.estimated_total_cost += eu.get_estimated_cost()
 
 def read_time_duration():
     return eu.convert_seconds(eu.time_duration)

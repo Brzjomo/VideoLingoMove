@@ -29,6 +29,7 @@ def process_batch():
         raise Exception("Settings check failed")
 
     eu.total_time_duration = 0
+    eu.estimated_total_cost = 0
 
     df = pd.read_excel('batch/tasks_setting.xlsx')
     for index, row in df.iterrows():
@@ -99,8 +100,8 @@ def process_batch():
     output_total_cost()
 
 def output_total_cost():
-    console.print(Panel("[bold green]视频全部处理完成，总耗时：{}[/bold green]"
-                        .format(eu.convert_seconds(eu.total_time_duration))))
+    console.print(Panel("[bold green]视频全部处理完成，总耗时：{}\n预计总花费: {}[/bold green]"
+                        .format(eu.convert_seconds(eu.total_time_duration), eu.get_formated_total_estimated_cost())))
 
 if __name__ == "__main__":
     process_batch()
