@@ -4,6 +4,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 from batch.utils.settings_check import check_settings
 from batch.utils.video_processor import process_video
 from core.config_utils import load_key, update_key
+from st_components.imports_and_utils import ask_gpt
 import pandas as pd
 from rich.console import Console
 from rich.panel import Panel
@@ -24,7 +25,19 @@ def record_and_update_config(source_language, target_language):
     
     return original_source_lang, original_target_lang
 
+def check_api():
+    try:
+        resp = ask_gpt("This is a test, response 'message':'success' in json format.",
+                      response_json=True, log_title='None')
+        return resp.get('message') == 'success'
+    except Exception:
+        return False
+
 def process_batch(folder_path):
+    if check_api() == False:
+        console.print(Panel("API Key is not set. Please set API Key First.", title="[bold red]Error", expand=True))
+        return
+
     video_storage_folder = folder_path
     if not check_settings(folder_path):
         raise Exception("Settings check failed")

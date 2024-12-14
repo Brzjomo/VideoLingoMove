@@ -16,10 +16,14 @@ def check_settings(folder_path):
     os.makedirs(INPUT_FOLDER, exist_ok=True)
     df = pd.read_excel(SETTINGS_FILE)
     input_files = []
+    # 检查输入文件夹中的视频文件是否在Excel文件中列出
     for file in os.listdir(INPUT_FOLDER):
         if file.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
+            srt_file = os.path.splitext(os.path.basename(file))[0] + '.srt'
+            if srt_file in os.listdir(INPUT_FOLDER):
+                continue
             input_files.append(file)
-            
+
     input_files = set(input_files)
     excel_files = set(df['Video File'].tolist())
     files_not_in_excel = input_files - excel_files

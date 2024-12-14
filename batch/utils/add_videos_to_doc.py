@@ -31,8 +31,15 @@ def add_all_videos_to_doc(folder_path):
     # 遍历目录下的所有支持的视频文件(不包含子目录)('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')，并将文件名添加到video_files列表中
     for file in os.listdir(video_storage_folder):
         if file.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
+            srt_file = os.path.splitext(os.path.basename(file))[0] + '.srt'
+            if srt_file in os.listdir(video_storage_folder):
+                console.print(Panel(f"跳过视频文件（已存在字幕）：{file}", title="注意", style="bold yellow"))
+                continue
             video_files.append(file)
             console.print(Panel(f"已找到视频文件：{file}", title="提示", style="bold white"))
+    # 如果video_files列表为空，则输出提示信息并退出程序
+    if len(video_files) == 0:
+        return console.print(Panel(f"未找到需要翻译的视频文件，请检查视频文件夹：\n{video_storage_folder}", title="错误", style="bold red"))
     # 将video_files列表中的文件添加到tasks_setting.xlsx文件
     for video in video_files:
         df = add_videos_to_doc(df, video, 'en', '简体中文', 0)
