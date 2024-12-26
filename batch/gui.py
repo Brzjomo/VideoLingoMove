@@ -196,8 +196,10 @@ def main():
                     df_template.to_excel(template_path, index=False)
                 
                 # 使用完整路径调用函数
-                df = add_all_videos_to_doc(folder_path)
-                if df is not None:
+                df, error = add_all_videos_to_doc(folder_path)
+                if error:
+                    st.error(error)  # 显示错误信息
+                elif df is not None:
                     st.success("任务配置已更新!")
                     st.write("### 当前任务配置:")
                     st.dataframe(df)
@@ -237,8 +239,8 @@ def main():
             info = st.session_state.process_complete_info
             st.success(f"""
             所有任务处理完成!\n
-            总耗时: {info['total_time']}\n
-            预计总花费: {info['total_cost']}
+              总耗时: {info['total_time']}\n
+              预计总花费: {info['total_cost']}
             """)
         
         # 显示任务详情表格

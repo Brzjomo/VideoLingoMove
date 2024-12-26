@@ -2,6 +2,7 @@ import os, sys
 import pandas as pd
 from rich.console import Console
 from rich.panel import Panel
+from core.config_utils import load_key
 
 console = Console()
 
@@ -29,17 +30,17 @@ def add_all_videos_to_doc(folder_path):
             shutil.copy2(template_path, tasks_setting_path)
         except Exception as e:
             console.print(Panel(f"复制模板文件失败: {str(e)}", title="错误", style="bold red"))
-            return None
+            return None, "复制模板文件失败"
     else:
         console.print(Panel(f"未找到tasks_setting-template.xlsx文件，请先创建该文件", title="错误", style="bold red"))
-        return None
+        return None, "未找到tasks_setting-template.xlsx文件"
 
     # 读取tasks_setting.xlsx文件
     try:
         df = pd.read_excel(tasks_setting_path)
     except Exception as e:
         console.print(Panel(f"读取任务配置文件失败: {str(e)}", title="错误", style="bold red"))
-        return None
+        return None, "读取任务配置文件失败"
 
     video_files = []
     video_storage_folder = folder_path
@@ -60,15 +61,19 @@ def add_all_videos_to_doc(folder_path):
             
     # 如果video_files列表为空，则输出提示信息并退出程序
     if len(video_files) == 0:
-        console.print(Panel(f"未找到需要翻译的视频文件，请检查视频文件夹：\n{video_storage_folder}", title="错误", style="bold red"))
-        return None
+        error_message = f"未找到需要翻译的视频文件，请检查视频文件夹：\n{video_storage_folder}"
+        console.print(Panel(error_message, title="错误", style="bold red"))
+        return None, error_message
         
     # 将video_files列表中的文件添加到tasks_setting.xlsx文件
     for video in video_files:
-        df = add_videos_to_doc(df, video, 'en', '简体中文', 0, tasks_setting_path)
+        # 从配置中获取语言设置
+        source_language = load_key("whisper.language")
+        target_language = load_key("target_language")
+        df = add_videos_to_doc(df, video, source_language, target_language, 0, tasks_setting_path)
 
     console.print(Panel(f"已将所有视频文件添加到tasks_setting.xlsx文件中", title="提示", style="bold green"))
-    return df
+    return df, None
 
 def add_videos_to_doc(df, video, source_language, target_language, dubbing, tasks_setting_path):
     # video文件和配置添加到tasks_setting.xlsx文件中相应列的新行
