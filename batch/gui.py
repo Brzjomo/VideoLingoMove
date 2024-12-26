@@ -22,83 +22,35 @@ console = Console()
 # 定义全局配置文件路径
 CONFIG_PATH = os.path.join(root_dir, 'config.yaml')
 
-def init_config():
-    """初始化配置文件"""
-    if not os.path.exists(CONFIG_PATH):
-        default_config = {
-            'api': {
-                'key': '',
-                'base_url': '',
-                'model': ''
-            },
-            'whisper': {
-                'language': 'zh'
-            },
-            'target_language': '英语',
-            'demucs': False,
-            'resolution': '0x0',
-            'tts_method': 'edge_tts',
-            'edge_tts': {
-                'voice': ''
-            },
-            'ytb_resolution': '1080',
-            'allowed_video_formats': ['.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm'],
-            'allowed_audio_formats': ['.mp3', '.wav', '.m4a', '.aac']
-        }
-        
-        try:
-            os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
-            with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-                yaml.dump(default_config, f, allow_unicode=True)
-            st.success("已创建默认配置文件")
-        except Exception as e:
-            st.error(f"创建配置文件失败: {str(e)}")
-            return False
-    return True
-
-def load_config():
-    """加载配置文件"""
-    try:
-        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-            return yaml.safe_load(f)
-    except Exception as e:
-        st.error(f"加载配置文件失败: {str(e)}")
-        return None
-
-def save_config(config):
-    """保存配置文件"""
-    try:
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            yaml.dump(config, f, allow_unicode=True)
-        return True
-    except Exception as e:
-        st.error(f"保存配置文件失败: {str(e)}")
-        return False
-
 def init_session_state():
     if 'processing' not in st.session_state:
         st.session_state.processing = False
     if 'folder_path' not in st.session_state:
         st.session_state.folder_path = os.path.join(root_dir, 'batch', 'input')
-    if 'config' not in st.session_state:
-        st.session_state.config = load_config()
-    # 添加处理完成信息的状态
     if 'process_complete_info' not in st.session_state:
         st.session_state.process_complete_info = None
 
 def start_processing():
     st.session_state.processing = True
-    # 清除之前的完成信息
     st.session_state.process_complete_info = None
 
 def main():
     st.set_page_config(page_title="视频批量处理", layout="wide")
-    st.markdown(button_style, unsafe_allow_html=True)
     
-    # 初始化配置文件
-    if not init_config():
-        st.error("初始化配置文件失败，请检查文件权限或手动创建配置文件。")
-        return
+    # 添加自定义样式来设置侧边栏宽度
+    st.markdown(
+        """
+        <style>
+        [data-testid="stSidebar"][aria-expanded="true"]{
+            min-width: 450px;
+            # max-width: 450px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    
+    st.markdown(button_style, unsafe_allow_html=True)
     
     init_session_state()
     
@@ -112,9 +64,6 @@ def main():
             page_setting()
         except Exception as e:
             st.error(f"加载设置失败: {str(e)}")
-            if not os.path.exists(CONFIG_PATH):
-                if init_config():
-                    st.rerun()
             return
     
     st.title("视频批量处理工具")
@@ -125,7 +74,7 @@ def main():
         st.warning("请在左侧设置面板中配置API密钥")
         return
     
-    # 只在session_state中没有api_status时检查一次
+    # 检查API状态
     if 'api_status' not in st.session_state:
         st.session_state.api_status = check_api()
     
@@ -135,6 +84,14 @@ def main():
         if st.button("重新检查API连接"):
             st.session_state.api_status = check_api()
             st.rerun()
+        return
+    
+    # 每次加载页面都检查一次API状态
+    current_api_status = check_api()
+    if not current_api_status:
+        st.error("API连接失败，请检查API设置")
+        st.session_state.api_status = False
+        st.rerun()
         return
     
     st.success("API状态: 正常")

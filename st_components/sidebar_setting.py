@@ -12,25 +12,38 @@ def config_input(label, key, help=None):
     return val
 
 def page_setting():
-    with st.expander("一键切换配置", expanded=True):
+    with st.expander("一键切换配置", expanded=False):
         config_options = ["Deepseek", "千问-vl-max", "硅基流动", "Ollama"]
         selected_config = st.selectbox("选择配置", options=config_options)
-    if st.button("应用配置"):
-        apply_config(selected_config)
+        
+        # 添加自定义样式的按钮
+        st.markdown(
+            """
+            <style>
+            div[data-testid="stButton"] button {
+                color: white !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
+        if st.button("应用配置"):
+            apply_config(selected_config)
 
-    with st.expander("LLM 配置", expanded=True):
+    with st.expander("LLM 配置", expanded=False):
         config_input("API_KEY", "api.key")
         config_input("BASE_URL", "api.base_url", help="Openai format, will add /v1/chat/completions automatically")
         
-        c1, c2 = st.columns([4, 1])
+        c1, c2 = st.columns([5, 1])
         with c1:
             config_input("MODEL", "api.model", help="click to check API validity 👉")
         with c2:
-            if st.button("📡", key="api"):
+            st.markdown('<div style="margin-top: 25px; margin-right: 10px;"></div>', unsafe_allow_html=True)
+            if st.button("📡", key="api", help="Check API connection"):
                 st.toast("API密钥有效" if check_api() else "API密钥无效",
                         icon="✅" if check_api() else "❌")
     
-    with st.expander("Subtitles Settings", expanded=True):
+    with st.expander("Subtitles Settings", expanded=False):
         c1, c2 = st.columns(2)
         with c1:
             langs = {
@@ -80,7 +93,7 @@ def page_setting():
         if resolution != load_key("resolution"):
             update_key("resolution", resolution)
         
-    with st.expander("Dubbing Settings", expanded=True):
+    with st.expander("Dubbing Settings", expanded=False):
         tts_methods = ["azure_tts", "openai_tts", "fish_tts", "sf_fish_tts", "edge_tts", "gpt_sovits", "custom_tts"]
         select_tts = st.selectbox("TTS Method", options=tts_methods, index=tts_methods.index(load_key("tts_method")))
         if select_tts != load_key("tts_method"):
@@ -165,3 +178,7 @@ def apply_config(config_name):
         assign_key("api.key", "ollama_api.key")
         assign_key("api.base_url", "ollama_api.base_url")
         assign_key("api.model", "ollama_api.model")
+    
+    # 清除之前的API状态，强制重新检查
+    if 'api_status' in st.session_state:
+        del st.session_state.api_status
