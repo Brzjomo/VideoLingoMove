@@ -34,6 +34,8 @@ def check_api():
 def init_session_state():
     if 'processing' not in st.session_state:
         st.session_state.processing = False
+    if 'current_progress' not in st.session_state:
+        st.session_state.current_progress = 0
     if 'folder_path' not in st.session_state:
         st.session_state.folder_path = None
     if 'process_complete_info' not in st.session_state:
@@ -60,37 +62,53 @@ def display_task_status(tasks_setting_path, status_placeholder, progress_placeho
         # 读取任务详情表格
         df = pd.read_excel(tasks_setting_path)
         
-        # 创建状态文本和进度条占位符
-        if 'status_text' not in st.session_state:
-            st.session_state.status_text = status_placeholder.empty()
-        if 'progress_bar' not in st.session_state:
-            st.session_state.progress_bar = progress_placeholder.empty()
+        # 计算进度
+        progress = 0
+        if st.session_state.processing and hasattr(st.session_state, 'current_progress'):
+            progress = st.session_state.current_progress
+        elif df is not None:
+            completed = len([x for x in df['Status'] if x == 'Done' or x == 'Skipped'])
+            total = len(df)
+            progress = completed / total if total > 0 else 0
+        
+        # 分别显示进度文本和进度条
+        col1, col2 = progress_placeholder.columns([1, 4])
+        with col1:
+            st.text(f"总进度: {int(progress * 100)}%")
+        with col2:
+            st.progress(progress)
         
         # 显示任务表格
         if not df.empty:
-            # 格式化状态列
-            df['Status'] = df['Status'].apply(lambda x: '✅ 完成' if x == 'Done' 
-                                            else '❌ ' + x if isinstance(x, str) and 'Error' in x 
-                                            else '⏳ 处理中' if x == 'Processing...'
-                                            else '⏭️ 跳过' if x == 'Skipped'
-                                            else '⌛ 等待处理' if pd.isna(x)
-                                            else x)
+            # 格式化状态列，使用换行符
+            def format_status(x):
+                if x == 'Done':
+                    return '✅ 完成'
+                elif isinstance(x, str) and 'Error' in x:
+                    # 使用 split 和 join 来处理换行
+                    parts = x.split(' - ')
+                    return f'❌ {" ".join(parts)}'
+                elif x == 'Processing...':
+                    return '⏳ 处理中'
+                elif x == 'Skipped':
+                    return '⏭️ 跳过'
+                elif pd.isna(x):
+                    return '🕐 等待处理'
+                return x
             
-            # 显示带样式的表格
-            styled_df = df.style.apply(lambda x: ['background-color: #C6C6C6' if v == '✅ 完成'
-                                                else 'background-color: #ffe6e6' if '❌' in str(v)
-                                                else 'background-color: #fff3e6' if '⏳' in str(v)
-                                                else 'background-color: #C6C6C6' if '⏭️' in str(v)
-                                                else '' for v in x], axis=1)
+            df['Status'] = df['Status'].apply(format_status)
+            
+            # 显示带样式的表格，但不设置背景色
+            styled_df = df.style.apply(lambda x: ['' for v in x], axis=1)
             
             table_placeholder.dataframe(styled_df, use_container_width=True)
             
-            # 显示完成信息
+            # 显示完成信息，使用 Markdown 格式的换行
             if st.session_state.process_complete_info and not st.session_state.processing:
                 info = st.session_state.process_complete_info
-                st.success(
-                    f"✨ 批处理完成\n"
-                    f"总耗时: {info['total_time']}\n"
+                st.markdown(
+                    f"✨ 批处理完成  \n"  # 使用两个空格和换行符
+                    f"总耗时: {info['total_time']}  \n"
                     f"预计总花费: {info['total_cost']}"
                 )
                 
@@ -106,9 +124,6 @@ def main():
         <style>
         [data-testid="stSidebar"][aria-expanded="true"]{
             min-width: 450px;
-        }
-        .stProgress > div > div {
-            background-color: #4CAF50 !important;
         }
         .stDataFrame {
             font-size: 14px !important;
@@ -239,6 +254,25 @@ def main():
         st.warning("⚠️ 未在选择的文件夹中找到视频文件")
         return
     
+    # 显示任务状态
+    if os.path.exists(st.session_state.processor.tasks_setting_path):
+        st.write("### 📊 当前任务状态:")
+        
+        # 创建固定的占位符
+        status_placeholder = st.empty()
+        progress_placeholder = st.empty()
+        table_placeholder = st.empty()
+        
+        # 保存占位符和显示函数到session state
+        st.session_state.status_text = status_placeholder.empty()
+        st.session_state.progress_placeholder = progress_placeholder
+        st.session_state.table_placeholder = table_placeholder
+        st.session_state.display_task_status_func = display_task_status
+        
+        # 显示任务状态
+        display_task_status(st.session_state.processor.tasks_setting_path, 
+                          status_placeholder, progress_placeholder, table_placeholder)
+    
     # 操作按钮
     col1, col2 = st.columns(2)
     
@@ -248,10 +282,10 @@ def main():
                     disabled=st.session_state.processing):
             with st.spinner("正在更新任务配置文件..."):
                 try:
-                    df = st.session_state.processor.create_or_update_tasks()
+                    # 更新任务配置
+                    st.session_state.processor.create_or_update_tasks()
                     st.success("✅ 任务配置已更新!")
-                    st.write("### 当前任务配置:")
-                    st.dataframe(df, use_container_width=True)
+                    # 直接重新运行，不显示临时的表格
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ {str(e)}")
@@ -280,23 +314,10 @@ def main():
                 st.session_state.processing = False
                 st.rerun()
     
-    # 显示任务状态
-    if os.path.exists(st.session_state.processor.tasks_setting_path):
-        st.write("### 📊 当前任务状态:")
-        
-        # 创建固定的占位符
-        status_placeholder = st.empty()
-        progress_placeholder = st.empty()
-        table_placeholder = st.empty()
-        
-        # 显示任务状态
-        display_task_status(st.session_state.processor.tasks_setting_path, 
-                          status_placeholder, progress_placeholder, table_placeholder)
-        
-        # 如果正在处理，自动刷新
-        if st.session_state.processing:
-            time.sleep(0.5)  # 增加延迟时间
-            st.rerun()
+    # 如果正在处理，自动刷新
+    if st.session_state.processing:
+        time.sleep(0.5)
+        st.rerun()
 
 if __name__ == "__main__":
     main() 

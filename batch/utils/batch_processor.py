@@ -35,7 +35,6 @@ class BatchProcessor:
         
         # 设置配置文件路径
         self.tasks_setting_path = os.path.join(self.batch_dir, 'tasks_setting.xlsx')
-        self.status_file_path = os.path.join(self.batch_dir, 'current_status.json')
         self.template_path = os.path.join(self.batch_dir, 'tasks_setting-template.xlsx')
         
         # 初始化状态
@@ -47,13 +46,6 @@ class BatchProcessor:
         # 确保目录存在
         os.makedirs(self.folder_path, exist_ok=True)
         os.makedirs(self.batch_dir, exist_ok=True)
-    
-    def update_status(self, status_info):
-        """更新处理状态"""
-        with status_lock:
-            with open(self.status_file_path, 'w', encoding='utf-8') as f:
-                json.dump(status_info, f, ensure_ascii=False, indent=2)
-            st.session_state.current_task_info = status_info
     
     def check_settings(self):
         """检查设置和环境"""
@@ -157,11 +149,13 @@ class BatchProcessor:
             self.total_tasks = len(df)
             self.completed_tasks = 0
             
-            # 获取状态占位符
+            # 获取状态占位符和显示函数
             status_text = st.session_state.get('status_text')
-            progress_bar = st.session_state.get('progress_bar')
+            progress_placeholder = st.session_state.get('progress_placeholder')
+            table_placeholder = st.session_state.get('table_placeholder')
+            display_task_status_func = st.session_state.get('display_task_status_func')
             
-            if not status_text or not progress_bar:
+            if not all([status_text, progress_placeholder, table_placeholder, display_task_status_func]):
                 return False
             
             # 处理每个视频
@@ -175,7 +169,13 @@ class BatchProcessor:
                     # 更新Excel状态
                     df.at[index, 'Status'] = 'Processing...'
                     df.to_excel(self.tasks_setting_path, index=False)
-                    
+
+                    # 更新进度显示
+                    display_task_status_func(self.tasks_setting_path, 
+                                          status_text, 
+                                          progress_placeholder, 
+                                          table_placeholder)
+
                     # 处理视频
                     status_msg = self.process_single_video(
                         video_file,
@@ -190,23 +190,28 @@ class BatchProcessor:
                     df.at[index, 'Status'] = status_msg
                     df.to_excel(self.tasks_setting_path, index=False)
                     
-                    # 更新进度条
-                    progress = self.completed_tasks / self.total_tasks
-                    progress_bar.progress(progress, text=f"总进度: {int(progress * 100)}%")
-                    
+                    # 更新状态文本
                     if 'Error' in status_msg:
-                        status_text.error(f"❌ 处理出错: {video_file}\n{status_msg}")
+                        status_text.markdown(f"❌ 处理出错:  \n{video_file}  \n{status_msg}")
                     else:
                         status_text.success(f"✅ 已完成: {video_file}")
+                    
+                    # 更新进度显示
+                    display_task_status_func(self.tasks_setting_path, 
+                                          status_text, 
+                                          progress_placeholder, 
+                                          table_placeholder)
+                    
                 else:
                     self.completed_tasks += 1
                     status_text.info(f"⏭️ 已跳过: {row['Video File']}")
                     
-                    # 更新进度条
-                    progress = self.completed_tasks / self.total_tasks
-                    progress_bar.progress(progress, text=f"总进度: {int(progress * 100)}%")
+                    # 更新进度显示
+                    display_task_status_func(self.tasks_setting_path, 
+                                          status_text, 
+                                          progress_placeholder, 
+                                          table_placeholder)
                 
-                # 短暂延迟以确保界面更新
                 time.sleep(0.1)
             
             # 更新完成信息
@@ -216,9 +221,9 @@ class BatchProcessor:
             }
             
             # 显示完成信息
-            status_text.success(
-                f"✨ 批处理完成\n"
-                f"总耗时: {eu.convert_seconds(eu.total_time_duration)}\n"
+            status_text.markdown(
+                f"✨ 批处理完成  \n"
+                f"总耗时: {eu.convert_seconds(eu.total_time_duration)}  \n"
                 f"预计总花费: {eu.get_formated_total_estimated_cost()}"
             )
             
