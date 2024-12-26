@@ -1,8 +1,7 @@
 import os, sys
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from st_components.imports_and_utils import ask_gpt
 import streamlit as st
 from core.config_utils import update_key, load_key, assign_key
+from st_components.imports_and_utils import ask_gpt
 
 def config_input(label, key, help=None):
     """Generic config input handler"""
@@ -10,6 +9,38 @@ def config_input(label, key, help=None):
     if val != load_key(key):
         update_key(key, val)
     return val
+
+def check_api():
+    """检查API状态"""
+    try:
+        resp = ask_gpt("This is a test, response 'message':'success' in json format.",
+                      response_json=True, log_title='None')
+        return resp.get('message') == 'success'
+    except Exception:
+        return False
+
+def apply_config(config_name):
+    # 根据配置名称来设置API_KEY, BASE_URL, 模型等
+    if config_name == "Deepseek":
+        assign_key("api.key", "deepseek_api.key")
+        assign_key("api.base_url", "deepseek_api.base_url")
+        assign_key("api.model", "deepseek_api.model")
+    elif config_name == "千问-vl-max":
+        assign_key("api.key", "qwen_api.key")
+        assign_key("api.base_url", "qwen_api.base_url")
+        assign_key("api.model", "qwen_api.model")
+    elif config_name == "硅基流动":
+        assign_key("api.key", "siliconflow_api.key")
+        assign_key("api.base_url", "siliconflow_api.base_url")
+        assign_key("api.model", "siliconflow_api.model")
+    elif config_name == "Ollama":
+        assign_key("api.key", "ollama_api.key")
+        assign_key("api.base_url", "ollama_api.base_url")
+        assign_key("api.model", "ollama_api.model")
+    
+    # 清除之前的API状态，强制重新检查
+    if 'api_status' in st.session_state:
+        del st.session_state.api_status
 
 def page_setting():
     with st.expander("一键切换配置", expanded=False):
@@ -151,34 +182,3 @@ def page_setting():
                 update_key("gpt_sovits.refer_mode", selected_refer_mode)
         elif select_tts == "edge_tts":
             config_input("Edge TTS Voice", "edge_tts.voice")
-
-def check_api():
-    try:
-        resp = ask_gpt("This is a test, response 'message':'success' in json format.",
-                      response_json=True, log_title='None')
-        return resp.get('message') == 'success'
-    except Exception:
-        return False
-
-def apply_config(config_name):
-    # 根据配置名称来设置API_KEY, BASE_URL, 模型等
-    if config_name == "Deepseek":
-        assign_key("api.key", "deepseek_api.key")
-        assign_key("api.base_url", "deepseek_api.base_url")
-        assign_key("api.model", "deepseek_api.model")
-    elif config_name == "千问-vl-max":
-        assign_key("api.key", "qwen_api.key")
-        assign_key("api.base_url", "qwen_api.base_url")
-        assign_key("api.model", "qwen_api.model")
-    elif config_name == "硅基流动":
-        assign_key("api.key", "siliconflow_api.key")
-        assign_key("api.base_url", "siliconflow_api.base_url")
-        assign_key("api.model", "siliconflow_api.model")
-    elif config_name == "Ollama":
-        assign_key("api.key", "ollama_api.key")
-        assign_key("api.base_url", "ollama_api.base_url")
-        assign_key("api.model", "ollama_api.model")
-    
-    # 清除之前的API状态，强制重新检查
-    if 'api_status' in st.session_state:
-        del st.session_state.api_status
