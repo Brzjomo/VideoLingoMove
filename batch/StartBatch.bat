@@ -5,6 +5,6 @@ cd ..
 
 call conda activate videolingo
 
-streamlit run batch/gui.py
+streamlit run batch/utils/gui.py
 
 pause 

@@ -1,4 +1,5 @@
-import os, sys
+import os
+import sys
 import gc
 import pandas as pd
 from rich.console import Console
@@ -10,13 +11,14 @@ from threading import Lock
 import streamlit as st
 
 # 添加项目根目录到系统路径
-current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(current_dir)
+current_dir = os.path.dirname(os.path.abspath(__file__))  # utils目录
+batch_dir = os.path.dirname(current_dir)  # batch目录
+root_dir = os.path.dirname(batch_dir)  # 项目根目录
 sys.path.append(root_dir)
 
 from core.config_utils import load_key, update_key
 from st_components.imports_and_utils import ask_gpt
-from utils.video_processor import process_video
+from video_processor import process_video
 import easy_util as eu
 
 console = Console()
@@ -28,7 +30,7 @@ class BatchProcessor:
         self.folder_path = os.path.abspath(folder_path)
         
         # 获取项目根目录
-        self.root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        self.root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         self.batch_dir = os.path.join(self.root_dir, 'batch')
         
         # 设置配置文件路径
@@ -155,26 +157,20 @@ class BatchProcessor:
             self.total_tasks = len(df)
             self.completed_tasks = 0
             
-            # 初始化状态
-            self.update_status({
-                'current_file': '',
-                'task_number': 0,
-                'total_tasks': self.total_tasks,
-                'status': 'Starting...'
-            })
+            # 获取状态占位符
+            status_text = st.session_state.get('status_text')
+            progress_bar = st.session_state.get('progress_bar')
+            
+            if not status_text or not progress_bar:
+                return False
             
             # 处理每个视频
             for index, row in df.iterrows():
                 if pd.isna(row['Status']) or 'Error' in str(row['Status']):
                     video_file = row['Video File']
                     
-                    # 更新状态为处理中
-                    self.update_status({
-                        'current_file': video_file,
-                        'task_number': self.completed_tasks,
-                        'total_tasks': self.total_tasks,
-                        'status': 'processing'
-                    })
+                    # 更新状态文本
+                    status_text.text(f"🔄 正在处理: {video_file}")
                     
                     # 更新Excel状态
                     df.at[index, 'Status'] = 'Processing...'
@@ -194,26 +190,24 @@ class BatchProcessor:
                     df.at[index, 'Status'] = status_msg
                     df.to_excel(self.tasks_setting_path, index=False)
                     
-                    # 更新处理状态
-                    self.update_status({
-                        'current_file': video_file,
-                        'task_number': self.completed_tasks,
-                        'total_tasks': self.total_tasks,
-                        'status': status_msg
-                    })
+                    # 更新进度条
+                    progress = self.completed_tasks / self.total_tasks
+                    progress_bar.progress(progress, text=f"总进度: {int(progress * 100)}%")
                     
-                    gc.collect()
+                    if 'Error' in status_msg:
+                        status_text.error(f"❌ 处理出错: {video_file}\n{status_msg}")
+                    else:
+                        status_text.success(f"✅ 已完成: {video_file}")
                 else:
                     self.completed_tasks += 1
-                    print(f"Skipping task: {row['Video File']} - Status: {row['Status']}")
+                    status_text.info(f"⏭️ 已跳过: {row['Video File']}")
                     
-                    # 更新跳过状态
-                    self.update_status({
-                        'current_file': row['Video File'],
-                        'task_number': self.completed_tasks,
-                        'total_tasks': self.total_tasks,
-                        'status': 'Skipped'
-                    })
+                    # 更新进度条
+                    progress = self.completed_tasks / self.total_tasks
+                    progress_bar.progress(progress, text=f"总进度: {int(progress * 100)}%")
+                
+                # 短暂延迟以确保界面更新
+                time.sleep(0.1)
             
             # 更新完成信息
             st.session_state.process_complete_info = {
@@ -221,15 +215,19 @@ class BatchProcessor:
                 'total_cost': eu.get_formated_total_estimated_cost()
             }
             
+            # 显示完成信息
+            status_text.success(
+                f"✨ 批处理完成\n"
+                f"总耗时: {eu.convert_seconds(eu.total_time_duration)}\n"
+                f"预计总花费: {eu.get_formated_total_estimated_cost()}"
+            )
+            
             return True
         except Exception as e:
             console.print(f"[bold red]Batch processing error: {str(e)}")
+            status_text.error(f"❌ 处理出错: {str(e)}")
             return False
         finally:
-            # 清理状态
-            if os.path.exists(self.status_file_path):
-                os.remove(self.status_file_path)
-            st.session_state.current_task_info = None
             st.session_state.processing = False
 
 def check_api():

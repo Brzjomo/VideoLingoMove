@@ -1,14 +1,16 @@
-import streamlit as st
 import os
-import pandas as pd
 import sys
+import streamlit as st
+import pandas as pd
 from rich.console import Console
 import time
 import json
+import shutil
 
 # 添加项目根目录到系统路径
-current_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(current_dir)
+current_dir = os.path.dirname(os.path.abspath(__file__))  # utils目录
+batch_dir = os.path.dirname(current_dir)  # batch目录
+root_dir = os.path.dirname(batch_dir)  # 项目根目录
 sys.path.append(root_dir)
 
 from core.config_utils import update_key, load_key
@@ -58,61 +60,14 @@ def display_task_status(tasks_setting_path, status_placeholder, progress_placeho
         # 读取任务详情表格
         df = pd.read_excel(tasks_setting_path)
         
-        # 读取状态文件
-        status_file_path = os.path.join(os.path.dirname(tasks_setting_path), 'current_status.json')
-        current_task_info = None
-        
-        if os.path.exists(status_file_path):
-            try:
-                with open(status_file_path, 'r', encoding='utf-8') as f:
-                    current_task_info = json.load(f)
-            except json.JSONDecodeError:
-                pass
-        
-        # 使用container来包装状态信息
-        with status_placeholder.container():
-            # 显示总体进度
-            if current_task_info:
-                progress = current_task_info['task_number'] / current_task_info['total_tasks']
-                st.progress(progress, text=f"总进度: {int(progress * 100)}%")
-            
-            # 显示当前任务信息
-            if current_task_info:
-                status = current_task_info.get('status', '')
-                current_file = current_task_info.get('current_file', '')
-                task_number = current_task_info.get('task_number', 0)
-                total_tasks = current_task_info.get('total_tasks', 0)
-                
-                # 创建两列布局
-                col1, col2 = st.columns([3, 1])
-                
-                with col1:
-                    if status == 'processing':
-                        st.warning(f"🔄 正在处理: {current_file}")
-                    elif status == 'Done':
-                        st.success(f"✅ 已完成: {current_file}")
-                    elif 'Error' in str(status):
-                        st.error(f"❌ 处理出错: {current_file}\n{status}")
-                    elif status == 'Skipped':
-                        st.info(f"⏭️ 已跳过: {current_file}")
-                    else:
-                        st.info(f"ℹ️ {status}: {current_file}")
-                
-                with col2:
-                    st.metric("处理进度", f"{task_number}/{total_tasks}")
-            
-            # 显示完成信息
-            if st.session_state.process_complete_info and not st.session_state.processing:
-                info = st.session_state.process_complete_info
-                st.success(
-                    f"✨ 批处理完成\n"
-                    f"总耗时: {info['total_time']}\n"
-                    f"预计总花费: {info['total_cost']}"
-                )
+        # 创建状态文本和进度条占位符
+        if 'status_text' not in st.session_state:
+            st.session_state.status_text = status_placeholder.empty()
+        if 'progress_bar' not in st.session_state:
+            st.session_state.progress_bar = progress_placeholder.empty()
         
         # 显示任务表格
         if not df.empty:
-            st.write("### 任务详情:")
             # 格式化状态列
             df['Status'] = df['Status'].apply(lambda x: '✅ 完成' if x == 'Done' 
                                             else '❌ ' + x if isinstance(x, str) and 'Error' in x 
@@ -122,13 +77,23 @@ def display_task_status(tasks_setting_path, status_placeholder, progress_placeho
                                             else x)
             
             # 显示带样式的表格
-            styled_df = df.style.apply(lambda x: ['background-color: #e6ffe6' if v == '✅ 完成'
+            styled_df = df.style.apply(lambda x: ['background-color: #C6C6C6' if v == '✅ 完成'
                                                 else 'background-color: #ffe6e6' if '❌' in str(v)
                                                 else 'background-color: #fff3e6' if '⏳' in str(v)
-                                                else 'background-color: #e6f3ff' if '⏭️' in str(v)
+                                                else 'background-color: #C6C6C6' if '⏭️' in str(v)
                                                 else '' for v in x], axis=1)
             
             table_placeholder.dataframe(styled_df, use_container_width=True)
+            
+            # 显示完成信息
+            if st.session_state.process_complete_info and not st.session_state.processing:
+                info = st.session_state.process_complete_info
+                st.success(
+                    f"✨ 批处理完成\n"
+                    f"总耗时: {info['total_time']}\n"
+                    f"预计总花费: {info['total_cost']}"
+                )
+                
     except Exception as e:
         st.error(f"读取任务状态失败: {str(e)}")
 
@@ -300,7 +265,6 @@ def main():
                 # 清理并重建output目录
                 batch_output_dir = os.path.join(root_dir, 'batch', 'output')
                 if os.path.exists(batch_output_dir):
-                    import shutil
                     shutil.rmtree(batch_output_dir)
                 os.makedirs(batch_output_dir)
                 
@@ -314,6 +278,7 @@ def main():
                 st.error(f"❌ 处理过程中出现错误: {str(e)}")
             finally:
                 st.session_state.processing = False
+                st.rerun()
     
     # 显示任务状态
     if os.path.exists(st.session_state.processor.tasks_setting_path):
@@ -330,8 +295,8 @@ def main():
         
         # 如果正在处理，自动刷新
         if st.session_state.processing:
-            time.sleep(0.2)  # 减少刷新间隔以提高响应速度
-            st.experimental_rerun()
+            time.sleep(0.5)  # 增加延迟时间
+            st.rerun()
 
 if __name__ == "__main__":
     main() 
