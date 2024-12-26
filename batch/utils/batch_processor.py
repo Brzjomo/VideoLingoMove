@@ -11,6 +11,7 @@ from rich.panel import Panel
 import time
 import shutil
 import easy_util as eu
+import streamlit as st
 
 console = Console()
 
@@ -34,6 +35,14 @@ def check_api():
         return False
 
 def process_batch(folder_path):
+    # 获取当前文件所在目录
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    batch_dir = os.path.dirname(current_dir)  # utils的上级目录(batch)
+    root_dir = os.path.dirname(batch_dir)  # 项目根目录
+    
+    # 使用完整路径
+    tasks_setting_path = os.path.join(batch_dir, 'tasks_setting.xlsx')
+    
     if check_api() == False:
         console.print(Panel("API Key is not set. Please set API Key First.", title="[bold red]Error", expand=True))
         return
@@ -45,7 +54,7 @@ def process_batch(folder_path):
     eu.total_time_duration = 0
     eu.estimated_total_cost = 0
 
-    df = pd.read_excel('batch/tasks_setting.xlsx')
+    df = pd.read_excel(tasks_setting_path)
     for index, row in df.iterrows():
         if pd.isna(row['Status']) or 'Error' in str(row['Status']):
             total_tasks = len(df)
@@ -56,7 +65,7 @@ def process_batch(folder_path):
                                  title="[bold yellow]Retry Task", expand=False))
                 
                 # Restore files from batch/output/ERROR to output
-                error_folder = os.path.join('batch', 'output', 'ERROR', os.path.splitext(video_file)[0])
+                error_folder = os.path.join(batch_dir, 'output', 'ERROR', os.path.splitext(video_file)[0])
                 
                 if os.path.exists(error_folder):
                     # Ensure the output folder exists
@@ -101,7 +110,7 @@ def process_batch(folder_path):
                 update_key('target_language', original_target_lang)
                 
                 df.at[index, 'Status'] = status_msg
-                df.to_excel('batch/tasks_setting.xlsx', index=False)
+                df.to_excel(tasks_setting_path, index=False)
                 
                 gc.collect()
                 
@@ -109,8 +118,17 @@ def process_batch(folder_path):
         else:
             print(f"Skipping task: {row['Video File']} - Status: {row['Status']}")
 
-    console.print(Panel("All tasks processed!\nCheck out in `batch/output`!", 
+    console.print(Panel("All tasks processed!", 
                        title="[bold green]Batch Processing Complete", expand=False))
+    
+    # 设置完成信息到session state
+    total_time = eu.convert_seconds(eu.total_time_duration)
+    total_cost = eu.get_formated_total_estimated_cost()
+    st.session_state.process_complete_info = {
+        'total_time': total_time,
+        'total_cost': total_cost
+    }
+    
     output_total_cost()
 
 def output_total_cost():
