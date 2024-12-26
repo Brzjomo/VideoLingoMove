@@ -135,6 +135,9 @@ class BatchProcessor:
     def process_batch(self):
         """批量处理视频"""
         try:
+            # 设置处理状态
+            eu.set_processing(True)
+            
             # 检查API
             if not check_api():
                 console.print(Panel("API Key is not set. Please set API Key First.", 
@@ -160,6 +163,9 @@ class BatchProcessor:
             
             # 处理每个视频
             for index, row in df.iterrows():
+                # 更新进度
+                eu.set_progress(self.completed_tasks / self.total_tasks)
+                
                 if pd.isna(row['Status']) or 'Error' in str(row['Status']):
                     video_file = row['Video File']
                     
@@ -214,18 +220,11 @@ class BatchProcessor:
                 
                 time.sleep(0.1)
             
-            # 更新完成信息
+            # 只更新完成信息，不显示
             st.session_state.process_complete_info = {
                 'total_time': eu.convert_seconds(eu.total_time_duration),
                 'total_cost': eu.get_formated_total_estimated_cost()
             }
-            
-            # 显示完成信息
-            status_text.markdown(
-                f"✨ 批处理完成  \n"
-                f"总耗时: {eu.convert_seconds(eu.total_time_duration)}  \n"
-                f"预计总花费: {eu.get_formated_total_estimated_cost()}"
-            )
             
             return True
         except Exception as e:
@@ -233,7 +232,7 @@ class BatchProcessor:
             status_text.error(f"❌ 处理出错: {str(e)}")
             return False
         finally:
-            st.session_state.processing = False
+            eu.set_processing(False)
 
 def check_api():
     """检查API状态"""

@@ -16,6 +16,7 @@ sys.path.append(root_dir)
 from core.config_utils import update_key, load_key
 from st_components.imports_and_utils import button_style, ask_gpt
 from batch_processor import BatchProcessor
+import easy_util as eu
 
 console = Console()
 
@@ -64,8 +65,8 @@ def display_task_status(tasks_setting_path, status_placeholder, progress_placeho
         
         # 计算进度
         progress = 0
-        if st.session_state.processing and hasattr(st.session_state, 'current_progress'):
-            progress = st.session_state.current_progress
+        if eu.is_processing():
+            progress = eu.get_progress()
         elif df is not None:
             completed = len([x for x in df['Status'] if x == 'Done' or x == 'Skipped'])
             total = len(df)
@@ -103,11 +104,11 @@ def display_task_status(tasks_setting_path, status_placeholder, progress_placeho
             
             table_placeholder.dataframe(styled_df, use_container_width=True)
             
-            # 显示完成信息，使用 Markdown 格式的换行
+            # 显示完成信息
             if st.session_state.process_complete_info and not st.session_state.processing:
                 info = st.session_state.process_complete_info
-                st.markdown(
-                    f"✨ 批处理完成  \n"  # 使用两个空格和换行符
+                st.success(
+                    f"✨ 批处理完成  \n"
                     f"总耗时: {info['total_time']}  \n"
                     f"预计总花费: {info['total_cost']}"
                 )

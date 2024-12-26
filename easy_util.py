@@ -29,6 +29,10 @@ estimated_total_cost = 0
 # 文件名
 original_name = ""
 
+# 进度记录
+current_progress = 0
+processing = False
+
 # 方法
 def convert_seconds(seconds):
     minutes = int(seconds // 60)
@@ -73,3 +77,18 @@ def record_messages():
 def record_file_name(file):
     file_name = os.path.splitext(os.path.basename(file))[0]
     return file_name
+
+# 添加进度相关的方法
+def set_progress(progress: float):
+    global current_progress
+    current_progress = max(0.0, min(1.0, progress))
+
+def get_progress():
+    return current_progress
+
+def set_processing(status: bool):
+    global processing
+    processing = status
+
+def is_processing():
+    return processing
