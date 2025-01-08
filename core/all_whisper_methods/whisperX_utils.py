@@ -51,47 +51,115 @@ def _detect_silence(audio_file: str, start: float, end: float) -> List[float]:
 
 def get_audio_duration(audio_file: str) -> float:
     """Get the duration of an audio file using ffmpeg."""
+    if not os.path.exists(audio_file):
+        print(f"[red]Error: Audio file does not exist: {audio_file}[/red]")
+        raise FileNotFoundError(f"Audio file not found: {audio_file}")
+        
     cmd = ['ffmpeg', '-i', audio_file]
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    _, stderr = process.communicate()
+    stdout, stderr = process.communicate()
     output = stderr.decode('utf-8', errors='ignore')
     
+    print(f"[cyan]FFmpeg output for duration check:[/cyan]")
+    print(output)
+    
     try:
-        duration_str = [line for line in output.split('\n') if 'Duration' in line][0]
+        duration_lines = [line for line in output.split('\n') if 'Duration' in line]
+        if not duration_lines:
+            print("[red]Error: Could not find duration information in FFmpeg output[/red]")
+            raise ValueError("No duration information found")
+            
+        duration_str = duration_lines[0]
         duration_parts = duration_str.split('Duration: ')[1].split(',')[0].split(':')
         duration = float(duration_parts[0])*3600 + float(duration_parts[1])*60 + float(duration_parts[2])
+        
+        if duration <= 0:
+            print(f"[red]Error: Invalid duration: {duration}s[/red]")
+            raise ValueError(f"Invalid duration: {duration}s")
+            
+        print(f"[green]Successfully got audio duration: {duration:.2f}s ({duration/60:.2f} minutes)[/green]")
+        return duration
     except Exception as e:
-        print(f"[red]❌ Error: Failed to get audio duration: {e}[/red]")
-        duration = 0
-    return duration
+        print(f"[red]Error: Failed to get audio duration: {str(e)}[/red]")
+        print(f"[red]FFmpeg output: {output}[/red]")
+        raise
 
-def split_audio(audio_file: str, target_len: int = 30*60, win: int = 60) -> List[Tuple[float, float]]:
+def split_audio(audio_file: str, target_len: int = 30*60, win: int = 60, min_segment_len: float = 0.5) -> List[Tuple[float, float]]:
     # 30 min 16000 Hz 96kbps ~ 22MB < 25MB required by whisper
     print("[bold blue]🔪 Starting audio segmentation...[/]")
     
     duration = get_audio_duration(audio_file)
+    print(f"[cyan]Total audio duration: {duration:.2f}s ({duration/60:.2f} minutes)[/cyan]")
+    
+    if duration == 0:
+        print("[red]Error: Could not get audio duration, please check the audio file.[/red]")
+        raise ValueError("Invalid audio duration")
+    
+    # 确保目标长度不超过音频总长度
+    target_len = min(target_len, duration)
+    print(f"[cyan]Target segment length: {target_len}s[/cyan]")
     
     segments = []
     pos = 0
     while pos < duration:
-        if duration - pos < target_len:
-            segments.append((pos, duration))
+        remaining = duration - pos
+        print(f"[cyan]Processing position {pos:.2f}s, remaining {remaining:.2f}s[/cyan]")
+        
+        if remaining < min_segment_len:
+            # If remaining duration is too short, merge with previous segment
+            if segments:
+                last_start, _ = segments[-1]
+                segments[-1] = (last_start, duration)
+                print(f"[yellow]Merging short remaining segment with previous: {last_start:.2f}s -> {duration:.2f}s[/yellow]")
             break
+        elif remaining < target_len:
+            segments.append((pos, duration))
+            print(f"[green]Adding final segment: {pos:.2f}s -> {duration:.2f}s[/green]")
+            break
+            
         win_start = pos + target_len - win
         win_end = min(win_start + 2 * win, duration)
+        print(f"[cyan]Searching for silence between {win_start:.2f}s and {win_end:.2f}s[/cyan]")
+        
         silences = _detect_silence(audio_file, win_start, win_end)
-    
         if silences:
+            print(f"[green]Found {len(silences)} silence points: {', '.join(f'{t:.2f}s' for t in silences)}[/green]")
             target_pos = target_len - (win_start - pos)
-            split_at = next((t for t in silences if t - win_start > target_pos), None)
+            # Find a silence point that results in segments longer than min_segment_len
+            valid_splits = [t for t in silences if t - win_start > target_pos and t - pos >= min_segment_len]
+            split_at = next(iter(valid_splits), None) if valid_splits else None
+            
             if split_at:
                 segments.append((pos, split_at))
+                print(f"[green]Adding segment at silence: {pos:.2f}s -> {split_at:.2f}s[/green]")
                 pos = split_at
                 continue
-        segments.append((pos, pos + target_len))
-        pos += target_len
+        else:
+            print("[yellow]No silence points found in window[/yellow]")
+                
+        # If no valid silence point found, use target_len
+        next_pos = pos + target_len
+        if duration - next_pos < min_segment_len:
+            # If remaining would be too short, extend current segment to end
+            segments.append((pos, duration))
+            print(f"[green]Adding final segment (no silence): {pos:.2f}s -> {duration:.2f}s[/green]")
+            break
+        else:
+            segments.append((pos, next_pos))
+            print(f"[green]Adding regular segment: {pos:.2f}s -> {next_pos:.2f}s[/green]")
+            pos = next_pos
     
-    print(f"🔪 Audio split into {len(segments)} segments")
+    print(f"\n[bold blue]🔪 Audio split into {len(segments)} segments:[/bold blue]")
+    total_duration = 0
+    for i, (start, end) in enumerate(segments):
+        segment_duration = end - start
+        total_duration += segment_duration
+        print(f"  Segment {i+1}: {start:.2f}s -> {end:.2f}s (duration: {segment_duration:.2f}s)")
+    print(f"[bold blue]Total segments duration: {total_duration:.2f}s[/bold blue]")
+    
+    if abs(total_duration - duration) > 1.0:  # 允许1秒的误差
+        print(f"[red]Warning: Total segments duration ({total_duration:.2f}s) differs from audio duration ({duration:.2f}s)[/red]")
+    
     return segments
 
 def process_transcription(result: Dict) -> pd.DataFrame:

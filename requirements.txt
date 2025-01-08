@@ -24,7 +24,7 @@ ctranslate2==4.4.0
 edge-tts
 
 demucs[dev] @ git+https://github.com/adefossez/demucs
-whisperx @ git+https://github.com/m-bain/whisperx.git@7307306a9d8dd0d261e588cc933322454f853853
+whisperx @ git+https://github.com/m-bain/whisperx.git@v3.2.0
 
 syllables
 pypinyin

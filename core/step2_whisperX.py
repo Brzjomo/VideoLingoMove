@@ -12,6 +12,8 @@ from rich import print as rprint
 import subprocess
 import tempfile
 import time
+import gc
+import numpy as np
 
 from core.config_utils import load_key
 from core.all_whisper_methods.demucs_vl import demucs_main, RAW_AUDIO_FILE, VOCAL_AUDIO_FILE
@@ -53,7 +55,7 @@ def check_hf_mirror() -> str:
     return fastest_url
 
 def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
-    os.environ['HF_ENDPOINT'] = check_hf_mirror() #? don't know if it's working...
+    os.environ['HF_ENDPOINT'] = check_hf_mirror()
     WHISPER_LANGUAGE = load_key("whisper.language")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     rprint(f"🚀 Starting WhisperX using device: {device} ...")
@@ -94,23 +96,66 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
             temp_audio_path = temp_audio.name
         
         # Extract audio segment using ffmpeg
-        ffmpeg_cmd = f'ffmpeg -y -i "{audio_file}" -ss {start} -t {end-start} -vn -ar 32000 -ac 1 "{temp_audio_path}"'
-        subprocess.run(ffmpeg_cmd, shell=True, check=True, capture_output=True)
+        # Ensure minimum duration of 0.5 seconds
+        MIN_DURATION = 0.5  # minimum duration in seconds
+        duration = end - start
+        if duration < MIN_DURATION:
+            rprint(f"[yellow]⚠️ Audio segment too short ({duration:.3f}s), extending to {MIN_DURATION}s...[/yellow]")
+            end = start + MIN_DURATION
+        
+        ffmpeg_cmd = f'ffmpeg -y -i "{audio_file}" -ss {start} -t {end-start} -vn -ar 16000 -ac 1 "{temp_audio_path}"'
+        rprint(f"[cyan]Executing ffmpeg command: {ffmpeg_cmd}[/cyan]")
+        process = subprocess.run(ffmpeg_cmd, shell=True, capture_output=True, text=True)
+        
+        if process.returncode != 0:
+            rprint(f"[red]FFmpeg error: {process.stderr}[/red]")
+            raise RuntimeError(f"FFmpeg failed with error: {process.stderr}")
+        
+        if not os.path.exists(temp_audio_path) or os.path.getsize(temp_audio_path) == 0:
+            rprint("[red]FFmpeg output file is empty or does not exist![/red]")
+            raise RuntimeError("FFmpeg failed to create output file")
         
         try:
-            # Load audio segment with librosa
-            audio_segment, sample_rate = librosa.load(temp_audio_path, sr=16000)
+            # Try loading with whisperx first
+            audio_numpy = whisperx.load_audio(temp_audio_path)
+            if audio_numpy.size == 0 or len(audio_numpy) < 100:  # 100 samples at 16kHz = 6.25ms
+                rprint("[yellow]⚠️ WhisperX load_audio returned empty or too short array, falling back to librosa...[/yellow]")
+                audio_numpy, _ = librosa.load(temp_audio_path, sr=16000)
+            
+            # Ensure numpy array is float32 and not empty
+            audio_numpy = audio_numpy.astype(np.float32)
+            if audio_numpy.size == 0 or len(audio_numpy) < 100:
+                rprint(f"[red]Audio segment too short: {len(audio_numpy)/16000:.6f}s[/red]")
+                raise ValueError("Audio segment too short for processing")
+            
+            # Create tensor version for alignment
+            audio_tensor = torch.from_numpy(audio_numpy)
+            if audio_tensor.dim() == 1:
+                audio_tensor = audio_tensor.unsqueeze(0)
+            audio_tensor = audio_tensor.float()
+            
+            rprint(f"[cyan]Audio numpy shape: {audio_numpy.shape}, dtype: {audio_numpy.dtype}[/cyan]")
+            rprint(f"[cyan]Audio tensor shape: {audio_tensor.shape}, dtype: {audio_tensor.dtype}[/cyan]")
+            
+            # Verify the audio data
+            rprint(f"[cyan]Audio duration: {len(audio_numpy)/16000:.3f}s[/cyan]")
+            rprint(f"[cyan]Audio range: [{audio_numpy.min():.3f}, {audio_numpy.max():.3f}][/cyan]")
+            
+        except Exception as e:
+            rprint(f"[red]Error loading audio: {str(e)}[/red]")
+            raise
         finally:
             # Clean up temp file
             if os.path.exists(temp_audio_path):
                 os.unlink(temp_audio_path)
 
         rprint("[bold green]note: You will see Progress if working correctly[/bold green]")
-        result = model.transcribe(audio_segment, batch_size=batch_size, print_progress=True)
+        result = model.transcribe(audio_numpy, batch_size=batch_size, print_progress=True)
 
         # Free GPU resources
-        del model
+        gc.collect()
         torch.cuda.empty_cache()
+        del model
 
         # Save language
         save_language(result['language'])
@@ -119,9 +164,10 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
 
         # Align whisper output
         model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
-        result = whisperx.align(result["segments"], model_a, metadata, audio_segment, device, return_char_alignments=False)
+        result = whisperx.align(result["segments"], model_a, metadata, audio_tensor, device, return_char_alignments=False)
 
         # Free GPU resources again
+        gc.collect()
         torch.cuda.empty_cache()
         del model_a
 
