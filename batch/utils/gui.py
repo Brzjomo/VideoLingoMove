@@ -174,14 +174,25 @@ def main():
     # 文件夹路径选择
     st.write("### 📁 选择视频文件夹")
     
-    # 使用radio来选择路径模式
-    path_mode = st.radio(
-        "选择路径模式",
-        ["使用默认路径", "手动输入路径"],
-        horizontal=True,
-        key="path_mode",
-        on_change=reset_processor
-    )
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        # 使用radio来选择路径模式
+        path_mode = st.radio(
+            "选择路径模式",
+            ["使用默认路径", "手动输入路径"],
+            horizontal=True,
+            key="path_mode",
+            on_change=reset_processor
+        )
+    
+    with col2:
+        # 添加子目录处理选项
+        process_subdirs = st.checkbox(
+            "处理子目录",
+            help="启用后将递归处理所选文件夹中的所有子目录",
+            key="process_subdirs",
+            on_change=reset_processor
+        )
     
     if path_mode == "使用默认路径":
         folder_path = os.path.join(root_dir, 'batch', 'input')
@@ -226,14 +237,17 @@ def main():
     # 创建处理器实例
     if st.session_state.processor is None:
         st.session_state.processor = BatchProcessor(folder_path)
+        # 设置子目录处理标志
+        st.session_state.processor.process_subdirs = st.session_state.process_subdirs
     
     # 显示当前选择的路径
     with st.expander("📂 当前文件夹信息", expanded=True):
         st.info(f"当前使用的文件夹: {folder_path}")
         
         # 显示文件夹统计信息
-        video_files = [f for f in os.listdir(folder_path) 
-                      if f.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm'))]
+        video_files = []
+        if st.session_state.processor:
+            video_files = st.session_state.processor.check_settings()
         
         col1, col2 = st.columns(2)
         with col1:

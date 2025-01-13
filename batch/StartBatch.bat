@@ -1,10 +1,6 @@
 @echo off
-chcp 65001 >nul 2>&1
-cd /D "%~dp0"
+call "%USERPROFILE%\anaconda3\Scripts\activate.bat" videolingo
 cd ..
+python -m streamlit run "batch\utils\gui.py"
 
-call conda activate videolingo
-
-streamlit run batch/utils/gui.py
-
-pause 
+pause

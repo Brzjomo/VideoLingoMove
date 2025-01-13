@@ -46,25 +46,41 @@ class BatchProcessor:
         # 确保目录存在
         os.makedirs(self.folder_path, exist_ok=True)
         os.makedirs(self.batch_dir, exist_ok=True)
+        
+        # 添加子目录处理标志
+        self.process_subdirs = False
     
+    def get_video_files(self, directory):
+        """获取指定目录下的视频文件"""
+        video_files = []
+        for file in os.listdir(directory):
+            full_path = os.path.join(directory, file)
+            if os.path.isfile(full_path) and file.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
+                srt_file = os.path.splitext(os.path.basename(file))[0] + '.srt'
+                if srt_file not in os.listdir(directory):
+                    # 返回相对于主文件夹的路径
+                    rel_path = os.path.relpath(full_path, self.folder_path)
+                    video_files.append(rel_path)
+        return video_files
+
     def check_settings(self):
         """检查设置和环境"""
         try:
-            # 检查视频文件
             video_files = []
-            for file in os.listdir(self.folder_path):
-                if file.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
-                    srt_file = os.path.splitext(os.path.basename(file))[0] + '.srt'
-                    if srt_file not in os.listdir(self.folder_path):
-                        video_files.append(file)
             
-            if not video_files:
-                raise Exception(f"未找到需要处理的视频文件，请检查文件夹：{self.folder_path}")
+            # 处理主目录
+            video_files.extend(self.get_video_files(self.folder_path))
+            
+            # 如果启用了子目录处理，递归处理子目录
+            if self.process_subdirs:
+                for root, dirs, _ in os.walk(self.folder_path):
+                    if root != self.folder_path:  # 跳过主目录，因为已经处理过了
+                        video_files.extend(self.get_video_files(root))
             
             return video_files
         except Exception as e:
             console.print(Panel(f"设置检查失败: {str(e)}", title="错误", style="bold red"))
-            raise
+            return []
     
     def create_or_update_tasks(self):
         """创建或更新任务配置"""
@@ -121,9 +137,14 @@ class BatchProcessor:
             if target_lang and not pd.isna(target_lang):
                 update_key('target_language', target_lang)
             
+            # 获取视频文件的完整路径
+            video_full_path = os.path.join(self.folder_path, video_file)
+            video_dir = os.path.dirname(video_full_path)
+            video_filename = os.path.basename(video_full_path)
+            
             # 处理视频
             status, error_step, error_message = process_video(
-                self.folder_path, video_file, dubbing, is_retry)
+                video_dir, video_filename, dubbing, is_retry)
             return "Done" if status else f"Error: {error_step} - {error_message}"
         except Exception as e:
             return f"Error: Unhandled exception - {str(e)}"
