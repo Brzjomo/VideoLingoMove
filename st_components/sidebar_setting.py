@@ -85,7 +85,8 @@ def page_setting():
                 "🇫🇷 Français": "fr",
                 "🇩🇪 Deutsch": "de",
                 "🇮🇹 Italiano": "it",
-                "🇯🇵 日本語": "ja"
+                "🇯🇵 日本語": "ja",
+                "🇰🇷 한국어": "ko"
             }
             lang = st.selectbox(
                 "Recog Lang",
