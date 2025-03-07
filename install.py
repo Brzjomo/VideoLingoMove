@@ -23,8 +23,16 @@ def install_package(*packages):
     subprocess.check_call([sys.executable, "-m", "pip", "install", *packages])
 
 def check_nvidia_gpu():
-    install_package("pynvml")
-    import pynvml
+    try:
+        import pynvml
+    except ImportError:
+        print("pynvml is not installed, attempting to install...")
+        try:
+            install_package("pynvml")
+            import pynvml
+        except:
+            print("pynvml could not be installed or imported.")
+            return False
     try:
         pynvml.nvmlInit()
         device_count = pynvml.nvmlDeviceGetCount()
@@ -41,8 +49,6 @@ def check_nvidia_gpu():
     except pynvml.NVMLError:
         print("No NVIDIA GPU detected or NVIDIA drivers not properly installed")
         return False
-    finally:
-        pynvml.nvmlShutdown()
 
 def check_ffmpeg():
     from rich.console import Console
@@ -113,7 +119,13 @@ def main():
     else:
         system_name = "🍎 MacOS" if platform.system() == 'Darwin' else "💻 No NVIDIA GPU"
         console.print(Panel(f"{system_name} detected, installing CPU version of PyTorch... However, it would be extremely slow for transcription.", style="cyan"))
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2"])
+        torch_file = "torch-2.1.2+cu118-cp310-cp310-win_amd64.whl"
+        if os.path.exists(torch_file):
+            # https://download.pytorch.org/whl/cu118/torch-2.1.2%2Bcu118-cp310-cp310-win_amd64.whl#sha256=0ddfa0336d678316ff4c35172d85cddab5aa5ded4f781158e725096926491db9
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2", torch_file])
+        else:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2", "--index-url", "https://download.pytorch.org/whl/cu118"])
+            # subprocess.check_call([sys.executable, "-m", "pip", "install", "torch==2.1.2", "torchaudio==2.1.2"])
 
     def install_requirements():
         try:
