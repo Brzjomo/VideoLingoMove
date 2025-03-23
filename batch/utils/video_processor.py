@@ -8,6 +8,7 @@ from functools import partial
 from rich.panel import Panel
 from rich.console import Console
 import easy_util as eu
+import time
 
 console = Console()
 
@@ -47,19 +48,22 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False, sav
     current_step = ""
     for step_name, step_func in text_steps:
         current_step = step_name
-        for attempt in range(3):
+        for attempt in range(4):
             try:
                 console.print(Panel(
                     f"[bold green]{step_name}[/]",
-                    subtitle=f"Attempt {attempt + 1}/3" if attempt > 0 else None,
+                    subtitle=f"Attempt {attempt + 1}/4" if attempt > 0 else None,
                     border_style="blue"
                 ))
+                if attempt > 0:
+                    delay = 5 * (3 ** (attempt - 1))
+                    time.sleep(delay)
                 result = step_func()
                 if result is not None:
                     globals().update(result)
                 break
             except Exception as e:
-                if attempt == 2:
+                if attempt == 3:
                     error_panel = Panel(
                         f"[bold red]Error in step '{current_step}':[/]\n{str(e)}",
                         border_style="red"
