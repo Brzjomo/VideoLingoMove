@@ -50,6 +50,41 @@ def check_nvidia_gpu():
         print("No NVIDIA GPU detected or NVIDIA drivers not properly installed")
         return False
 
+def download_ffmpeg_windows(target_dir):
+    import zipfile
+    from pathlib import Path
+    from urllib.request import urlretrieve
+    from rich.console import Console
+    from rich.panel import Panel
+
+    """
+    从 FFmpeg-Builds 下载最新版本的 FFmpeg 并解压到目标目录。
+    """
+    ffmpeg_url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl.zip"
+    ffmpeg_zip = os.path.join(target_dir, "ffmpeg.zip")
+    console = Console()
+    console.print(f"🚀 Downloading FFmpeg from {ffmpeg_url}...")
+    try:
+        # 下载 FFmpeg
+        urlretrieve(ffmpeg_url, ffmpeg_zip)
+        console.print("✅ FFmpeg downloaded successfully.", style="green")
+        # 解压 FFmpeg
+        with zipfile.ZipFile(ffmpeg_zip, 'r') as zip_ref:
+            zip_ref.extractall(target_dir)
+        console.print(f"✅ FFmpeg extracted to {target_dir}.", style="green")
+        # 删除压缩包
+        os.remove(ffmpeg_zip)
+        console.print("🗑️ FFmpeg zip file removed.", style="yellow")
+        # 将 FFmpeg 可执行文件路径添加到系统环境变量
+        ffmpeg_path = os.path.join(target_dir, "ffmpeg-master-latest-win64-gpl", "bin")
+        if ffmpeg_path not in os.environ["PATH"]:
+            os.environ["PATH"] += os.pathsep + ffmpeg_path
+        console.print(f"🌐 Added FFmpeg to PATH: {ffmpeg_path}", style="bold cyan")
+        return True
+    except Exception as e:
+        console.print(f"❌ Failed to download or extract FFmpeg: {e}", style="red")
+
+
 def check_ffmpeg():
     from rich.console import Console
     from rich.panel import Panel
@@ -65,8 +100,24 @@ def check_ffmpeg():
         install_cmd = ""
         
         if system == "Windows":
-            install_cmd = "choco install ffmpeg"
-            extra_note = "Install Chocolatey first (https://chocolatey.org/)"
+           target_dir = os.getcwd()  # 获取当前工作目录
+           os.makedirs(target_dir, exist_ok=True)  # 确保目录存在
+
+           console.print(Panel.fit(
+               f"❌ FFmpeg not found\n\n"
+               f"🛠️ Downloading and installing FFmpeg automatically to:\n[bold cyan]{target_dir}[/bold cyan]...",
+               style="red"
+           ))
+
+           if download_ffmpeg_windows(target_dir):
+               console.print(Panel(
+                   f"✅ FFmpeg installed successfully!\n\n"
+                   f"📁 FFmpeg is located in: [bold cyan]{target_dir}[/bold cyan]\n\n"
+                   f"🔄 Please restart your terminal and run the installer again.",
+                   style="green"
+               ))
+           else:
+               console.print(Panel("❌ Failed to install FFmpeg. Please try manually downloading from https://github.com/BtbN/FFmpeg-Builds/releases.", style="red"))
         elif system == "Darwin":
             install_cmd = "brew install ffmpeg"
             extra_note = "Install Homebrew first (https://brew.sh/)"

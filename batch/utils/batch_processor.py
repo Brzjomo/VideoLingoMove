@@ -9,6 +9,7 @@ import shutil
 import json
 from threading import Lock
 import streamlit as st
+import subprocess
 
 # 添加项目根目录到系统路径
 current_dir = os.path.dirname(os.path.abspath(__file__))  # utils目录
@@ -49,6 +50,15 @@ class BatchProcessor:
         
         # 添加子目录处理标志
         self.process_subdirs = False
+
+    def convert_audio_to_video(self, input_audio: str, output_video: str):
+        if not os.path.exists(output_video):
+            print(f"🎵➡️🎬 正在使用FFmpeg将音频转换为视频......")
+            ffmpeg_cmd = ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=640x360', '-i', input_audio, '-shortest', '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', output_video]
+            subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True, encoding='utf-8')
+            print(f"🎵➡️🎬 已将 <{input_audio}> 转换为 <{output_video}>\n")
+            # delete input_audio file
+            os.remove(input_audio)
     
     def get_video_files(self, directory):
         """获取指定目录下的视频文件"""
@@ -58,6 +68,17 @@ class BatchProcessor:
             if os.path.isfile(full_path) and file.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
                 srt_file = os.path.splitext(os.path.basename(file))[0] + '.srt'
                 if srt_file not in os.listdir(directory):
+                    # 返回相对于主文件夹的路径
+                    rel_path = os.path.relpath(full_path, self.folder_path)
+                    video_files.append(rel_path)
+            elif  os.path.isfile(full_path) and file.endswith(('.wav', '.mp3', '.flac', '.m4a')):
+                base_name = os.path.splitext(os.path.basename(file))[0]
+                srt_file = base_name + '.srt'
+                if srt_file not in os.listdir(directory):
+                    input_file = f"{full_path}"
+                    output_video = f"{base_name}.mp4"
+                    full_path = os.path.join(directory, output_video)
+                    self.convert_audio_to_video(input_file, full_path)
                     # 返回相对于主文件夹的路径
                     rel_path = os.path.relpath(full_path, self.folder_path)
                     video_files.append(rel_path)
