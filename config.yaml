@@ -152,7 +152,7 @@ allowed_audio_formats:
 # LLMs that support returning JSON format
 llm_support_json:
 - 'deepseek-chat'
-- 'deepseek-coder'
+- 'deepseek-reasoner'
 - 'gpt-4o'
 - 'gpt-4o-mini'
 - 'gemini-2.0-flash-exp'
@@ -173,7 +173,7 @@ spacy_model_map:
   de: 'de_core_news_md'
   it: 'it_core_news_md'
   zh: 'zh_core_web_md'
-  ko: 'ko_core_news_lg'
+  ko: 'ko_core_news_md'
 
 # Languages that use space as separator
 language_split_with_space:

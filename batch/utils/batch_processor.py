@@ -10,6 +10,7 @@ import json
 from threading import Lock
 import streamlit as st
 import subprocess
+import datetime
 
 # 添加项目根目录到系统路径
 current_dir = os.path.dirname(os.path.abspath(__file__))  # utils目录
@@ -145,7 +146,26 @@ class BatchProcessor:
             console.print(Panel(f"创建任务配置失败: {str(e)}", title="错误", style="bold red"))
             raise
     
+    def is_time_in_range(self):
+        """检查当前时间是否在指定时间段内（00:30-08:30）"""
+        now = datetime.datetime.now()
+        start_time = now.replace(hour=0, minute=30, second=0, microsecond=0)
+        end_time = now.replace(hour=8, minute=30, second=0, microsecond=0)
+
+        return start_time <= now <= end_time
+
+    def wait_until_time_in_range(self):
+            """等待直到当前时间进入指定时间段（00:30-08:30）"""
+            while not self.is_time_in_range():
+                print("Waiting... Current time is outside the allowed range (00:30-08:30)")
+                time.sleep(60)  # 每分钟检查一次
+
+
     def process_single_video(self, video_file, source_lang, target_lang, dubbing, is_retry=False):
+        if not self.is_time_in_range():
+            print("Paused: Current time is outside the allowed range (00:30-08:30)")
+            self.wait_until_time_in_range()
+        
         """处理单个视频"""
         # 保存原始语言设置
         original_source_lang = load_key('whisper.language')

@@ -15,9 +15,9 @@ completion_tokens = 0
 total_tokens = 0
 
 # 预估单价（每百万）
-price_input_uncached = 1
-price_input_cached = 0.1
-price_output = 2
+price_input_uncached = 2
+price_input_cached = 0.5
+price_output = 8
 
 # 命中缓存的token比例
 cached_token_rate = 0.3
