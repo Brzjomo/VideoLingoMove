@@ -181,3 +181,6 @@ installer_files/
 
 # torch
 *.whl
+
+# temp folder
+batch/temp_preprocess/

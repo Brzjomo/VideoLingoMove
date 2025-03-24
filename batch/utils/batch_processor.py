@@ -56,6 +56,16 @@ class BatchProcessor:
         self.time_limit_enabled = False
         self.start_time = "00:30"
         self.end_time = "08:30"
+        
+        # 添加优先本地计算标志
+        self.prioritize_local = False
+        
+        # 添加预处理状态跟踪
+        self.preprocessed_files = set()
+        
+        # 添加临时存储目录
+        self.temp_dir = os.path.join(self.batch_dir, 'temp_preprocess')
+        os.makedirs(self.temp_dir, exist_ok=True)
 
     def convert_audio_to_video(self, input_audio: str, output_video: str):
         if not os.path.exists(output_video):
@@ -177,7 +187,71 @@ class BatchProcessor:
             print(f"Waiting... Current time is outside the allowed range ({self.start_time}-{self.end_time})")
             time.sleep(60)  # 每分钟检查一次
 
-    def process_single_video(self, video_file, source_lang, target_lang, dubbing, is_retry=False):
+    def get_temp_dir_for_video(self, video_file: str) -> str:
+        """获取视频文件的临时目录"""
+        # 使用视频文件名（不含扩展名）作为临时目录名
+        video_name = os.path.splitext(os.path.basename(video_file))[0]
+        temp_dir = os.path.join(self.temp_dir, video_name)
+        os.makedirs(temp_dir, exist_ok=True)
+        return temp_dir
+    
+    def save_preprocess_results(self, video_file: str) -> None:
+        """保存预处理结果到临时目录"""
+        temp_dir = self.get_temp_dir_for_video(video_file)
+        
+        # 需要保存的文件列表
+        files_to_save = [
+            ('output/audio/raw.mp3', 'raw.mp3'),
+            ('output/audio/for_whisper.mp3', 'for_whisper.mp3'),
+            ('output/log/cleaned_chunks.xlsx', 'cleaned_chunks.xlsx')
+        ]
+        
+        # 复制文件到临时目录
+        for src_path, dst_name in files_to_save:
+            if os.path.exists(src_path):
+                shutil.copy2(src_path, os.path.join(temp_dir, dst_name))
+    
+    def restore_preprocess_results(self, video_file: str) -> bool:
+        """从临时目录恢复预处理结果"""
+        temp_dir = self.get_temp_dir_for_video(video_file)
+        
+        # 检查所需文件是否都存在
+        required_files = ['raw.mp3', 'for_whisper.mp3', 'cleaned_chunks.xlsx']
+        if not all(os.path.exists(os.path.join(temp_dir, f)) for f in required_files):
+            return False
+        
+        # 确保目标目录存在
+        os.makedirs('output/audio', exist_ok=True)
+        os.makedirs('output/log', exist_ok=True)
+        
+        # 恢复文件
+        try:
+            for src_name, dst_path in [
+                ('raw.mp3', 'output/audio/raw.mp3'),
+                ('for_whisper.mp3', 'output/audio/for_whisper.mp3'),
+                ('cleaned_chunks.xlsx', 'output/log/cleaned_chunks.xlsx')
+            ]:
+                src_path = os.path.join(temp_dir, src_name)
+                shutil.copy2(src_path, dst_path)
+            return True
+        except Exception as e:
+            console.print(f"[red]恢复预处理文件失败: {str(e)}[/red]")
+            return False
+    
+    def cleanup_temp_files(self, video_file: str = None):
+        """清理临时文件"""
+        if video_file:
+            # 清理特定视频的临时文件
+            temp_dir = self.get_temp_dir_for_video(video_file)
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
+        else:
+            # 清理所有临时文件
+            if os.path.exists(self.temp_dir):
+                shutil.rmtree(self.temp_dir)
+            os.makedirs(self.temp_dir, exist_ok=True)
+    
+    def process_single_video(self, video_file, source_lang, target_lang, dubbing, is_retry=False, skip_preprocess=False):
         """处理单个视频"""
         if self.time_limit_enabled and not self.is_time_in_range():
             print(f"Paused: Current time is outside the allowed range ({self.start_time}-{self.end_time})")
@@ -199,9 +273,23 @@ class BatchProcessor:
             video_dir = os.path.dirname(video_full_path)
             video_filename = os.path.basename(video_full_path)
             
+            # 如果跳过预处理，先恢复预处理结果
+            if skip_preprocess:
+                if not self.restore_preprocess_results(video_file):
+                    console.print(f"[red]无法恢复预处理结果，将重新执行预处理步骤[/red]")
+                    skip_preprocess = False
+            
             # 处理视频
             status, error_step, error_message = process_video(
-                video_dir, video_filename, dubbing, is_retry)
+                video_dir, video_filename, dubbing, is_retry,
+                save_to_video_storage_folder=True,
+                skip_preprocess=skip_preprocess
+            )
+            
+            # 清理临时文件
+            if status:
+                self.cleanup_temp_files(video_file)
+            
             return "Done" if status else f"Error: {error_step} - {error_message}"
         except Exception as e:
             return f"Error: Unhandled exception - {str(e)}"
@@ -209,6 +297,35 @@ class BatchProcessor:
             # 恢复原始语言设置
             update_key('whisper.language', original_source_lang)
             update_key('target_language', original_target_lang)
+    
+    def preprocess_video(self, video_file: str) -> bool:
+        """预处理单个视频（仅执行本地计算部分）"""
+        try:
+            # 获取视频文件的完整路径
+            video_full_path = os.path.join(self.folder_path, video_file)
+            video_dir = os.path.dirname(video_full_path)
+            video_filename = os.path.basename(video_full_path)
+            
+            # 执行预处理步骤
+            status, error_step, error_message = process_video(
+                video_dir, 
+                video_filename, 
+                dubbing=False, 
+                is_retry=False,
+                preprocess_only=True
+            )
+            
+            if status:
+                # 保存预处理结果
+                self.save_preprocess_results(video_file)
+                self.preprocessed_files.add(video_file)
+                print(f"preprocessed_files: {video_file}");
+                return True
+            return False
+            
+        except Exception as e:
+            console.print(f"[red]预处理出错: {str(e)}[/red]")
+            return False
     
     def process_batch(self):
         """批量处理视频"""
@@ -239,13 +356,44 @@ class BatchProcessor:
             if not all([status_text, progress_placeholder, table_placeholder, display_task_status_func]):
                 return False
             
+            # 清理所有临时文件
+            self.cleanup_temp_files()
+            
+            # 如果启用了优先本地计算，先进行预处理
+            if self.prioritize_local:
+                console.print(Panel("开始预处理阶段...", style="bold cyan"))
+                for index, row in df.iterrows():
+                    if pd.isna(row['Status']) or 'Error' in str(row['Status']):
+                        video_file = row['Video File']
+                        
+                        # 更新状态文本
+                        status_text.text(f"🔄 正在预处理: {video_file}")
+                        
+                        # 预处理视频
+                        if self.preprocess_video(video_file):
+                            df.at[index, 'Status'] = 'Preprocessed'
+                        else:
+                            df.at[index, 'Status'] = 'Preprocess Failed'
+                        
+                        # 更新Excel和显示
+                        df.to_excel(self.tasks_setting_path, index=False)
+                        display_task_status_func(self.tasks_setting_path, 
+                                              status_text, 
+                                              progress_placeholder, 
+                                              table_placeholder)
+            
             # 处理每个视频
             for index, row in df.iterrows():
                 # 更新进度
                 eu.set_progress(self.completed_tasks / self.total_tasks)
                 
-                if pd.isna(row['Status']) or 'Error' in str(row['Status']):
+                if pd.isna(row['Status']) or 'Error' in str(row['Status']) or row['Status'] == 'Preprocessed':
                     video_file = row['Video File']
+                    
+                    # 如果启用了时间限制且不在允许时间范围内
+                    if self.time_limit_enabled and not self.is_time_in_range():
+                        status_text.warning(f"⏸️ 等待工作时间: {video_file}")
+                        self.wait_until_time_in_range()
                     
                     # 更新状态文本
                     status_text.text(f"🔄 正在处理: {video_file}")
@@ -253,20 +401,19 @@ class BatchProcessor:
                     # 更新Excel状态
                     df.at[index, 'Status'] = 'Processing...'
                     df.to_excel(self.tasks_setting_path, index=False)
-
-                    # 更新进度显示
                     display_task_status_func(self.tasks_setting_path, 
                                           status_text, 
                                           progress_placeholder, 
                                           table_placeholder)
-
+                    
                     # 处理视频
                     status_msg = self.process_single_video(
                         video_file,
                         row['Source Language'],
                         row['Target Language'],
                         0 if pd.isna(row['Dubbing']) else int(row['Dubbing']),
-                        not pd.isna(row['Status']) and 'Error' in str(row['Status'])
+                        not pd.isna(row['Status']) and 'Error' in str(row['Status']),
+                        skip_preprocess=self.prioritize_local and video_file in self.preprocessed_files
                     )
                     
                     # 更新完成状态
@@ -310,6 +457,8 @@ class BatchProcessor:
             status_text.error(f"❌ 处理出错: {str(e)}")
             return False
         finally:
+            # 清理所有临时文件
+            self.cleanup_temp_files()
             eu.set_processing(False)
 
 def check_api():

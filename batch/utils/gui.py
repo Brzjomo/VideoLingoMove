@@ -234,16 +234,28 @@ def main():
         st.session_state.folder_path = folder_path
         reset_processor()
     
-    # 在文件夹选择之后，添加时间限制设置
-    st.write("### ⏰ 工作时间设置")
+    # 在文件夹选择之后，添加处理选项
+    st.write("### ⚙️ 处理选项")
     
-    # 添加时间限制开关，单独一行
-    time_limit_enabled = st.checkbox(
-        "启用时间限制",
-        help="启用后只在指定时间段内处理视频",
-        key="time_limit_enabled",
-        on_change=reset_processor
-    )
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # 添加优先本地计算选项
+        prioritize_local = st.checkbox(
+            "优先进行本地计算",
+            help="启用后会先完成所有视频的预处理（文件处理和语音识别），再进行后续处理",
+            key="prioritize_local",
+            on_change=reset_processor
+        )
+    
+    with col2:
+        # 添加时间限制开关，单独一行
+        time_limit_enabled = st.checkbox(
+            "启用时间限制",
+            help="启用后只在指定时间段内处理需要联网的步骤",
+            key="time_limit_enabled",
+            on_change=reset_processor
+        )
     
     # 时间输入框放在一行
     if time_limit_enabled:
@@ -287,9 +299,8 @@ def main():
     # 创建处理器实例
     if st.session_state.processor is None:
         st.session_state.processor = BatchProcessor(folder_path)
-        # 设置子目录处理标志
-        st.session_state.processor.process_subdirs = st.session_state.process_subdirs
-        # 设置时间限制
+        st.session_state.processor.process_subdirs = process_subdirs
+        st.session_state.processor.prioritize_local = prioritize_local
         st.session_state.processor.time_limit_enabled = time_limit_enabled
         st.session_state.processor.start_time = start_time
         st.session_state.processor.end_time = end_time

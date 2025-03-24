@@ -18,22 +18,47 @@ SAVE_DIR = 'batch/output'
 ERROR_OUTPUT_DIR = 'batch/output/ERROR'
 YTB_RESOLUTION_KEY = "ytb_resolution"
 
-def process_video(video_storage_folder, file, dubbing=False, is_retry=False, save_to_video_storage_folder=True):
+def process_video(video_storage_folder, file, dubbing=False, is_retry=False, save_to_video_storage_folder=True, preprocess_only=False, skip_preprocess=False):
     global INPUT_DIR
     INPUT_DIR = video_storage_folder
 
+    # 如果不是重试，总是清理输出目录
     if not is_retry:
         prepare_output_folder(OUTPUT_DIR)
-
-    text_steps = [
+        # 重新创建必要的目录
+        os.makedirs('output/audio', exist_ok=True)
+        os.makedirs('output/log', exist_ok=True)
+    
+    # 如果跳过预处理，先尝试恢复预处理文件
+    if skip_preprocess:
+        try:
+            restore_preprocessed_files(file)
+        except Exception as e:
+            console.print(f"[red]恢复预处理文件失败: {str(e)}[/red]")
+            console.print("[yellow]将重新执行完整处理流程[/yellow]")
+            skip_preprocess = False
+    
+    # 定义预处理步骤
+    preprocess_steps = [
         ("Recording start", record_start),
         ("🎥 Processing input file", partial(process_input_file, file)),
         ("🎙️ Transcribing with Whisper", partial(step2_whisperX.transcribe)),
+    ]
+    
+    # 定义后续处理步骤
+    remaining_steps = [
         ("✂️ Splitting sentences", split_sentences),
         ("📝 Summarizing and translating", summarize_and_translate),
         ("⚡ Processing and aligning subtitles", process_and_align_subtitles),
-        ("🎬 Merging subtitles to video", step7_merge_sub_to_vid.merge_subtitles_to_video),
     ]
+
+    # 如果不是预处理模式，检查是否需要添加字幕烧录步骤
+    if not preprocess_only and not skip_preprocess:
+        try:
+            if load_key("burn_subtitle"):
+                remaining_steps.append(("🎬 Merging subtitles to video", step7_merge_sub_to_vid.merge_subtitles_to_video))
+        except Exception as e:
+            console.print(f"[yellow]Warning: {str(e)}. Skipping subtitle burning.[/yellow]")
     
     if dubbing:
         dubbing_steps = [
@@ -43,10 +68,22 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False, sav
             ("🔄 Merging full audio", step11_merge_full_audio.merge_full_audio),
             ("🎞️ Merging dubbing to video", step12_merge_dub_to_vid.merge_video_audio),
         ]
-        text_steps.extend(dubbing_steps)
-    
+        remaining_steps.extend(dubbing_steps)
+
+    # 选择要执行的步骤
+    if preprocess_only:
+        steps_to_execute = preprocess_steps
+    elif skip_preprocess:
+        # 如果跳过预处理，需要先复制视频文件和恢复预处理结果
+        steps_to_execute = [
+            ("Recording start", record_start),
+            ("🎥 Copying input file", partial(copy_input_file, file))
+        ] + remaining_steps
+    else:
+        steps_to_execute = preprocess_steps + remaining_steps
+
     current_step = ""
-    for step_name, step_func in text_steps:
+    for step_name, step_func in steps_to_execute:
         current_step = step_name
         for attempt in range(4):
             try:
@@ -77,8 +114,11 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False, sav
                 ))
     
     console.print(Panel("[bold green]All steps completed successfully! 🎉[/]", border_style="green"))
-    save_subbtitles(save_to_video_storage_folder)
-    cleanup(SAVE_DIR)
+    
+    if not preprocess_only:
+        save_subbtitles(save_to_video_storage_folder)
+        cleanup(SAVE_DIR)
+    
     return True, "", ""
 
 def prepare_output_folder(output_folder):
@@ -97,6 +137,15 @@ def process_input_file(file):
         shutil.copy(input_file, output_file)
         video_file = output_file
         eu.original_name = eu.record_file_name(video_file)
+    return {'video_file': video_file}
+
+def copy_input_file(file):
+    """仅复制输入文件到输出目录"""
+    input_file = os.path.join(INPUT_DIR, file)
+    output_file = os.path.join(OUTPUT_DIR, file)
+    shutil.copy(input_file, output_file)
+    video_file = output_file
+    eu.original_name = eu.record_file_name(video_file)
     return {'video_file': video_file}
 
 def split_sentences():
@@ -181,3 +230,54 @@ def copy_as_default_subbtitle(folder_path, file_name, file_new_name):
         shutil.copy(file_path, os.path.join(folder_path, file_new_name))
     else:
         print(f"{folder_path} 不存在文件 {file_name}")
+
+def restore_preprocessed_files(file):
+    """从临时目录恢复预处理文件"""
+    # 获取视频名（不含扩展名）
+    video_name = os.path.splitext(os.path.basename(file))[0]
+    temp_dir = os.path.join('batch', 'temp_preprocess', video_name)
+    
+    console.print(f"[cyan]Restoring preprocessed files from {temp_dir}[/cyan]")
+    
+    # 检查临时目录是否存在
+    if not os.path.exists(temp_dir):
+        raise Exception(f"临时目录不存在: {temp_dir}")
+    
+    # 检查所需文件是否都存在
+    required_files = ['raw.mp3', 'for_whisper.mp3', 'cleaned_chunks.xlsx']
+    missing_files = [f for f in required_files if not os.path.exists(os.path.join(temp_dir, f))]
+    if missing_files:
+        raise Exception(f"缺少预处理文件: {', '.join(missing_files)}")
+    
+    # 确保目标目录存在
+    os.makedirs('output/audio', exist_ok=True)
+    os.makedirs('output/log', exist_ok=True)
+    
+    # 恢复文件
+    try:
+        for src_name, dst_path in [
+            ('raw.mp3', 'output/audio/raw.mp3'),
+            ('for_whisper.mp3', 'output/audio/for_whisper.mp3'),
+            ('cleaned_chunks.xlsx', 'output/log/cleaned_chunks.xlsx')
+        ]:
+            src_path = os.path.join(temp_dir, src_name)
+            dst_dir = os.path.dirname(dst_path)
+            os.makedirs(dst_dir, exist_ok=True)
+            shutil.copy2(src_path, dst_path)
+            console.print(f"[green]✓ Restored {src_name} to {dst_path}[/green]")
+    except Exception as e:
+        raise Exception(f"恢复文件失败: {str(e)}")
+    
+    # 验证文件是否已正确恢复
+    for _, dst_path in [
+        ('raw.mp3', 'output/audio/raw.mp3'),
+        ('for_whisper.mp3', 'output/audio/for_whisper.mp3'),
+        ('cleaned_chunks.xlsx', 'output/log/cleaned_chunks.xlsx')
+    ]:
+        if not os.path.exists(dst_path):
+            raise Exception(f"文件恢复失败，目标文件不存在: {dst_path}")
+        if os.path.getsize(dst_path) == 0:
+            raise Exception(f"文件恢复失败，目标文件为空: {dst_path}")
+    
+    console.print("[bold green]✓ All preprocessed files restored successfully[/bold green]")
+    return None
