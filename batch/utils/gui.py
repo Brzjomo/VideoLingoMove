@@ -234,11 +234,65 @@ def main():
         st.session_state.folder_path = folder_path
         reset_processor()
     
+    # 在文件夹选择之后，添加时间限制设置
+    st.write("### ⏰ 工作时间设置")
+    
+    # 添加时间限制开关，单独一行
+    time_limit_enabled = st.checkbox(
+        "启用时间限制",
+        help="启用后只在指定时间段内处理视频",
+        key="time_limit_enabled",
+        on_change=reset_processor
+    )
+    
+    # 时间输入框放在一行
+    if time_limit_enabled:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # 开始时间选择
+            start_time = st.text_input(
+                "开始时间",
+                value="00:30",
+                help="格式: HH:MM (24小时制)",
+                key="start_time",
+                on_change=reset_processor
+            )
+        
+        with col2:
+            # 结束时间选择
+            end_time = st.text_input(
+                "结束时间",
+                value="08:30",
+                help="格式: HH:MM (24小时制)",
+                key="end_time",
+                on_change=reset_processor
+            )
+        
+        # 验证时间格式
+        try:
+            # 验证时间格式
+            for time_str in [start_time, end_time]:
+                hour, minute = map(int, time_str.split(':'))
+                if not (0 <= hour <= 23 and 0 <= minute <= 59):
+                    raise ValueError
+        except ValueError:
+            st.error("❌ 时间格式错误！请使用24小时制格式（HH:MM），例如：08:30")
+            return
+    else:
+        # 当时间限制未启用时，使用默认值
+        start_time = "00:30"
+        end_time = "08:30"
+    
     # 创建处理器实例
     if st.session_state.processor is None:
         st.session_state.processor = BatchProcessor(folder_path)
         # 设置子目录处理标志
         st.session_state.processor.process_subdirs = st.session_state.process_subdirs
+        # 设置时间限制
+        st.session_state.processor.time_limit_enabled = time_limit_enabled
+        st.session_state.processor.start_time = start_time
+        st.session_state.processor.end_time = end_time
     
     # 显示当前选择的路径
     with st.expander("📂 当前文件夹信息", expanded=True):

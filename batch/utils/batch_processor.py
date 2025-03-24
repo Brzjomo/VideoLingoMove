@@ -51,6 +51,11 @@ class BatchProcessor:
         
         # 添加子目录处理标志
         self.process_subdirs = False
+        
+        # 添加时间限制相关设置
+        self.time_limit_enabled = False
+        self.start_time = "00:30"
+        self.end_time = "08:30"
 
     def convert_audio_to_video(self, input_audio: str, output_video: str):
         if not os.path.exists(output_video):
@@ -147,26 +152,37 @@ class BatchProcessor:
             raise
     
     def is_time_in_range(self):
-        """检查当前时间是否在指定时间段内（00:30-08:30）"""
+        """检查当前时间是否在指定时间段内"""
+        if not self.time_limit_enabled:
+            return True
+            
         now = datetime.datetime.now()
-        start_time = now.replace(hour=0, minute=30, second=0, microsecond=0)
-        end_time = now.replace(hour=8, minute=30, second=0, microsecond=0)
-
+        start_hour, start_minute = map(int, self.start_time.split(':'))
+        end_hour, end_minute = map(int, self.end_time.split(':'))
+        
+        start_time = now.replace(hour=start_hour, minute=start_minute, second=0, microsecond=0)
+        end_time = now.replace(hour=end_hour, minute=end_minute, second=0, microsecond=0)
+        
+        # 处理跨天的情况
+        if end_time < start_time:
+            end_time = end_time + datetime.timedelta(days=1)
+            if now < start_time:
+                now = now + datetime.timedelta(days=1)
+        
         return start_time <= now <= end_time
 
     def wait_until_time_in_range(self):
-            """等待直到当前时间进入指定时间段（00:30-08:30）"""
-            while not self.is_time_in_range():
-                print("Waiting... Current time is outside the allowed range (00:30-08:30)")
-                time.sleep(60)  # 每分钟检查一次
-
+        """等待直到当前时间进入指定时间段"""
+        while not self.is_time_in_range():
+            print(f"Waiting... Current time is outside the allowed range ({self.start_time}-{self.end_time})")
+            time.sleep(60)  # 每分钟检查一次
 
     def process_single_video(self, video_file, source_lang, target_lang, dubbing, is_retry=False):
-        if not self.is_time_in_range():
-            print("Paused: Current time is outside the allowed range (00:30-08:30)")
+        """处理单个视频"""
+        if self.time_limit_enabled and not self.is_time_in_range():
+            print(f"Paused: Current time is outside the allowed range ({self.start_time}-{self.end_time})")
             self.wait_until_time_in_range()
         
-        """处理单个视频"""
         # 保存原始语言设置
         original_source_lang = load_key('whisper.language')
         original_target_lang = load_key('target_language')
