@@ -184,3 +184,7 @@ installer_files/
 
 # temp folder
 batch/temp_preprocess/
+
+# ffmpeg
+ffmpeg.zip
+ffmpeg-master-latest-win64-gpl/
