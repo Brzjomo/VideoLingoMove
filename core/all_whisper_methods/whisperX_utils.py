@@ -60,8 +60,8 @@ def get_audio_duration(audio_file: str) -> float:
     stdout, stderr = process.communicate()
     output = stderr.decode('utf-8', errors='ignore')
     
-    print(f"[cyan]FFmpeg output for duration check:[/cyan]")
-    print(output)
+    # print(f"[cyan]FFmpeg output for duration check:[/cyan]")
+    # print(output)
     
     try:
         duration_lines = [line for line in output.split('\n') if 'Duration' in line]

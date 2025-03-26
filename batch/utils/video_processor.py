@@ -55,7 +55,8 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False, sav
     # 如果不是预处理模式，检查是否需要添加字幕烧录步骤
     if not preprocess_only and not skip_preprocess:
         try:
-            if load_key("burn_subtitle"):
+            # 检查分辨率是否为"0x0"来判断是否启用字幕烧录
+            if load_key("resolution") != "0x0":
                 remaining_steps.append(("🎬 Merging subtitles to video", step7_merge_sub_to_vid.merge_subtitles_to_video))
         except Exception as e:
             console.print(f"[yellow]Warning: {str(e)}. Skipping subtitle burning.[/yellow]")
