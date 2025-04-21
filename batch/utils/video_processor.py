@@ -117,6 +117,15 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False, sav
     console.print(Panel("[bold green]All steps completed successfully! 🎉[/]", border_style="green"))
     
     if not preprocess_only:
+        # 更新总token数
+        eu.add_to_total_tokens()
+        # 更新总时间
+        eu.add_to_total_time()
+        
+        # 记录当前视频的消耗
+        eu.record_messages()
+        
+        # 保存字幕和清理
         save_subbtitles(save_to_video_storage_folder)
         cleanup(SAVE_DIR)
     
@@ -282,3 +291,27 @@ def restore_preprocessed_files(file):
     
     console.print("[bold green]✓ All preprocessed files restored successfully[/bold green]")
     return None
+
+# 添加新的函数用于生成总结报告
+def generate_batch_summary():
+    """生成批处理总结报告"""
+    tokens = eu.get_total_tokens_summary()
+    
+    summary = (
+        "📊 批量处理总结\n"
+        f"总耗时: {eu.convert_seconds(eu.total_time_duration)}\n"
+        "\n"
+        "Token 消耗统计:\n"
+        f"├─ Prompt Tokens: {tokens['prompt']:,}\n"
+        f"├─ Completion Tokens: {tokens['completion']:,}\n"
+        f"└─ Total Tokens: {tokens['total']:,}\n"
+        "\n"
+        f"总花费: {eu.get_formatted_total_cost()}"
+    )
+    
+    # 保存总结到文件
+    os.makedirs("batch/output", exist_ok=True)
+    with open("batch/output/batch_summary.txt", "w", encoding="utf-8") as f:
+        f.write(summary)
+    
+    return summary

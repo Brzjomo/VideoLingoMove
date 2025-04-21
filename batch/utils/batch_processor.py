@@ -20,7 +20,7 @@ sys.path.append(root_dir)
 
 from core.config_utils import load_key, update_key
 from st_components.imports_and_utils import ask_gpt
-from video_processor import process_video
+from video_processor import process_video, generate_batch_summary
 import easy_util as eu
 
 console = Console()
@@ -330,6 +330,9 @@ class BatchProcessor:
     def process_batch(self):
         """批量处理视频"""
         try:
+            # 重置总计数据
+            eu.reset_total_statistics()
+            
             # 设置处理状态
             eu.set_processing(True)
             
@@ -450,6 +453,11 @@ class BatchProcessor:
                 'total_time': eu.convert_seconds(eu.total_time_duration),
                 'total_cost': eu.get_formated_total_estimated_cost()
             }
+            
+            # 在处理完成后生成总结报告
+            if self.completed_tasks > 0:
+                summary = generate_batch_summary()
+                console.print(Panel(summary, title="批处理总结", border_style="green"))
             
             return True
         except Exception as e:

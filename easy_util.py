@@ -33,6 +33,10 @@ original_name = ""
 current_progress = 0
 processing = False
 
+# 在文件开头添加新的变量
+total_prompt_tokens = 0
+total_completion_tokens = 0
+
 # 方法
 def convert_seconds(seconds):
     minutes = int(seconds // 60)
@@ -92,3 +96,50 @@ def set_processing(status: bool):
 
 def is_processing():
     return processing
+
+# 添加新的方法
+def add_to_total_tokens():
+    """将当前视频的token添加到总计中"""
+    global total_prompt_tokens, total_completion_tokens
+    total_prompt_tokens += prompt_tokens
+    total_completion_tokens += completion_tokens
+
+def add_to_total_time():
+    """将当前视频的处理时间添加到总计中"""
+    global total_time_duration
+    total_time_duration += time_duration
+
+def get_total_tokens_summary():
+    """获取总token消耗统计"""
+    total = total_prompt_tokens + total_completion_tokens
+    return {
+        'prompt': total_prompt_tokens,
+        'completion': total_completion_tokens,
+        'total': total
+    }
+
+def get_total_cost():
+    """计算所有视频的总花费"""
+    cost_input_uncached = total_prompt_tokens / 1000000 * (1 - cached_token_rate) * price_input_uncached
+    cost_input_cached = total_prompt_tokens / 1000000 * cached_token_rate * price_input_cached
+    cost_output = total_completion_tokens / 1000000 * price_output
+    return cost_input_uncached + cost_input_cached + cost_output
+
+def get_formatted_total_cost():
+    """获取格式化的总花费字符串"""
+    return "{:.5f}元".format(get_total_cost())
+
+def get_formatted_total_tokens():
+    """获取格式化的总token消耗字符串"""
+    return (
+        f"总 Prompt Tokens: {total_prompt_tokens:,}\n"
+        f"总 Completion Tokens: {total_completion_tokens:,}\n"
+        f"总 Tokens: {total_prompt_tokens + total_completion_tokens:,}"
+    )
+
+def reset_total_statistics():
+    """重置所有总计统计"""
+    global total_prompt_tokens, total_completion_tokens, total_time_duration
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+    total_time_duration = 0
