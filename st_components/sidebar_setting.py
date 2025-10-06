@@ -78,15 +78,16 @@ def page_setting():
         c1, c2 = st.columns(2)
         with c1:
             langs = {
-                "🇺🇸 English": "en",
+                "🇺🇸 英语": "en",
                 "🇨🇳 简体中文": "zh",
-                "🇪🇸 Español": "es",
-                "🇷🇺 Русский": "ru",
-                "🇫🇷 Français": "fr",
-                "🇩🇪 Deutsch": "de",
-                "🇮🇹 Italiano": "it",
-                "🇯🇵 日本語": "ja",
-                "🇰🇷 한국어": "ko"
+                "🇪🇸 西班牙语": "es",
+                "🇷🇺 俄语": "ru",
+                "🇫🇷 法语": "fr",
+                "🇩🇪 德语": "de",
+                "🇮🇹 意大利语": "it",
+                "🇯🇵 日语": "ja",
+                "🇰🇷 韩语": "ko",
+                "🇵🇹 葡萄牙语": "pt"
             }
             lang = st.selectbox(
                 "Recog Lang",
