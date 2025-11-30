@@ -15,7 +15,7 @@ deepseek_api:
 qwen_api:
   key: '密钥'
   base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-  model: 'qwen-vl-max'
+  model: 'qwen-flash'
 
 siliconflow_api:
   key: '密钥'
@@ -155,13 +155,13 @@ llm_support_json:
 - 'deepseek-reasoner'
 - 'gpt-4o'
 - 'gpt-4o-mini'
-- 'gemini-2.0-flash-exp'
-- 'qwen-vl-max'
+- 'qwen3-vl-flash' #0.15+1.5
+- 'qwen-flash' #0.15+1.5
+- 'qwen-plus' #0.8+2
+- 'qwen3-max' #3.2+12.8
 
 # have problems
-# - 'Qwen/Qwen2.5-72B-Instruct'
-# - 'Qwen/Qwen2.5-Coder-32B-Instruct'
-# - 'Qwen/Qwen2.5-Chat-72B-Instruct-128K'
+
 
 # Spacy models
 spacy_model_map:
