@@ -4,8 +4,8 @@ version: "2.1.2"
 # API settings
 api:
   key: '密钥'
-  base_url: 'https://api.siliconflow.cn'
-  model: 'Qwen/Qwen2.5-72B-Instruct'
+  base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+  model: 'qwen-plus'
 
 deepseek_api:
   key: '密钥'
@@ -15,7 +15,7 @@ deepseek_api:
 qwen_api:
   key: '密钥'
   base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-  model: 'qwen-flash'
+  model: 'qwen-plus'
 
 siliconflow_api:
   key: '密钥'
