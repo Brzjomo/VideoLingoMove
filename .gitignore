@@ -188,3 +188,7 @@ batch/temp_preprocess/
 # ffmpeg
 ffmpeg.zip
 ffmpeg-master-latest-win64-gpl/
+
+.claude/
+
+*.md

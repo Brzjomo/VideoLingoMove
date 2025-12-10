@@ -75,6 +75,19 @@ def page_setting():
                         icon="✅" if check_api() else "❌")
     
     with st.expander("Subtitles Settings", expanded=False):
+        # ASR Engine Selection
+        asr_engines = {
+            "Whisper": "whisper",
+            "火山引擎ASR": "volcano"
+        }
+        selected_asr_engine = st.selectbox(
+            "ASR Engine",
+            options=list(asr_engines.keys()),
+            index=list(asr_engines.values()).index(load_key("asr_engine")) if load_key("asr_engine") in asr_engines.values() else 0
+        )
+        if asr_engines[selected_asr_engine] != load_key("asr_engine"):
+            update_key("asr_engine", asr_engines[selected_asr_engine])
+
         c1, c2 = st.columns(2)
         with c1:
             langs = {
@@ -89,13 +102,46 @@ def page_setting():
                 "🇰🇷 韩语": "ko",
                 "🇵🇹 葡萄牙语": "pt"
             }
-            lang = st.selectbox(
+            # Language selection for both ASR engines
+            selected_recog_lang = st.selectbox(
                 "Recog Lang",
                 options=list(langs.keys()),
                 index=list(langs.values()).index(load_key("whisper.language"))
             )
-            if langs[lang] != load_key("whisper.language"):
-                update_key("whisper.language", langs[lang])
+
+            # Map between language codes for different ASR engines
+            lang_map = {
+                "en": {"whisper": "en", "volcano": "en-US"},
+                "zh": {"whisper": "zh", "volcano": "zh-CN"},
+                "ja": {"whisper": "ja", "volcano": "ja-JP"},
+                "ko": {"whisper": "ko", "volcano": "ko-KR"},
+                "fr": {"whisper": "fr", "volcano": "fr-FR"},
+                "de": {"whisper": "de", "volcano": "de-DE"},
+                "es": {"whisper": "es", "volcano": "es-MX"},
+                "pt": {"whisper": "pt", "volcano": "pt-BR"}
+            }
+
+            # Get current values
+            current_whisper_lang = load_key("whisper.language")
+            current_volcano_lang = load_key("volcano_asr.language")
+
+            # Update languages if selection changed
+            if langs[selected_recog_lang] != current_whisper_lang:
+                # Always update whisper.language first
+                update_key("whisper.language", langs[selected_recog_lang])
+
+                # Force refresh of current values by re-reading from config
+                current_asr_engine = load_key("asr_engine")
+                current_volcano_lang = load_key("volcano_asr.language")
+
+                # Now check if we need to update volcano_asr.language
+                if current_asr_engine == "volcano":
+                    # Get the new volcano language code from our mapping
+                    new_volcano_lang = lang_map.get(langs[selected_recog_lang], {}).get('volcano', '')
+
+                    # Only update if it's actually different
+                    if new_volcano_lang != current_volcano_lang:
+                        update_key("volcano_asr.language", new_volcano_lang)
 
         with c2:
             target_language = st.text_input("Target Lang", value=load_key("target_language"))
@@ -125,7 +171,139 @@ def page_setting():
 
         if resolution != load_key("resolution"):
             update_key("resolution", resolution)
-        
+
+    # Volcano Engine ASR Settings (only show when selected)
+    if load_key("asr_engine") == "volcano":
+        with st.expander("火山引擎ASR配置", expanded=False):
+
+            # Required configuration
+            config_input("App ID", "volcano_asr.app_id", help="火山引擎控制台获取的APP ID")
+            config_input("Access Token", "volcano_asr.access_token", help="火山引擎控制台获取的Access Token")
+
+            # Optional configuration
+            config_input("Resource ID", "volcano_asr.resource_id", help="资源ID，默认: volc.bigasr.auc")
+
+            # Language selection for volcano
+            volcano_langs = {
+                "自动检测": "",
+                "🇺🇸 英语": "en-US",
+                "🇨🇳 中文": "zh-CN",
+                "🇯🇵 日语": "ja-JP",
+                "🇰🇷 韩语": "ko-KR",
+                "🇫🇷 法语": "fr-FR",
+                "🇩🇪 德语": "de-DE",
+                "🇪🇸 西班牙语": "es-MX",
+                "🇵🇹 葡萄牙语": "pt-BR",
+                "🇮🇩 印尼语": "id-ID",
+                "🇹🇭 泰语": "th-TH",
+                "🇸🇦 阿拉伯语": "ar-SA"
+            }
+            selected_volcano_lang = st.selectbox(
+                "识别语言",
+                options=list(volcano_langs.keys()),
+                index=list(volcano_langs.values()).index(load_key("volcano_asr.language")) if load_key("volcano_asr.language") in volcano_langs.values() else 0
+            )
+            if volcano_langs[selected_volcano_lang] != load_key("volcano_asr.language"):
+                update_key("volcano_asr.language", volcano_langs[selected_volcano_lang])
+
+            # Model version
+            model_version = st.selectbox(
+                "模型版本",
+                options=["310", "400"],
+                index=0 if load_key("volcano_asr.model_version") == "310" else 1
+            )
+            if model_version != load_key("volcano_asr.model_version"):
+                update_key("volcano_asr.model_version", model_version)
+
+            # Feature toggles
+            col1, col2 = st.columns(2)
+            with col1:
+                enable_punc = st.toggle("自动标点", value=load_key("volcano_asr.enable_punc"))
+                if enable_punc != load_key("volcano_asr.enable_punc"):
+                    update_key("volcano_asr.enable_punc", enable_punc)
+
+                enable_itn = st.toggle("数字规整", value=load_key("volcano_asr.enable_itn"))
+                if enable_itn != load_key("volcano_asr.enable_itn"):
+                    update_key("volcano_asr.enable_itn", enable_itn)
+
+                enable_ddc = st.toggle("语义顺滑", value=load_key("volcano_asr.enable_ddc"))
+                if enable_ddc != load_key("volcano_asr.enable_ddc"):
+                    update_key("volcano_asr.enable_ddc", enable_ddc)
+
+            with col2:
+                show_utterances = st.toggle("显示分句", value=load_key("volcano_asr.show_utterances"))
+                if show_utterances != load_key("volcano_asr.show_utterances"):
+                    update_key("volcano_asr.show_utterances", show_utterances)
+
+                enable_speaker_info = st.toggle("说话人分离", value=load_key("volcano_asr.enable_speaker_info"))
+                if enable_speaker_info != load_key("volcano_asr.enable_speaker_info"):
+                    update_key("volcano_asr.enable_speaker_info", enable_speaker_info)
+
+                enable_channel_split = st.toggle("双声道识别", value=load_key("volcano_asr.enable_channel_split"))
+                if enable_channel_split != load_key("volcano_asr.enable_channel_split"):
+                    update_key("volcano_asr.enable_channel_split", enable_channel_split)
+
+            # Advanced settings - using columns instead of nested expander
+            st.markdown("---")
+            st.markdown("**高级设置**")
+            vad_segment = st.toggle("VAD分句", value=load_key("volcano_asr.vad_segment"),
+                                   help="使用VAD分句代替语义分句，双声道识别时建议开启")
+            if vad_segment != load_key("volcano_asr.vad_segment"):
+                update_key("volcano_asr.vad_segment", vad_segment)
+
+            # Test connection button
+            if st.button("测试火山引擎连接", type="secondary"):
+                try:
+                    from core.all_whisper_methods.volcano_asr import VolcanoASR
+                    asr = VolcanoASR()
+                    st.success("✅ 火山引擎ASR配置有效")
+                except Exception as e:
+                    st.error(f"❌ 配置错误: {str(e)}")
+
+            # TOS Configuration (for file upload)
+            st.markdown("---")
+            st.markdown("**TOS对象存储配置**")
+
+            tos_enabled = st.toggle("启用TOS上传", value=load_key("tos.enabled"),
+                                   help="启用后，音频文件将上传到火山引擎TOS")
+            if tos_enabled != load_key("tos.enabled"):
+                update_key("tos.enabled", tos_enabled)
+
+            if tos_enabled:
+                config_input("Access Key", "tos.access_key", help="火山引擎控制台获取的Access Key，或设置环境变量TOS_ACCESS_KEY")
+                config_input("Secret Key", "tos.secret_key", help="火山引擎控制台获取的Secret Key，或设置环境变量TOS_SECRET_KEY")
+
+                # Bucket info (read-only display)
+                st.text_input("Bucket名称", value=load_key("tos.bucket_name"), disabled=True)
+                st.text_input("Endpoint", value=load_key("tos.endpoint"), disabled=True)
+                st.text_input("Region", value=load_key("tos.region"), disabled=True)
+
+                # Advanced TOS settings - using columns instead of nested expander
+                st.markdown("---")
+                st.markdown("**TOS高级设置**")
+                auto_cleanup = st.toggle("自动清理", value=load_key("tos.auto_cleanup"),
+                                       help="ASR完成后自动删除TOS上的文件")
+                if auto_cleanup != load_key("tos.auto_cleanup"):
+                    update_key("tos.auto_cleanup", auto_cleanup)
+
+                if auto_cleanup:
+                    retention_hours = st.number_input("文件保留时间(小时)", min_value=0, max_value=24,
+                                                     value=load_key("tos.retention_time") // 3600)
+                    if retention_hours * 3600 != load_key("tos.retention_time"):
+                        update_key("tos.retention_time", retention_hours * 3600)
+
+                # Test TOS connection
+                if st.button("测试TOS连接", type="secondary"):
+                    try:
+                        from core.all_whisper_methods.tos_service import TOSService
+                        tos_service = TOSService()
+                        if tos_service.is_enabled():
+                            st.success("✅ TOS连接成功")
+                        else:
+                            st.error("❌ TOS连接失败，请检查配置")
+                    except Exception as e:
+                        st.error(f"❌ TOS连接错误: {str(e)}")
+
     with st.expander("Dubbing Settings", expanded=False):
         tts_methods = ["azure_tts", "openai_tts", "fish_tts", "sf_fish_tts", "edge_tts", "gpt_sovits", "custom_tts"]
         select_tts = st.selectbox("TTS Method", options=tts_methods, index=tts_methods.index(load_key("tts_method")))

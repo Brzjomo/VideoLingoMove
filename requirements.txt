@@ -30,4 +30,4 @@ syllables
 pypinyin
 g2p-en
 
-
+tos>=2.8.7

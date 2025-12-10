@@ -15,7 +15,10 @@ def get_spacy_model(language: str):
 
 def init_nlp():
     try:
-        language = "en" if load_key("whisper.language") == "en" else load_key("whisper.detected_language")
+        # Use detected language if available, otherwise fall back to configured language
+        detected_language = load_key("whisper.detected_language")
+        config_language = load_key("whisper.language")
+        language = detected_language if detected_language else config_language
         model = get_spacy_model(language)
         print(f"[blue]⏳ Loading NLP Spacy model: <{model}> ...[/blue]")
         try:

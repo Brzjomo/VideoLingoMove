@@ -17,11 +17,20 @@ import numpy as np
 
 from core.config_utils import load_key
 from core.all_whisper_methods.demucs_vl import demucs_main, RAW_AUDIO_FILE, VOCAL_AUDIO_FILE
-from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, CLEANED_CHUNKS_EXCEL_PATH
+from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, convert_to_volcano_wav, CLEANED_CHUNKS_EXCEL_PATH, RAW_AUDIO_WAV_FILE
 from core.step1_ytdlp import find_video_files
+
+# 尝试导入火山引擎ASR
+try:
+    from core.all_whisper_methods.volcano_asr import VolcanoASR
+    VOLCANO_ASR_AVAILABLE = True
+except ImportError:
+    VOLCANO_ASR_AVAILABLE = False
+    rprint("[yellow]⚠️ 火山引擎ASR模块导入失败，确保volcano_asr.py文件存在[/yellow]")
 
 MODEL_DIR = load_key("model_dir")
 WHISPER_FILE = "output/audio/for_whisper.mp3"
+VOLCANO_FILE = "output/audio/for_volcano.wav"
 ENHANCED_VOCAL_PATH = "output/audio/enhanced_vocals.mp3"
 
 def check_hf_mirror() -> str:
@@ -54,12 +63,23 @@ def check_hf_mirror() -> str:
     rprint(f"[cyan]🚀 Selected mirror:[/cyan] {fastest_url} ({best_time:.2f}s)")
     return fastest_url
 
-def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
+def transcribe_audio_with_whisper(audio_file: str, start: float, end: float) -> Dict:
+    """
+    使用WhisperX转录音频
+
+    Args:
+        audio_file: 音频文件路径
+        start: 开始时间（秒）
+        end: 结束时间（秒）
+
+    Returns:
+        dict: 转录结果
+    """
     os.environ['HF_ENDPOINT'] = check_hf_mirror()
     WHISPER_LANGUAGE = load_key("whisper.language")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     rprint(f"🚀 Starting WhisperX using device: {device} ...")
-    
+
     if device == "cuda":
         gpu_mem = torch.cuda.get_device_properties(0).total_memory / (1024**3)
         batch_size = 16 if gpu_mem > 8 else 2
@@ -185,24 +205,129 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
         rprint(f"[red]WhisperX processing error:[/red] {e}")
         raise
 
-def enhance_vocals(vocals_ratio=2.50):
-    """Enhance vocals audio volume"""
+
+def transcribe_audio_with_volcano(audio_file: str, start: float, end: float) -> Dict:
+    """
+    使用火山引擎ASR转录音频
+
+    Args:
+        audio_file: 音频文件路径
+        start: 开始时间（秒）
+        end: 结束时间（秒）
+
+    Returns:
+        dict: 转录结果
+    """
+    if not VOLCANO_ASR_AVAILABLE:
+        raise ImportError("火山引擎ASR模块不可用，请确保volcano_asr.py文件存在")
+
+    rprint(f"[cyan]🌋 Starting Volcano Engine ASR for segment {start:.2f}s to {end:.2f}s...[/cyan]")
+
+    try:
+        # 创建火山引擎ASR实例
+        asr = VolcanoASR()
+
+        # 转录音频
+        result = asr.transcribe_audio(audio_file, start, end)
+
+        rprint(f"[green]✅ Volcano Engine ASR transcription completed[/green]")
+        return result
+
+    except Exception as e:
+        rprint(f"[red]火山引擎ASR处理错误:[/red] {e}")
+        raise
+
+
+def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
+    """
+    转录音频文件，根据配置选择ASR引擎
+
+    Args:
+        audio_file: 音频文件路径
+        start: 开始时间（秒）
+        end: 结束时间（秒）
+
+    Returns:
+        dict: 转录结果
+    """
+    # 获取ASR引擎配置
+    asr_engine = load_key("asr_engine")
+
+    rprint(f"[cyan]🔧 Selected ASR engine: {asr_engine}[/cyan]")
+
+    if asr_engine == "volcano":
+        # 检查火山引擎配置
+        app_id = load_key("volcano_asr.app_id")
+        access_token = load_key("volcano_asr.access_token")
+
+        if not app_id or not access_token:
+            rprint("[yellow]⚠️ 火山引擎ASR配置不完整，回退到Whisper引擎[/yellow]")
+            rprint("[yellow]请在config.yaml中配置volcano_asr.app_id和volcano_asr.access_token[/yellow]")
+            asr_engine = "whisper"
+
+    if asr_engine == "volcano":
+        return transcribe_audio_with_volcano(audio_file, start, end)
+    else:
+        return transcribe_audio_with_whisper(audio_file, start, end)
+
+
+def enhance_vocals(vocals_ratio=2.50, asr_engine="whisper"):
+    """Enhance vocals audio volume
+
+    Args:
+        vocals_ratio: 音量增强比例
+        asr_engine: ASR引擎类型，决定输出格式
+    """
     if not load_key("demucs"):
-        return RAW_AUDIO_FILE
-        
+        # 不使用Demucs时，根据ASR引擎返回相应的原始音频文件
+        if asr_engine == "volcano":
+            return RAW_AUDIO_WAV_FILE
+        else:
+            return RAW_AUDIO_FILE
+
     try:
         print(f"[cyan]🎙️ Enhancing vocals with volume ratio: {vocals_ratio}[/cyan]")
-        ffmpeg_cmd = (
-            f'ffmpeg -y -i "{VOCAL_AUDIO_FILE}" '
-            f'-filter:a "volume={vocals_ratio}" '
-            f'"{ENHANCED_VOCAL_PATH}"'
-        )
+
+        if asr_engine == "volcano":
+            # 火山引擎需要WAV格式
+            enhanced_vocal_wav = "output/audio/enhanced_vocals.wav"
+            ffmpeg_cmd = (
+                f'ffmpeg -y -i "{VOCAL_AUDIO_FILE}" '
+                f'-filter:a "volume={vocals_ratio}" '
+                f'-ar 16000 -ac 1 -acodec pcm_s16le -f wav '
+                f'"{enhanced_vocal_wav}"'
+            )
+            output_file = enhanced_vocal_wav
+        else:
+            # Whisper使用MP3格式
+            ffmpeg_cmd = (
+                f'ffmpeg -y -i "{VOCAL_AUDIO_FILE}" '
+                f'-filter:a "volume={vocals_ratio}" '
+                f'"{ENHANCED_VOCAL_PATH}"'
+            )
+            output_file = ENHANCED_VOCAL_PATH
+
         subprocess.run(ffmpeg_cmd, shell=True, check=True, capture_output=True)
-        
-        return ENHANCED_VOCAL_PATH
+
+        return output_file
     except subprocess.CalledProcessError as e:
         print(f"[red]Error enhancing vocals: {str(e)}[/red]")
-        return VOCAL_AUDIO_FILE  # Fallback to original vocals if enhancement fails
+        # Fallback to original vocals if enhancement fails
+        if asr_engine == "volcano":
+            # 需要将VOCAL_AUDIO_FILE (MP3) 转换为WAV格式
+            try:
+                vocal_wav = "output/audio/vocal.wav"
+                ffmpeg_cmd = (
+                    f'ffmpeg -y -i "{VOCAL_AUDIO_FILE}" '
+                    f'-ar 16000 -ac 1 -acodec pcm_s16le -f wav '
+                    f'"{vocal_wav}"'
+                )
+                subprocess.run(ffmpeg_cmd, shell=True, check=True, capture_output=True)
+                return vocal_wav
+            except:
+                return RAW_AUDIO_WAV_FILE  # 最终回退到原始WAV文件
+        else:
+            return VOCAL_AUDIO_FILE  # Fallback to original vocals if enhancement fails
     
 def transcribe():
     if os.path.exists(CLEANED_CHUNKS_EXCEL_PATH):
@@ -217,17 +342,40 @@ def transcribe():
     if load_key("demucs"):
         demucs_main()
     
-    # step2 Compress audio
-    choose_audio = enhance_vocals() if load_key("demucs") else RAW_AUDIO_FILE
-    whisper_audio = compress_audio(choose_audio, WHISPER_FILE)
+    # step2 根据ASR引擎选择音频处理流程
+    asr_engine = load_key("asr_engine")
+
+    if asr_engine == "volcano":
+        # 使用火山引擎：直接使用WAV格式的原始音频
+        choose_audio = enhance_vocals(asr_engine=asr_engine) if load_key("demucs") else RAW_AUDIO_WAV_FILE
+        # 火山引擎使用原始WAV文件，不需要额外转换
+        volcano_audio = choose_audio
+        # 为split_audio函数准备一个MP3版本（split_audio可能期望MP3）
+        # 但split_audio应该能处理WAV文件，所以我们可以直接使用WAV
+        audio_for_split = choose_audio
+        # 为Whisper分支定义whisper_audio变量（虽然不会使用）
+        whisper_audio = None
+    else:
+        # 使用Whisper：使用MP3格式的原始音频
+        choose_audio = enhance_vocals(asr_engine=asr_engine) if load_key("demucs") else RAW_AUDIO_FILE
+        # 压缩音频用于Whisper转录
+        whisper_audio = compress_audio(choose_audio, WHISPER_FILE)
+        audio_for_split = whisper_audio
+        volcano_audio = None
 
     # step3 Extract audio
-    segments = split_audio(whisper_audio)
-    
+    segments = split_audio(audio_for_split)
+
     # step4 Transcribe audio
     all_results = []
     for start, end in segments:
-        result = transcribe_audio(whisper_audio, start, end)
+        # 根据ASR引擎选择正确的音频文件
+        if asr_engine == "volcano" and volcano_audio:
+            audio_file_for_transcription = volcano_audio
+        else:
+            audio_file_for_transcription = whisper_audio
+
+        result = transcribe_audio(audio_file_for_transcription, start, end)
         all_results.append(result)
     
     # step5 Combine results

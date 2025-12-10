@@ -30,15 +30,67 @@ ollama_api:
 # Language settings, written into the prompt, can be described in natural language
 target_language: '简体中文'
 
+# ASR engine selection ["whisper", "volcano"]
+asr_engine: 'volcano'
+
 # Whether to use Demucs for vocal separation before transcription
 demucs: false
 
 whisper:
   # ["medium", "large-v3", "large-v3-turbo"]. Note: for zh model will force to use Belle/large-v3
   model: 'large-v3'
-  # Whisper specified recognition language [en, zh, ...]
-  language: 'en'
-  detected_language: 'en'
+  # Whisper specified recognition language [en, zh, ...] (empty or 'auto' for automatic detection)
+  language: 'de'
+  detected_language: ''
+
+# Volcano Engine ASR configuration
+volcano_asr:
+  # App ID from Volcano Engine console
+  app_id: ''
+  # Access token from Volcano Engine console
+  access_token: ''
+  # Resource ID, default: "volc.bigasr.auc"
+  resource_id: 'volc.bigasr.auc'
+  # Language code (optional, auto-detect if empty)
+  # en-US, ja-JP, id-ID, es-MX, pt-BR, de-DE, fr-FR, ko-KR, fil-PH, ms-MY, th-TH, ar-SA
+  language: 'de-DE'
+  # Enable punctuation
+  enable_punc: false
+  # Enable ITN (text normalization)
+  enable_itn: true
+  # Enable DDC (semantic smoothing)
+  enable_ddc: true
+  # Enable speaker info (speaker diarization)
+  enable_speaker_info: false
+  # Show utterances with timestamps
+  show_utterances: true
+  # Enable channel split for stereo audio
+  enable_channel_split: false
+  # Use VAD segmentation
+  vad_segment: false
+  # Model version: "310" (default) or "400" (improved performance)
+  model_version: '400'
+
+# TOS (Volcano Engine Object Storage) configuration
+tos:
+  # Access Key from Volcano Engine console
+  access_key: ''
+  # Secret Key from Volcano Engine console
+  secret_key: ''
+  # Endpoint for TOS service
+  endpoint: ''
+  # Region for TOS service
+  region: ''
+  # Bucket name
+  bucket_name: ''
+  # Whether to enable TOS upload
+  enabled: true
+  # Public URL prefix (auto-generated if empty)
+  public_url_prefix: ''
+  # Auto cleanup uploaded files after ASR completion
+  auto_cleanup: true
+  # File retention time in seconds (0 = no retention)
+  retention_time: 43200
 
 # Video resolution [0x0, 640x360, 1920x1080]  0x0 will generate a 0-second black video placeholder
 resolution: '0x0'
@@ -123,11 +175,6 @@ tolerance: 1.5 # Allowed extension time to the next subtitle
 
 # Volume settings
 dub_volume: 1.5  # *Dubbed audio volume (1.5 = 150%, most original dubbing audio is relatively quiet)
-
-
-
-
-
 
 ## ======================== Additional settings 请勿修改======================== ##
 # Whisper model directory

@@ -6,7 +6,8 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from core.config_utils import update_key
 
 AUDIO_DIR = "output/audio"
-RAW_AUDIO_FILE = "output/audio/raw.mp3"
+RAW_AUDIO_FILE = "output/audio/raw.mp3"  # 向后兼容
+RAW_AUDIO_WAV_FILE = "output/audio/raw.wav"  # 新的原始WAV文件
 CLEANED_CHUNKS_EXCEL_PATH = "output/log/cleaned_chunks.xlsx"
 
 def compress_audio(input_file: str, output_file: str):
@@ -22,18 +23,61 @@ def compress_audio(input_file: str, output_file: str):
         print(f"🗜️ Converted <{input_file}> to <{output_file}> with FFmpeg")
     return output_file
 
+
+def convert_to_volcano_wav(input_file: str, output_file: str):
+    """
+    将音频文件转换为火山引擎ASR要求的格式：
+    16kHz, 单声道, 16-bit PCM WAV格式
+
+    Args:
+        input_file: 输入音频文件路径
+        output_file: 输出WAV文件路径
+    """
+    if not os.path.exists(output_file):
+        print(f"🌋 Converting to Volcano ASR format: 16kHz mono 16-bit PCM WAV ......")
+        # 火山引擎ASR要求: 16kHz, 单声道, 16-bit PCM WAV
+        subprocess.run([
+            'ffmpeg', '-y', '-i', input_file, '-vn',
+            '-ar', '16000',          # 采样率 16kHz
+            '-ac', '1',              # 单声道
+            '-acodec', 'pcm_s16le',  # 16-bit PCM
+            '-metadata', 'encoding=UTF-8',
+            '-f', 'wav',             # WAV格式
+            output_file
+        ], check=True, stderr=subprocess.PIPE)
+        print(f"🌋 Converted <{input_file}> to Volcano ASR format: <{output_file}>")
+    return output_file
+
 def convert_video_to_audio(video_file: str):
     os.makedirs(AUDIO_DIR, exist_ok=True)
-    if not os.path.exists(RAW_AUDIO_FILE):
-        print(f"🎬➡️🎵 Converting to high quality audio with FFmpeg ......")
+
+    # 首先检查是否需要生成原始WAV文件（火山引擎格式）
+    if not os.path.exists(RAW_AUDIO_WAV_FILE):
+        print(f"🎬➡️🎵 Converting video to high quality WAV audio (Volcano ASR format) ......")
+        # 火山引擎ASR要求: 16kHz, 单声道, 16-bit PCM WAV
         subprocess.run([
             'ffmpeg', '-y', '-i', video_file, '-vn',
+            '-ar', '16000',          # 采样率 16kHz
+            '-ac', '1',              # 单声道
+            '-acodec', 'pcm_s16le',  # 16-bit PCM
+            '-metadata', 'encoding=UTF-8',
+            '-f', 'wav',             # WAV格式
+            RAW_AUDIO_WAV_FILE
+        ], check=True, stderr=subprocess.PIPE)
+        print(f"🎬➡️🎵 Converted <{video_file}> to Volcano ASR format: <{RAW_AUDIO_WAV_FILE}>\n")
+
+    # 向后兼容：如果RAW_AUDIO_FILE不存在，从WAV转换生成MP3
+    # 这个MP3文件只在Whisper引擎需要时使用
+    if not os.path.exists(RAW_AUDIO_FILE):
+        print(f"🎬➡️🎵 Generating MP3 for Whisper compatibility ......")
+        subprocess.run([
+            'ffmpeg', '-y', '-i', RAW_AUDIO_WAV_FILE,
             '-c:a', 'libmp3lame', '-b:a', '128k',
             '-ar', '32000',
-            '-ac', '1', 
+            '-ac', '1',
             '-metadata', 'encoding=UTF-8', RAW_AUDIO_FILE
         ], check=True, stderr=subprocess.PIPE)
-        print(f"🎬➡️🎵 Converted <{video_file}> to <{RAW_AUDIO_FILE}> with FFmpeg\n")
+        print(f"🎬➡️🎵 Generated MP3 for Whisper: <{RAW_AUDIO_FILE}>\n")
 
 def _detect_silence(audio_file: str, start: float, end: float) -> List[float]:
     """Detect silence points in the given audio segment"""
