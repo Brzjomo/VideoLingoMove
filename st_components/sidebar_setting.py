@@ -25,7 +25,7 @@ def apply_config(config_name):
         assign_key("api.key", "deepseek_api.key")
         assign_key("api.base_url", "deepseek_api.base_url")
         assign_key("api.model", "deepseek_api.model")
-    elif config_name == "千问-vl-max":
+    elif config_name == "千问":
         assign_key("api.key", "qwen_api.key")
         assign_key("api.base_url", "qwen_api.base_url")
         assign_key("api.model", "qwen_api.model")
@@ -44,7 +44,7 @@ def apply_config(config_name):
 
 def page_setting():
     with st.expander("一键切换配置", expanded=False):
-        config_options = ["Deepseek", "千问-vl-max", "硅基流动", "Ollama"]
+        config_options = ["Deepseek", "千问", "硅基流动", "Ollama"]
         selected_config = st.selectbox("选择配置", options=config_options)
         
         # 添加自定义样式的按钮
@@ -87,6 +87,7 @@ def page_setting():
         )
         if asr_engines[selected_asr_engine] != load_key("asr_engine"):
             update_key("asr_engine", asr_engines[selected_asr_engine])
+            st.rerun() # 建议在这里也加上 rerun，防止引擎切换时的状态不同步
 
         c1, c2 = st.columns(2)
         with c1:
@@ -123,8 +124,7 @@ def page_setting():
 
             # Get current values
             current_whisper_lang = load_key("whisper.language")
-            current_volcano_lang = load_key("volcano_asr.language")
-
+            
             # Update languages if selection changed
             if langs[selected_recog_lang] != current_whisper_lang:
                 # Always update whisper.language first
@@ -140,8 +140,11 @@ def page_setting():
                     new_volcano_lang = lang_map.get(langs[selected_recog_lang], {}).get('volcano', '')
 
                     # Only update if it's actually different
-                    if new_volcano_lang != current_volcano_lang:
+                    if new_volcano_lang and new_volcano_lang != current_volcano_lang:
                         update_key("volcano_asr.language", new_volcano_lang)
+                
+                # [关键修改] 强制重新运行以更新 selectbox 的 index
+                st.rerun()
 
         with c2:
             target_language = st.text_input("Target Lang", value=load_key("target_language"))
