@@ -35,7 +35,6 @@ class TOSService:
         self.enabled = load_key("tos.enabled")
         self.public_url_prefix = load_key("tos.public_url_prefix")
         self.auto_cleanup = load_key("tos.auto_cleanup")
-        self.retention_time = load_key("tos.retention_time")
 
         # 初始化TOS客户端
         self.client = None
@@ -175,23 +174,12 @@ class TOSService:
             return False
 
     def cleanup_old_files(self):
-        """清理旧文件"""
+        """清理旧文件（现在只检查自动清理是否启用）"""
         if not self.enabled or not self.client or not self.auto_cleanup:
             return
 
-        if self.retention_time <= 0:
-            return
-
-        current_time = time.time()
-        files_to_delete = []
-
-        for file_info in self.uploaded_files[:]:  # 使用副本遍历
-            if current_time - file_info['upload_time'] > self.retention_time:
-                files_to_delete.append(file_info)
-
-        for file_info in files_to_delete:
-            self.delete_file(file_info['object_key'])
-            self.uploaded_files.remove(file_info)
+        # 现在不再根据保留时间清理，所以这个方法只检查配置
+        rprint("[cyan]ℹ️ 自动清理已启用，文件将在ASR任务返回成功后删除[/cyan]")
 
     def cleanup_all_files(self):
         """清理所有已上传的文件"""
@@ -199,11 +187,51 @@ class TOSService:
             return
 
         rprint("[cyan]🧹 清理所有TOS文件...[/cyan]")
-        for file_info in self.uploaded_files[:]:  # 使用副本遍历
-            self.delete_file(file_info['object_key'])
-            self.uploaded_files.remove(file_info)
+        files_to_delete = self.uploaded_files.copy()
+        deleted_count = 0
 
-        rprint(f"[green]✅ 已清理 {len(self.uploaded_files)} 个文件[/green]")
+        for file_info in files_to_delete:
+            if self.delete_file(file_info['object_key']):
+                if file_info in self.uploaded_files:
+                    self.uploaded_files.remove(file_info)
+                deleted_count += 1
+
+        rprint(f"[green]✅ 已清理 {deleted_count} 个文件[/green]")
+
+    def cleanup_uploaded_file(self, object_key: str) -> bool:
+        """
+        清理指定已上传的文件（ASR任务提交成功后调用）
+
+        Args:
+            object_key: TOS中的对象键
+
+        Returns:
+            bool: 是否删除成功
+        """
+        if not self.enabled or not self.client:
+            return False
+
+        # 查找对应的文件信息
+        file_info_to_delete = None
+        for file_info in self.uploaded_files:
+            if file_info['object_key'] == object_key:
+                file_info_to_delete = file_info
+                break
+
+        if not file_info_to_delete:
+            rprint(f"[yellow]⚠️ 未找到要删除的文件: {object_key}[/yellow]")
+            return False
+
+        # 删除文件
+        success = self.delete_file(object_key)
+        if success:
+            # 从已上传文件列表中移除
+            self.uploaded_files.remove(file_info_to_delete)
+            rprint(f"[green]✅ ASR任务提交成功，已删除TOS文件: {object_key}[/green]")
+        else:
+            rprint(f"[yellow]⚠️ ASR任务提交成功，但删除TOS文件失败: {object_key}[/yellow]")
+
+        return success
 
     def get_public_url(self, object_key: str) -> str:
         """

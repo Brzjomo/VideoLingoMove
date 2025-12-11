@@ -45,6 +45,9 @@ class VolcanoASR:
         self.tos_service = TOSService()
         self.use_tos = self.tos_service.is_enabled()
 
+        # 跟踪最近上传的文件信息
+        self.last_uploaded_file_info = None
+
         # 验证配置
         self._validate_config()
 
@@ -85,6 +88,12 @@ class VolcanoASR:
                 if success:
                     rprint(f"[green]✅ 文件上传到TOS成功[/green]")
                     rprint(f"[cyan]TOS URL: {public_url}[/cyan]")
+                    # 保存上传的文件信息
+                    self.last_uploaded_file_info = {
+                        'object_key': object_key,
+                        'public_url': public_url,
+                        'local_path': audio_file
+                    }
                     return public_url
                 else:
                     rprint("[yellow]⚠️ TOS上传失败，回退到file:// URL[/yellow]")
@@ -354,6 +363,10 @@ class VolcanoASR:
                 whisper_result = self._convert_to_whisper_format(result, start)
                 # 保存原始ASR结果为JSON文件
                 self._save_asr_result_to_json(result, whisper_result, task_id, audio_file, start)
+
+                # ASR返回结果后删除TOS文件
+                self._cleanup_tos_file_after_result()
+
                 return whisper_result
             elif result.get("status") in ["silent", "failed", "error"]:
                 raise RuntimeError(f"火山引擎ASR处理失败: {result.get('message', '未知错误')}")
@@ -484,6 +497,21 @@ class VolcanoASR:
             rprint(f"[yellow]⚠️ 保存ASR结果为JSON时出错: {str(e)}[/yellow]")
             import traceback
             rprint(f"[yellow]详细错误: {traceback.format_exc()}[/yellow]")
+
+    def _cleanup_tos_file_after_result(self):
+        """ASR返回结果后删除TOS文件"""
+        if not self.use_tos or not self.last_uploaded_file_info:
+            return
+
+        try:
+            object_key = self.last_uploaded_file_info['object_key']
+            # 调用TOS服务的清理方法
+            self.tos_service.cleanup_uploaded_file(object_key)
+            # 清理后重置
+            self.last_uploaded_file_info = None
+            rprint(f"[green]✅ ASR处理完成，已删除TOS文件[/green]")
+        except Exception as e:
+            rprint(f"[yellow]⚠️ 清理TOS文件时出错: {str(e)}[/yellow]")
 
     def _detect_language_from_result(self, result_data: Dict) -> str:
         """

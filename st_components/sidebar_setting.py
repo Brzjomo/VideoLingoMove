@@ -279,24 +279,18 @@ def page_setting():
                 config_input("Access Key", "tos.access_key", help="火山引擎控制台获取的Access Key，或设置环境变量TOS_ACCESS_KEY")
                 config_input("Secret Key", "tos.secret_key", help="火山引擎控制台获取的Secret Key，或设置环境变量TOS_SECRET_KEY")
 
-                # Bucket info (read-only display)
-                st.text_input("Bucket名称", value=load_key("tos.bucket_name"), disabled=True)
-                st.text_input("Endpoint", value=load_key("tos.endpoint"), disabled=True)
-                st.text_input("Region", value=load_key("tos.region"), disabled=True)
+                # Bucket info
+                config_input("Bucket名称", "tos.bucket_name", help="火山引擎TOS的Bucket名称")
+                config_input("Endpoint", "tos.endpoint", help="火山引擎TOS的Endpoint地址")
+                config_input("Region", "tos.region", help="火山引擎TOS的Region区域")
 
                 # Advanced TOS settings - using columns instead of nested expander
                 st.markdown("---")
                 st.markdown("**TOS高级设置**")
                 auto_cleanup = st.toggle("自动清理", value=load_key("tos.auto_cleanup"),
-                                       help="ASR完成后自动删除TOS上的文件")
+                                       help="启用后，ASR处理完成返回结果后会删除TOS上的音频文件")
                 if auto_cleanup != load_key("tos.auto_cleanup"):
                     update_key("tos.auto_cleanup", auto_cleanup)
-
-                if auto_cleanup:
-                    retention_hours = st.number_input("文件保留时间(小时)", min_value=0, max_value=24,
-                                                     value=load_key("tos.retention_time") // 3600)
-                    if retention_hours * 3600 != load_key("tos.retention_time"):
-                        update_key("tos.retention_time", retention_hours * 3600)
 
                 # Test TOS connection
                 if st.button("测试TOS连接", type="secondary"):
