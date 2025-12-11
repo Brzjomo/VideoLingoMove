@@ -89,8 +89,6 @@ tos:
   public_url_prefix: ''
   # Auto cleanup uploaded files after ASR completion
   auto_cleanup: true
-  # File retention time in seconds (0 = no retention)
-  retention_time: 43200
 
 # Video resolution [0x0, 640x360, 1920x1080]  0x0 will generate a 0-second black video placeholder
 resolution: '0x0'

@@ -506,12 +506,16 @@ class VolcanoASR:
         try:
             object_key = self.last_uploaded_file_info['object_key']
             # 调用TOS服务的清理方法
-            self.tos_service.cleanup_uploaded_file(object_key)
+            success = self.tos_service.cleanup_uploaded_file(object_key)
             # 清理后重置
             self.last_uploaded_file_info = None
-            rprint(f"[green]✅ ASR处理完成，已删除TOS文件[/green]")
+            if success:
+                rprint(f"[green]✅ ASR处理完成，已删除TOS文件: {object_key}[/green]")
+            else:
+                rprint(f"[yellow]⚠️ ASR处理完成，但删除TOS文件失败: {object_key}[/yellow]")
         except Exception as e:
             rprint(f"[yellow]⚠️ 清理TOS文件时出错: {str(e)}[/yellow]")
+            # 在批量处理中，不要因为TOS清理失败而影响整体流程
 
     def _detect_language_from_result(self, result_data: Dict) -> str:
         """

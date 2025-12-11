@@ -200,7 +200,7 @@ class TOSService:
 
     def cleanup_uploaded_file(self, object_key: str) -> bool:
         """
-        清理指定已上传的文件（ASR任务提交成功后调用）
+        清理指定已上传的文件（ASR返回结果后调用）
 
         Args:
             object_key: TOS中的对象键
@@ -227,9 +227,9 @@ class TOSService:
         if success:
             # 从已上传文件列表中移除
             self.uploaded_files.remove(file_info_to_delete)
-            rprint(f"[green]✅ ASR任务提交成功，已删除TOS文件: {object_key}[/green]")
+            rprint(f"[green]✅ ASR处理完成，已删除TOS文件: {object_key}[/green]")
         else:
-            rprint(f"[yellow]⚠️ ASR任务提交成功，但删除TOS文件失败: {object_key}[/yellow]")
+            rprint(f"[yellow]⚠️ ASR处理完成，但删除TOS文件失败: {object_key}[/yellow]")
 
         return success
 

@@ -28,6 +28,15 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False, sav
         # 重新创建必要的目录
         os.makedirs('output/audio', exist_ok=True)
         os.makedirs('output/log', exist_ok=True)
+
+    # 批量处理TOS监控
+    try:
+        from tos_manager import get_batch_tos_manager
+        tos_manager = get_batch_tos_manager()
+        if tos_manager.is_enabled():
+            console.print(f"[cyan]🔧 批量处理TOS监控: 视频 '{file}' 开始处理[/cyan]")
+    except ImportError:
+        pass  # 如果TOS管理器不可用，继续正常处理
     
     # 如果跳过预处理，先尝试恢复预处理文件
     if skip_preprocess:
