@@ -141,6 +141,14 @@ class BatchTOSManager:
                         self.batch_uploaded_files.remove(file_info)
                     success_count += 1
                     console.print(f"[green]✅ 批量处理完成，已删除TOS文件: {video_name} - {file_info['object_key']}[/green]")
+
+                    # 清理TOS服务中的文件缓存（避免影响下一个视频）
+                    local_path = file_info.get('local_path')
+                    if local_path and os.path.exists(local_path):
+                        try:
+                            self.tos_service.clear_file_cache(local_path)
+                        except Exception as cache_e:
+                            console.print(f"[yellow]⚠️ 清理文件缓存时出错: {str(cache_e)}[/yellow]")
                 else:
                     console.print(f"[yellow]⚠️ 批量处理完成，但删除TOS文件失败: {video_name} - {file_info['object_key']}[/yellow]")
             except Exception as e:
@@ -167,6 +175,13 @@ class BatchTOSManager:
                     deleted_count += 1
             except Exception as e:
                 console.print(f"[yellow]⚠️ 清理TOS文件时出错: {file_info['video_name']} - {str(e)}[/yellow]")
+
+        # 清空TOS服务中的文件缓存
+        try:
+            self.tos_service.clear_file_cache()
+            console.print(f"[cyan]🗑️ 已清空TOS服务文件缓存[/cyan]")
+        except Exception as cache_e:
+            console.print(f"[yellow]⚠️ 清空文件缓存时出错: {str(cache_e)}[/yellow]")
 
         console.print(f"[green]✅ 已清理 {deleted_count} 个批量处理TOS文件[/green]")
 

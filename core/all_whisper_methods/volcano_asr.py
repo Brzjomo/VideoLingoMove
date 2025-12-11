@@ -346,7 +346,7 @@ class VolcanoASR:
 
         # 4. 轮询查询结果
         rprint(f"[cyan]开始轮询查询结果...[/cyan]")
-        max_attempts = 300  # 最大尝试次数（5分钟）
+        max_attempts = 8640  # 最大尝试次数
         attempt = 0
 
         while attempt < max_attempts:
@@ -356,7 +356,7 @@ class VolcanoASR:
             result = self.query_task(task_id, log_id)
 
             if result.get("status") == "processing":
-                time.sleep(5)  # 等待5秒后重试
+                time.sleep(10)  # 等待重试
                 continue
             elif "result" in result:
                 # 转换结果格式

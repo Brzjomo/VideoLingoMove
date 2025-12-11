@@ -43,6 +43,11 @@ class TOSService:
         # 跟踪已上传的文件
         self.uploaded_files = []
 
+        # 文件缓存：避免重复上传同一个文件
+        # key: 本地文件路径的绝对路径
+        # value: (object_key, public_url, upload_time)
+        self.file_cache = {}
+
     def _init_tos_client(self):
         """初始化TOS客户端"""
         if not self.enabled:
@@ -107,6 +112,20 @@ class TOSService:
         if not os.path.exists(local_file_path):
             raise FileNotFoundError(f"文件不存在: {local_file_path}")
 
+        # 获取文件的绝对路径
+        abs_path = os.path.abspath(local_file_path)
+
+        # 检查文件是否已经在缓存中（避免重复上传）
+        if abs_path in self.file_cache:
+            cached_info = self.file_cache[abs_path]
+            object_key, public_url, upload_time = cached_info
+            rprint(f"[cyan]📁 文件已在缓存中，使用已上传的TOS文件[/cyan]")
+            rprint(f"[cyan]本地文件: {abs_path}[/cyan]")
+            rprint(f"[cyan]TOS对象键: {object_key}[/cyan]")
+            rprint(f"[cyan]公共URL: {public_url}[/cyan]")
+            rprint(f"[cyan]上传时间: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(upload_time))}[/cyan]")
+            return True, object_key, public_url
+
         # 生成对象键
         if not object_key:
             # 使用UUID和时间戳生成唯一键
@@ -133,12 +152,16 @@ class TOSService:
             rprint(f"[cyan]公共URL: {public_url}[/cyan]")
 
             # 记录已上传的文件
+            upload_time = time.time()
             self.uploaded_files.append({
                 'object_key': object_key,
                 'local_path': local_file_path,
-                'upload_time': time.time(),
+                'upload_time': upload_time,
                 'public_url': public_url
             })
+
+            # 添加到文件缓存
+            self.file_cache[abs_path] = (object_key, public_url, upload_time)
 
             return True, object_key, public_url
 
@@ -196,6 +219,10 @@ class TOSService:
                     self.uploaded_files.remove(file_info)
                 deleted_count += 1
 
+        # 清空文件缓存
+        self.file_cache.clear()
+        rprint(f"[cyan]🗑️ 已清空文件缓存[/cyan]")
+
         rprint(f"[green]✅ 已清理 {deleted_count} 个文件[/green]")
 
     def cleanup_uploaded_file(self, object_key: str) -> bool:
@@ -227,6 +254,15 @@ class TOSService:
         if success:
             # 从已上传文件列表中移除
             self.uploaded_files.remove(file_info_to_delete)
+
+            # 从文件缓存中移除
+            local_path = file_info_to_delete.get('local_path')
+            if local_path:
+                abs_path = os.path.abspath(local_path)
+                if abs_path in self.file_cache:
+                    del self.file_cache[abs_path]
+                    rprint(f"[cyan]🗑️ 已从文件缓存中移除: {abs_path}[/cyan]")
+
             rprint(f"[green]✅ ASR处理完成，已删除TOS文件: {object_key}[/green]")
         else:
             rprint(f"[yellow]⚠️ ASR处理完成，但删除TOS文件失败: {object_key}[/yellow]")
@@ -248,6 +284,24 @@ class TOSService:
     def is_enabled(self) -> bool:
         """检查TOS是否启用"""
         return self.enabled and self.client is not None
+
+    def clear_file_cache(self, local_file_path: str = None):
+        """
+        清理文件缓存
+
+        Args:
+            local_file_path: 可选，指定要清理的本地文件路径。如果为None，清理整个缓存。
+        """
+        if local_file_path:
+            abs_path = os.path.abspath(local_file_path)
+            if abs_path in self.file_cache:
+                del self.file_cache[abs_path]
+                rprint(f"[cyan]🗑️ 已从缓存中移除文件: {abs_path}[/cyan]")
+            else:
+                rprint(f"[yellow]⚠️ 文件不在缓存中: {abs_path}[/yellow]")
+        else:
+            self.file_cache.clear()
+            rprint(f"[cyan]🗑️ 已清空文件缓存[/cyan]")
 
 
 def test_tos_service():
