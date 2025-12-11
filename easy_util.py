@@ -143,3 +143,47 @@ def reset_total_statistics():
     total_prompt_tokens = 0
     total_completion_tokens = 0
     total_time_duration = 0
+
+def get_safe_filename(filename: str, max_length: int = 100) -> str:
+    """
+    将文件名转换为安全的文件名（移除特殊字符，限制长度）
+
+    Args:
+        filename: 原始文件名（可以包含路径）
+        max_length: 最大长度限制
+
+    Returns:
+        str: 安全的文件名
+    """
+    # 提取文件名（不含路径和扩展名）
+    basename = os.path.basename(filename)
+    name_without_ext = os.path.splitext(basename)[0]
+
+    # 移除特殊字符，只保留字母、数字、空格、连字符、下划线
+    # 允许中文字符（中文在Python字符串中是有效的）
+    safe_name = ""
+    for char in name_without_ext:
+        if char.isalnum() or char in (' ', '-', '_', '.', '(', ')', '[', ']', '{', '}'):
+            safe_name += char
+        elif '\u4e00' <= char <= '\u9fff':  # 中文字符范围
+            safe_name += char
+        else:
+            safe_name += '_'  # 其他特殊字符替换为下划线
+
+    # 移除首尾空格
+    safe_name = safe_name.strip()
+
+    # 如果为空，使用默认名称
+    if not safe_name:
+        safe_name = "video"
+
+    # 替换空格为下划线
+    safe_name = safe_name.replace(' ', '_')
+
+    # 限制长度
+    if len(safe_name) > max_length:
+        # 保留前max_length个字符，但要确保不会截断中文字符
+        # 简单实现：直接截断
+        safe_name = safe_name[:max_length]
+
+    return safe_name
