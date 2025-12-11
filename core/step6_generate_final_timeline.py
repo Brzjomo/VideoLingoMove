@@ -140,7 +140,13 @@ def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output
 
     # Output subtitles 📜
     def generate_subtitle_string(df, columns):
-        return ''.join([f"{i+1}\n{row['timestamp']}\n{row[columns[0]].strip()}\n{row[columns[1]].strip() if len(columns) > 1 else ''}\n\n" for i, row in df.iterrows()]).strip()
+        subtitle_lines = []
+        for i, row in df.iterrows():
+            # 规范化空格：将多个空格替换为单个空格
+            line1 = re.sub(r'\s+', ' ', str(row[columns[0]]).strip())
+            line2 = re.sub(r'\s+', ' ', str(row[columns[1]]).strip()) if len(columns) > 1 else ''
+            subtitle_lines.append(f"{i+1}\n{row['timestamp']}\n{line1}\n{line2}\n\n")
+        return ''.join(subtitle_lines).strip()
 
     if output_dir:
         os.makedirs(output_dir, exist_ok=True)

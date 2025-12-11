@@ -395,8 +395,12 @@ class VolcanoASR:
                 # 如果有words信息，添加单词级时间戳
                 if "words" in utterance and utterance["words"]:
                     for word in utterance["words"]:
+                        word_text = word.get("text", "")
+                        # 跳过空格单词（时间戳为-0.001）
+                        if word_text and word_text.strip() == "":
+                            continue
                         word_info = {
-                            "word": word.get("text", ""),
+                            "word": word_text,
                             "start": (word.get("start_time", 0) / 1000.0) + start_offset,
                             "end": (word.get("end_time", 0) / 1000.0) + start_offset
                         }

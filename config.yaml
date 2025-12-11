@@ -4,8 +4,8 @@ version: "2.1.2"
 # API settings
 api:
   key: '密钥'
-  base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-  model: 'qwen-plus'
+  base_url: 'https://api.deepseek.com'
+  model: 'deepseek-chat'
 
 deepseek_api:
   key: '密钥'
@@ -40,7 +40,7 @@ whisper:
   # ["medium", "large-v3", "large-v3-turbo"]. Note: for zh model will force to use Belle/large-v3
   model: 'large-v3'
   # Whisper specified recognition language [en, zh, ...] (empty or 'auto' for automatic detection)
-  language: 'de'
+  language: 'en'
   detected_language: ''
 
 # Volcano Engine ASR configuration
@@ -53,7 +53,7 @@ volcano_asr:
   resource_id: 'volc.bigasr.auc'
   # Language code (optional, auto-detect if empty)
   # en-US, ja-JP, id-ID, es-MX, pt-BR, de-DE, fr-FR, ko-KR, fil-PH, ms-MY, th-TH, ar-SA
-  language: 'de-DE'
+  language: 'en-US'
   # Enable punctuation
   enable_punc: false
   # Enable ITN (text normalization)

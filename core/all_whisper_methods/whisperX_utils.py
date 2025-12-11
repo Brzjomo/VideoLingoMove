@@ -210,13 +210,19 @@ def process_transcription(result: Dict) -> pd.DataFrame:
     all_words = []
     for segment in result['segments']:
         for word in segment['words']:
-            # Check word length
-            if len(word["word"]) > 20:
-                print(f"⚠️ Warning: Detected word longer than 20 characters, skipping: {word['word']}")
+            # 跳过空格单词和空文本
+            word_text = word.get("word", "")
+            if word_text and word_text.strip() == "":
                 continue
-                
+
+            # Check word length
+            if len(word_text) > 20:
+                print(f"⚠️ Warning: Detected word longer than 20 characters, skipping: {word_text}")
+                continue
+
             # ! For French, we need to convert guillemets to empty strings
-            word["word"] = word["word"].replace('»', '').replace('«', '')
+            word_text = word_text.replace('»', '').replace('«', '')
+            word["word"] = word_text
             
             if 'start' not in word and 'end' not in word:
                 if all_words:
