@@ -103,48 +103,51 @@ def page_setting():
                 "🇰🇷 韩语": "ko",
                 "🇵🇹 葡萄牙语": "pt"
             }
-            # Language selection for both ASR engines
-            selected_recog_lang = st.selectbox(
+            
+            # --- 定义回调函数 (Callback) ---
+            def on_lang_change():
+                # 1. 从 session_state 获取用户刚刚选择的值
+                # 注意：这里我们使用 key="_recog_lang_select" 来获取值
+                selected_label = st.session_state._recog_lang_select
+                new_lang_code = langs[selected_label]
+                
+                # 2. 获取当前配置用于比较 (可选，也可直接覆盖)
+                current_whisper_lang = load_key("whisper.language")
+                
+                if new_lang_code != current_whisper_lang:
+                    # 3. 更新 Whisper 语言
+                    update_key("whisper.language", new_lang_code)
+                    
+                    # 4. 处理火山引擎同步逻辑
+                    current_asr_engine = load_key("asr_engine")
+                    if current_asr_engine == "volcano":
+                        current_volcano_lang = load_key("volcano_asr.language")
+                        
+                        lang_map = {
+                            "en": "en-US", "zh": "zh-CN", "ja": "ja-JP", 
+                            "ko": "ko-KR", "fr": "fr-FR", "de": "de-DE", 
+                            "es": "es-MX", "pt": "pt-BR"
+                        }
+                        # 直接查找对应的火山语言代码
+                        new_volcano_lang = lang_map.get(new_lang_code)
+                        
+                        if new_volcano_lang and new_volcano_lang != current_volcano_lang:
+                            update_key("volcano_asr.language", new_volcano_lang)
+
+            # --- UI 组件 ---
+            # 计算当前的 index
+            try:
+                current_index = list(langs.values()).index(load_key("whisper.language"))
+            except ValueError:
+                current_index = 0
+
+            st.selectbox(
                 "Recog Lang",
                 options=list(langs.keys()),
-                index=list(langs.values()).index(load_key("whisper.language"))
+                index=current_index,
+                key="_recog_lang_select",  # 必须设置 key，以便在回调中通过 session_state 访问
+                on_change=on_lang_change   # 绑定回调函数
             )
-
-            # Map between language codes for different ASR engines
-            lang_map = {
-                "en": {"whisper": "en", "volcano": "en-US"},
-                "zh": {"whisper": "zh", "volcano": "zh-CN"},
-                "ja": {"whisper": "ja", "volcano": "ja-JP"},
-                "ko": {"whisper": "ko", "volcano": "ko-KR"},
-                "fr": {"whisper": "fr", "volcano": "fr-FR"},
-                "de": {"whisper": "de", "volcano": "de-DE"},
-                "es": {"whisper": "es", "volcano": "es-MX"},
-                "pt": {"whisper": "pt", "volcano": "pt-BR"}
-            }
-
-            # Get current values
-            current_whisper_lang = load_key("whisper.language")
-            
-            # Update languages if selection changed
-            if langs[selected_recog_lang] != current_whisper_lang:
-                # Always update whisper.language first
-                update_key("whisper.language", langs[selected_recog_lang])
-
-                # Force refresh of current values by re-reading from config
-                current_asr_engine = load_key("asr_engine")
-                current_volcano_lang = load_key("volcano_asr.language")
-
-                # Now check if we need to update volcano_asr.language
-                if current_asr_engine == "volcano":
-                    # Get the new volcano language code from our mapping
-                    new_volcano_lang = lang_map.get(langs[selected_recog_lang], {}).get('volcano', '')
-
-                    # Only update if it's actually different
-                    if new_volcano_lang and new_volcano_lang != current_volcano_lang:
-                        update_key("volcano_asr.language", new_volcano_lang)
-                
-                # [关键修改] 强制重新运行以更新 selectbox 的 index
-                st.rerun()
 
         with c2:
             target_language = st.text_input("Target Lang", value=load_key("target_language"))
