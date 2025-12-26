@@ -157,7 +157,11 @@ def page_setting():
         demucs = st.toggle("Vocal separation enhance", value=load_key("demucs"), help="Recommended for videos with loud background noise, but will increase processing time")
         if demucs != load_key("demucs"):
             update_key("demucs", demucs)
-        
+
+        transcription_only = st.toggle("只生成原语言字幕 (跳过翻译)", value=load_key("transcription_only"), help="只生成原语言字幕，跳过翻译步骤")
+        if transcription_only != load_key("transcription_only"):
+            update_key("transcription_only", transcription_only)
+
         burn_subtitles = st.toggle("Burn-in Subtitles", value=load_key("resolution") != "0x0", help="takes longer time")
         
         resolution_options = {

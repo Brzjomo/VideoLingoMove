@@ -13,9 +13,25 @@ SUB_VIDEO = "output/output_sub.mp4"
 DUB_VIDEO = "output/output_dub.mp4"
 
 def text_processing_section():
-    st.header("翻译和生成字幕")
-    with st.container(border=True):
-        st.markdown("""
+    # 检查是否只进行转录
+    transcription_only = load_key("transcription_only")
+
+    if transcription_only:
+        header = "音频转录和生成原语言字幕"
+        steps = """
+        <p style='font-size: 20px;'>
+        此阶段包含以下步骤：
+        <p style='font-size: 20px;'>
+            1. WhisperX 逐字转录<br>
+            2. 使用 NLP 进行句子分割<br>
+            3. 生成原语言字幕<br>
+            4. 切割和对齐长字幕<br>
+            5. 生成时间轴和字幕<br>
+            6. 将字幕合并到视频中
+        """
+    else:
+        header = "翻译和生成字幕"
+        steps = """
         <p style='font-size: 20px;'>
         此阶段包含以下步骤：
         <p style='font-size: 20px;'>
@@ -25,21 +41,27 @@ def text_processing_section():
             4. 切割和对齐长字幕<br>
             5. 生成时间轴和字幕<br>
             6. 将字幕合并到视频中
-        """, unsafe_allow_html=True)
+        """
+
+    st.header(header)
+    with st.container(border=True):
+        st.markdown(steps, unsafe_allow_html=True)
 
         if not os.path.exists(SUB_VIDEO):
-            if st.button("开始处理字幕", key="text_processing_button"):
+            button_text = "开始生成字幕" if transcription_only else "开始处理字幕"
+            if st.button(button_text, key="text_processing_button"):
                 record_start_time()
                 reset_tokens()
                 process_text()
                 st.rerun()
         else:
             time_duration = read_time_duration()
-            st.success(f"字幕翻译完成！耗时：{time_duration} ")
+            success_message = f"原语言字幕生成完成！耗时：{time_duration} " if transcription_only else f"字幕翻译完成！耗时：{time_duration} "
+            st.success(success_message)
             if load_key("resolution") != "0x0":
                 st.video(SUB_VIDEO)
             download_subtitle_zip_button(text="下载所有字幕")
-            
+
             if st.button("归档到'历史记录'", key="cleanup_in_text_processing"):
                 cleanup()
                 st.rerun()
@@ -62,17 +84,37 @@ def process_text():
     with st.spinner("分割长句中..."):
         step3_1_spacy_split.split_by_spacy()
         step3_2_splitbymeaning.split_sentences_by_meaning()
-    with st.spinner("总结和翻译中..."):
-        step4_1_summarize.get_summary()
-        if load_key("pause_before_translate"):
-            input("⚠️ 翻译前暂停。请前往 `output/log/terminology.json` 编辑术语。完成后按回车继续...")
-        step4_2_translate_all.translate_all()
+
+    # 检查是否只进行转录（不翻译）
+    transcription_only = load_key("transcription_only")
+
+    if transcription_only:
+        with st.spinner("生成原语言字幕中..."):
+            # 确保术语文件存在（创建空的）
+            import json
+            terminology_file = "output/log/terminology.json"
+            import os
+            os.makedirs(os.path.dirname(terminology_file), exist_ok=True)
+            if not os.path.exists(terminology_file):
+                with open(terminology_file, 'w', encoding='utf-8') as f:
+                    json.dump({"theme": "", "terms": []}, f, ensure_ascii=False, indent=4)
+
+            # 跳过总结和翻译，直接生成原语言字幕文件
+            from core.step4_2_translate_all import translate_all
+            translate_all()  # 这个函数需要修改以支持直通模式
+    else:
+        with st.spinner("总结和翻译中..."):
+            step4_1_summarize.get_summary()
+            if load_key("pause_before_translate"):
+                input("⚠️ 翻译前暂停。请前往 `output/log/terminology.json` 编辑术语。完成后按回车继续...")
+            step4_2_translate_all.translate_all()
+
     with st.spinner("处理和对齐字幕中..."):
         step5_splitforsub.split_for_sub_main()
         step6_generate_final_timeline.align_timestamp_main()
     with st.spinner("将字幕合并到视频中..."):
         step7_merge_sub_to_vid.merge_subtitles_to_video()
-    
+
     st.success("字幕处理完成！🎉")
     st.balloons()
 

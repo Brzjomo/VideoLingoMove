@@ -58,13 +58,40 @@ def translate_chunk(chunk, chunks, theme_prompt, i):
 def similar(a, b):
     return SequenceMatcher(None, a, b).ratio()
 
-# 🚀 Main function to translate all chunks
+# 🚀 Main function to translate all chunks (or copy source when transcription_only is True)
 def translate_all():
     # Check if the file exists
     if os.path.exists(TRANSLATION_RESULTS_FILE):
         console.print(Panel("🚨 File `translation_results.xlsx` already exists, skipping TRANSLATE ALL.", title="Warning", border_style="yellow"))
         return
-    
+
+    # Check if we should skip translation (transcription_only mode)
+    transcription_only = load_key("transcription_only")
+
+    if transcription_only:
+        console.print("[bold green]⏩ Transcription-only mode: Skipping translation, using source text as translation...[/bold green]")
+
+        # Read the split sentences
+        with open(SENTENCE_SPLIT_FILE, "r", encoding="utf-8") as file:
+            sentences = file.read().strip().split('\n')
+
+        # Create src_text and trans_text (same)
+        src_text = sentences
+        trans_text = sentences.copy()  # Use source as translation
+
+        # Read cleaned chunks for alignment
+        df_text = pd.read_excel(CLEANED_CHUNKS_FILE)
+        df_text['text'] = df_text['text'].str.strip('"').str.strip()
+
+        # Create translation dataframe with source copied to translation
+        df_translate = pd.DataFrame({'Source': src_text, 'Translation': trans_text})
+
+        # Save to Excel
+        df_translate.to_excel(TRANSLATION_RESULTS_FILE, index=False)
+        console.print("[bold green]✅ Transcription-only mode: Results saved (source text used as translation).[/bold green]")
+        return
+
+    # Original translation logic below
     console.print("[bold green]Start Translating All...[/bold green]")
     chunks = split_chunks_by_chars(chunk_size=500, max_i=10)
     with open(TERMINOLOGY_FILE, 'r', encoding='utf-8') as file:
@@ -89,28 +116,28 @@ def translate_all():
                 progress.update(task, advance=1)
 
     results.sort(key=lambda x: x[0])  # Sort results based on original order
-    
+
     # 💾 Save results to lists and Excel file
     src_text, trans_text = [], []
     for i, chunk in enumerate(chunks):
         chunk_lines = chunk.split('\n')
         src_text.extend(chunk_lines)
-        
+
         # Calculate similarity between current chunk and translation results
         chunk_text = ''.join(chunk_lines).lower()
-        matching_results = [(r, similar(''.join(r[1].split('\n')).lower(), chunk_text)) 
+        matching_results = [(r, similar(''.join(r[1].split('\n')).lower(), chunk_text))
                           for r in results]
         best_match = max(matching_results, key=lambda x: x[1])
-        
+
         # Check similarity and handle exceptions
         if best_match[1] < 0.9:
             console.print(f"[yellow]Warning: No matching translation found for chunk {i}[/yellow]")
             raise ValueError(f"Translation matching failed (chunk {i})")
         elif best_match[1] < 1.0:
             console.print(f"[yellow]Warning: Similar match found (chunk {i}, similarity: {best_match[1]:.3f})[/yellow]")
-            
+
         trans_text.extend(best_match[0][2].split('\n'))
-    
+
     # Trim long translation text
     df_text = pd.read_excel(CLEANED_CHUNKS_FILE)
     df_text['text'] = df_text['text'].str.strip('"').str.strip()
@@ -121,7 +148,7 @@ def translate_all():
     # apply check_len_then_trim to df_time['Translation'], only when duration > MIN_TRIM_DURATION.
     df_time['Translation'] = df_time.apply(lambda x: check_len_then_trim(x['Translation'], x['duration']) if x['duration'] > load_key("min_trim_duration") else x['Translation'], axis=1)
     console.print(df_time)
-    
+
     df_time.to_excel(TRANSLATION_RESULTS_FILE, index=False)
     console.print("[bold green]✅ Translation completed and results saved.[/bold green]")
 

@@ -323,6 +323,47 @@ class VolcanoASR:
             rprint(f"[red]查询请求失败: {str(e)}[/red]")
             return {"status": "error", "message": str(e)}
 
+    def _extract_audio_segment(self, audio_file: str, start: float, end: float) -> str:
+        """
+        提取音频片段
+
+        Args:
+            audio_file: 原始音频文件路径
+            start: 开始时间（秒）
+            end: 结束时间（秒）
+
+        Returns:
+            str: 提取的音频片段文件路径
+        """
+        import tempfile
+        import subprocess
+
+        # 创建临时文件
+        temp_file = tempfile.NamedTemporaryFile(suffix='.wav', delete=False)
+        segment_path = temp_file.name
+        temp_file.close()
+
+        # 使用ffmpeg提取音频片段
+        rprint(f"[cyan]🔪 提取音频片段: {start:.2f}s - {end:.2f}s[/cyan]")
+        cmd = [
+            'ffmpeg', '-y', '-i', audio_file,
+            '-ss', str(start),
+            '-to', str(end),
+            '-vn', '-ar', '16000', '-ac', '1', '-acodec', 'pcm_s16le',
+            segment_path
+        ]
+
+        try:
+            subprocess.run(cmd, check=True, capture_output=True)
+            rprint(f"[green]✅ 音频片段提取成功: {segment_path}[/green]")
+            return segment_path
+        except subprocess.CalledProcessError as e:
+            rprint(f"[red]❌ 音频片段提取失败: {e.stderr.decode()}[/red]")
+            # 清理临时文件
+            if os.path.exists(segment_path):
+                os.unlink(segment_path)
+            raise
+
     def transcribe_audio(self, audio_file: str, start: float = 0, end: float = None) -> Dict:
         """
         转录音频文件
@@ -335,43 +376,84 @@ class VolcanoASR:
         Returns:
             dict: 转录结果，格式与WhisperX兼容
         """
-        # 1. 转换音频格式
-        converted_audio = self._convert_audio_for_volcano(audio_file)
+        # 检查是否有缓存结果
+        cached_result = self._find_cached_result(audio_file, start, end)
+        if cached_result is not None:
+            rprint(f"[green]⏩ 使用缓存结果，跳过转录[/green]")
+            return cached_result
 
-        # 2. 获取音频URL（TODO: 实际部署时需要上传）
-        audio_url = self._upload_audio_to_temp_url(converted_audio)
+        # 0. 提取音频片段（如果指定了时间范围）
+        segment_file = None
+        converted_temp_file = None
+        try:
+            if end is not None:
+                # 提取指定时间范围的音频片段
+                segment_file = self._extract_audio_segment(audio_file, start, end)
+                audio_to_process = segment_file
+                result_start_offset = 0  # 片段从0开始
+            else:
+                # 处理整个文件
+                audio_to_process = audio_file
+                result_start_offset = start
 
-        # 3. 提交任务
-        task_id, log_id = self.submit_task(audio_url, converted_audio)
+            # 1. 转换音频格式为火山引擎要求的格式
+            converted_audio = self._convert_audio_for_volcano(audio_to_process)
 
-        # 4. 轮询查询结果
-        rprint(f"[cyan]开始轮询查询结果...[/cyan]")
-        max_attempts = 8640  # 最大尝试次数
-        attempt = 0
+            # 记录是否创建了临时转换文件
+            if converted_audio != audio_to_process:
+                converted_temp_file = converted_audio
 
-        while attempt < max_attempts:
-            attempt += 1
-            rprint(f"[cyan]查询尝试 {attempt}/{max_attempts}...[/cyan]")
+            # 2. 获取音频URL（上传到TOS或使用file://）
+            audio_url = self._upload_audio_to_temp_url(converted_audio)
 
-            result = self.query_task(task_id, log_id)
+            # 3. 提交任务
+            task_id, log_id = self.submit_task(audio_url, converted_audio)
 
-            if result.get("status") == "processing":
-                time.sleep(10)  # 等待重试
-                continue
-            elif "result" in result:
-                # 转换结果格式
-                whisper_result = self._convert_to_whisper_format(result, start)
-                # 保存原始ASR结果为JSON文件
-                self._save_asr_result_to_json(result, whisper_result, task_id, audio_file, start)
+            # 4. 轮询查询结果
+            rprint(f"[cyan]开始轮询查询结果...[/cyan]")
+            max_attempts = 8640  # 最大尝试次数
+            attempt = 0
 
-                # ASR返回结果后删除TOS文件
-                self._cleanup_tos_file_after_result()
+            while attempt < max_attempts:
+                attempt += 1
+                rprint(f"[cyan]查询尝试 {attempt}/{max_attempts}...[/cyan]")
 
-                return whisper_result
-            elif result.get("status") in ["silent", "failed", "error"]:
-                raise RuntimeError(f"火山引擎ASR处理失败: {result.get('message', '未知错误')}")
+                result = self.query_task(task_id, log_id)
 
-        raise TimeoutError("火山引擎ASR处理超时")
+                if result.get("status") == "processing":
+                    time.sleep(10)  # 等待重试
+                    continue
+                elif "result" in result:
+                    # 转换结果格式
+                    whisper_result = self._convert_to_whisper_format(result, result_start_offset)
+                    # 保存原始ASR结果为JSON文件
+                    self._save_asr_result_to_json(result, whisper_result, task_id, audio_file, start)
+
+                    # ASR返回结果后删除TOS文件
+                    self._cleanup_tos_file_after_result()
+
+                    return whisper_result
+                elif result.get("status") in ["silent", "failed", "error"]:
+                    raise RuntimeError(f"火山引擎ASR处理失败: {result.get('message', '未知错误')}")
+
+            raise TimeoutError("火山引擎ASR处理超时")
+
+        finally:
+            # 清理临时转换文件（如果创建了）
+            if converted_temp_file and os.path.exists(converted_temp_file):
+                try:
+                    os.unlink(converted_temp_file)
+                    rprint(f"[green]✅ 已清理临时转换文件: {converted_temp_file}[/green]")
+                except Exception as e:
+                    rprint(f"[yellow]⚠️ 清理临时转换文件失败: {str(e)}[/yellow]")
+
+            # 清理临时片段文件
+            if segment_file and os.path.exists(segment_file):
+                try:
+                    os.unlink(segment_file)
+                    rprint(f"[green]✅ 已清理临时音频片段: {segment_file}[/green]")
+                except Exception as e:
+                    rprint(f"[yellow]⚠️ 清理临时文件失败: {str(e)}[/yellow]")
 
     def _convert_to_whisper_format(self, volcano_result: Dict, start_offset: float = 0) -> Dict:
         """
@@ -431,6 +513,82 @@ class VolcanoASR:
             whisper_result["segments"].append(segment)
 
         return whisper_result
+
+    def _find_cached_result(self, audio_file: str, start: float, end: float = None) -> Optional[Dict]:
+        """
+        查找缓存的ASR结果
+
+        Args:
+            audio_file: 音频文件路径
+            start: 开始时间（秒）
+            end: 结束时间（秒），None表示整个文件
+
+        Returns:
+            Optional[Dict]: 如果找到缓存结果则返回Whisper格式结果，否则返回None
+        """
+        import glob
+        import json
+
+        output_dir = "output/log/asr_results"
+        if not os.path.exists(output_dir):
+            return None
+
+        audio_filename = os.path.basename(audio_file)
+        audio_name = os.path.splitext(audio_filename)[0]
+
+        # 查找所有JSON文件
+        json_pattern = os.path.join(output_dir, f"volcano_asr_{audio_name}_*.json")
+        json_files = glob.glob(json_pattern)
+
+        # 按修改时间排序，最新的优先
+        json_files.sort(key=os.path.getmtime, reverse=True)
+
+        for json_file in json_files:
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+
+                # 检查是否包含必要的metadata
+                if 'metadata' not in data:
+                    continue
+
+                metadata = data['metadata']
+                cached_audio_file = metadata.get('audio_file', '')
+                cached_start = metadata.get('start_offset', -1)
+
+                # 检查音频文件是否匹配（允许路径不同，比较basename）
+                cached_audio_filename = os.path.basename(cached_audio_file) if cached_audio_file else ''
+                if cached_audio_filename != audio_filename:
+                    continue
+
+                # 检查开始时间是否匹配（允许0.1秒的误差）
+                if abs(cached_start - start) > 0.1:
+                    continue
+
+                # 如果有结束时间，检查duration是否匹配（如果有audio_info）
+                if end is not None and 'original_result' in data:
+                    original_result = data['original_result']
+                    audio_info = original_result.get('audio_info', {})
+                    cached_duration = audio_info.get('duration', 0) / 1000.0  # 毫秒转秒
+                    segment_duration = end - start
+                    if abs(cached_duration - segment_duration) > 0.1:
+                        continue
+
+                rprint(f"[green]✅ 找到缓存结果: {json_file}[/green]")
+                rprint(f"[cyan]音频文件: {audio_filename}, 开始时间: {start:.2f}s[/cyan]")
+
+                # 返回转换后的结果
+                if 'converted_result' in data:
+                    return data['converted_result']
+                elif 'segments' in data:
+                    # 简化版文件
+                    return {'segments': data['segments'], 'language': metadata.get('language', 'en')}
+
+            except (json.JSONDecodeError, KeyError, IOError) as e:
+                rprint(f"[yellow]⚠️ 读取缓存文件失败 {json_file}: {str(e)}[/yellow]")
+                continue
+
+        return None
 
     def _save_asr_result_to_json(self, volcano_result: Dict, whisper_result: Dict, task_id: str, audio_file: str, start_offset: float = 0):
         """

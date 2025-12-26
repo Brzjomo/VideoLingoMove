@@ -30,6 +30,9 @@ ollama_api:
 # Language settings, written into the prompt, can be described in natural language
 target_language: '简体中文'
 
+# Whether to perform transcription only (skip translation)
+transcription_only: true
+
 # ASR engine selection ["whisper", "volcano"]
 asr_engine: 'volcano'
 
@@ -40,7 +43,7 @@ whisper:
   # ["medium", "large-v3", "large-v3-turbo"]. Note: for zh model will force to use Belle/large-v3
   model: 'large-v3'
   # Whisper specified recognition language [en, zh, ...] (empty or 'auto' for automatic detection)
-  language: 'en'
+  language: 'zh'
   detected_language: ''
 
 # Volcano Engine ASR configuration
@@ -53,7 +56,7 @@ volcano_asr:
   resource_id: 'volc.bigasr.auc'
   # Language code (optional, auto-detect if empty)
   # en-US, ja-JP, id-ID, es-MX, pt-BR, de-DE, fr-FR, ko-KR, fil-PH, ms-MY, th-TH, ar-SA
-  language: 'en-US'
+  language: 'zh-CN'
   # Enable punctuation
   enable_punc: false
   # Enable ITN (text normalization)
