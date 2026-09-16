@@ -210,11 +210,10 @@ def page_setting():
             if llm_sentence_split != load_key("llm_sentence_split"):
                 update_key("llm_sentence_split", llm_sentence_split)
         else:
-            # 翻译模式：把配置强制纠正为 true，保证后续步骤真的走 LLM 断句
+            # 翻译模式：把配置强制纠正为 true，保证后续步骤真的走 LLM 断句。
+            # 此处刻意不显示任何提示文案——开关本身不出现，静默生效即可。
             if not load_key("llm_sentence_split"):
                 update_key("llm_sentence_split", True)
-            st.caption("ℹ️ 断句优化已启用且不可关闭：翻译模式下需要按意群断句来保证"
-                       "双语对齐与单行长度。如需关闭，请先打开上面的「只生成原语言字幕」。")
 
         burn_subtitles = st.toggle("Burn-in Subtitles", value=load_key("resolution") != "0x0", help="takes longer time")
         
