@@ -18,6 +18,7 @@ from core import (
 )
 from core.onekeycleanup import cleanup  
 from core.ask_gpt import ask_gpt
+from core.config_utils import load_key
 import streamlit as st
 import io, zipfile
 import easy_util as eu
@@ -55,21 +56,47 @@ def subtitle_zip_name(file_name: str, video_name: str):
 _subtitle_zip_name = subtitle_zip_name
 
 
+def pick_default_subtitle(output_dir: str = "output"):
+    """选出「默认字幕」的源文件，返回 (路径, 说明) 或 (None, 原因)。
+
+    选择规则：
+      - 仅转录模式（transcription_only）：只有原语言，用 **src.srt**
+      - 翻译模式                        ：双语，用 **trans_src.srt**（译文在上、原文在下）
+
+    历史上这里固定用 trans_src.srt，导致"只生成原语言字幕"时默认字幕反而取自
+    译文文件（在直通模式下虽然内容相同，但语义错误；若目录里残留了旧的双语字幕，
+    还会给出错误的内容）。
+    """
+    if load_key("transcription_only"):
+        p = os.path.join(output_dir, "src.srt")
+        if os.path.isfile(p):
+            return p, "仅转录模式：使用原语言字幕 src.srt"
+        # 兜底：src.srt 缺失时（例如目录里是翻译模式遗留的产物）退回双语字幕
+        for name in ("src_trans.srt", "trans_src.srt"):
+            p = os.path.join(output_dir, name)
+            if os.path.isfile(p):
+                return p, f"仅转录模式但缺 src.srt：退回双语字幕 {name}"
+        return None, "仅转录模式但未找到 src.srt（也无双语字幕可退回）"
+    for name in ("trans_src.srt", "trans.srt"):
+        p = os.path.join(output_dir, name)
+        if os.path.isfile(p):
+            return p, f"翻译模式：使用双语字幕 {name}"
+    return None, "未找到 trans_src.srt / trans.srt"
+
+
 def download_subtitle_zip_button(text: str):
     zip_buffer = io.BytesIO()
     output_dir = "output"
     log_dir = os.path.join(output_dir, "log")
     video_name = eu.original_name or "video"
 
-    # ① 生成"默认字幕" `output/<video_name>.srt`（双语字幕 trans_src 的内容）。
-    #    原版是在打包循环里用 copy_as_default_subbtitle() 顺带写盘的；
-    #    重构时那次调用被移除，导致该文件不再产生。这里显式恢复，保持行为一致。
-    default_srt_src = os.path.join(output_dir, "trans_src.srt")
-    if not os.path.isfile(default_srt_src):
-        default_srt_src = os.path.join(output_dir, "trans.srt")
+    # ① 生成"默认字幕" `output/<video_name>.srt`
+    default_srt_src, reason = pick_default_subtitle(output_dir)
     default_srt = os.path.join(output_dir, video_name + ".srt")
-    if os.path.isfile(default_srt_src):
+    if default_srt_src:
         shutil.copy(default_srt_src, default_srt)
+    else:
+        print(f"{reason}，无法生成 {video_name}.srt")
 
     # 转录文本也留一份到 output/，方便直接取用
     transcript_path = os.path.join(log_dir, "sentence_splitbymeaning.txt")
@@ -83,7 +110,7 @@ def download_subtitle_zip_button(text: str):
         file_path = os.path.join(output_dir, file_name)
         if file_name.endswith(".srt") and os.path.isfile(file_path):
             if file_name == f"{video_name}.srt":
-                # 这是默认字幕（trans_src 的副本），下面单独加入，避免与命名映射冲突
+                # 这是默认字幕的副本，下面单独加入，避免与命名映射冲突
                 continue
             entries[subtitle_zip_name(file_name, video_name)] = file_path
 

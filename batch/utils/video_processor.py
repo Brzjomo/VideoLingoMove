@@ -207,17 +207,16 @@ def save_subbtitles(save_to_video_storage_folder):
     log_dir = os.path.join(output_dir, "log")
     video_name = eu.original_name or "video"
 
-    # ① 先把"默认字幕"落盘（双语字幕 trans_src 的内容），文件名与视频同名。
-    #    这是后续所有复制动作的来源，必须先于任何存在性判断执行。
-    default_srt_src = os.path.join(output_dir, "trans_src.srt")
-    if not os.path.isfile(default_srt_src):
-        default_srt_src = os.path.join(output_dir, "trans.srt")
+    # ① 先把"默认字幕"落盘，文件名与视频同名。这是后续所有复制动作的来源，
+    #    必须先于任何存在性判断执行。
+    #    内容来源按模式区分：仅转录 → src.srt（只有原语言）；翻译 → trans_src.srt（双语）。
+    default_srt_src, reason = pick_default_subtitle(output_dir)
     default_srt = os.path.join(output_dir, video_name + ".srt")
-    if os.path.isfile(default_srt_src):
+    if default_srt_src:
         shutil.copy(default_srt_src, default_srt)
-        console.print(f"[green]✓ 已生成默认字幕: {default_srt}[/green]")
+        console.print(f"[green]✓ 已生成默认字幕: {default_srt}（{reason}）[/green]")
     else:
-        console.print(f"[yellow]⚠️ 未找到 trans_src.srt / trans.srt，无法生成 {video_name}.srt[/yellow]")
+        console.print(f"[yellow]⚠️ {reason}，无法生成 {video_name}.srt[/yellow]")
 
     # 转录文本同样先落到 output/，便于归档与复制
     transcript_path = os.path.join(log_dir, "sentence_splitbymeaning.txt")
