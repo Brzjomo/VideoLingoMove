@@ -173,6 +173,7 @@ def process_text():
         step2_whisperX.transcribe()
     with st.spinner("分割长句中..."):
         step3_1_spacy_split.split_by_spacy()
+        # step3_2 内部按 llm_sentence_split 决定是否调 LLM
         step3_2_splitbymeaning.split_sentences_by_meaning()
 
     transcription_only = load_key("transcription_only")

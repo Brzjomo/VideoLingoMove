@@ -4,7 +4,7 @@ from typing import List, Tuple
 import concurrent.futures
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.step3_2_splitbymeaning import split_sentence
+from core.step3_2_splitbymeaning import split_sentence, split_by_punctuation
 from core.ask_gpt import ask_gpt
 from core.prompts_storage import get_align_prompt
 from core.config_utils import load_key, get_joiner
@@ -13,6 +13,26 @@ from rich.console import Console
 from rich.table import Table
 
 console = Console()
+
+
+def split_text_evenly(text: str, n: int) -> List[str]:
+    """把文本按字符数近似等分成 n 段（用于源/译文本相同的场景，避免调 LLM 对齐）。
+
+    对齐仍由 step6 负责：它用 Source 拼串做精确匹配取时间戳，
+    因此这里只要求"拼接回去等于原文"，等分即可满足。
+    """
+    text = str(text)
+    if n <= 1 or len(text) < n:
+        return [text]
+    size = len(text) / n
+    parts = []
+    for i in range(n):
+        start = int(round(i * size))
+        end = int(round((i + 1) * size)) if i < n - 1 else len(text)
+        seg = text[start:end].strip()
+        if seg:
+            parts.append(seg)
+    return parts or [text]
 
 # Constants
 INPUT_FILE = "output/log/translation_results.xlsx"
@@ -75,9 +95,20 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str]) -> Tuple[List[st
     TARGET_SUB_MULTIPLIER = subtitle_set["target_multiplier"]
     remerged_tr_lines = tr_lines.copy()
 
+    # 直通模式（transcription_only）下 Source 与 Translation 是同一份文本，
+    # 此时 align_subs 等于"让 LLM 把一段文本与它自己对- 齐"，结果必然等于输入。
+    # 直接按行数机械切分即可，省掉每条超长字幕的一次 LLM 调用（见 devdocs）。
+    identical_src_trans = src_lines == tr_lines
+    use_llm = bool(load_key("llm_sentence_split"))
+
     to_split = []
     for i, (src, tr) in enumerate(zip(src_lines, tr_lines)):
         src, tr = str(src), str(tr)
+        # 清理换行影响（异常数据兜底）
+        if "\n" in src or "\n" in tr:
+            src = src.replace("\n", " ")
+            tr = tr.replace("\n", " ")
+            src_lines[i], tr_lines[i] = src, tr
         if len(src) > MAX_SUB_LENGTH or calc_len(tr) * TARGET_SUB_MULTIPLIER > MAX_SUB_LENGTH:
             to_split.append(i)
             table = Table(title=f"📏 Line {i} needs to be split")
@@ -86,11 +117,27 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str]) -> Tuple[List[st
             table.add_row("Source Line", src)
             table.add_row("Target Line", tr)
             console.print(table)
-    
+
     def process(i):
         try:
-            split_src = split_sentence(src_lines[i], num_parts=2).strip()
-            src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
+            if not use_llm:
+                # 纯本地切分：源文按标点就近断开，译文同步等分（保持行数一致以便对齐）
+                src_parts = split_by_punctuation(src_lines[i], MAX_SUB_LENGTH)
+                n = len(src_parts)
+                tr_remerged = tr_lines[i]
+                if n > 1:
+                    tr_parts = split_text_evenly(tr_lines[i], n)
+                else:
+                    tr_parts = [tr_lines[i]]
+            elif identical_src_trans:
+                # LLM 切源文，译文按行数机械等分（无需再问 LLM 对齐）
+                split_src = split_sentence(src_lines[i], num_parts=2).strip()
+                src_parts = [p for p in split_src.split('\n') if p.strip()]
+                tr_parts = split_text_evenly(tr_lines[i], len(src_parts))
+                tr_remerged = tr_lines[i]
+            else:
+                split_src = split_sentence(src_lines[i], num_parts=2).strip()
+                src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
         except Exception as e:
             # 单行切分失败不应该让整批静默失败：记录告警并保留原始行
             console.print(f"[yellow]⚠️ 第 {i} 行切分失败（保留原行）: {type(e).__name__}: {e}[/yellow]")

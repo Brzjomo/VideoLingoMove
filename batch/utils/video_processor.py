@@ -160,6 +160,7 @@ def copy_input_file(file):
 
 def split_sentences():
     step3_1_spacy_split.split_by_spacy()
+    # step3_2 内部按 config 的 llm_sentence_split 决定是否调 LLM 做断句优化
     step3_2_splitbymeaning.split_sentences_by_meaning()
 
 def summarize_and_translate():

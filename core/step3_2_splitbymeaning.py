@@ -1,4 +1,4 @@
-import sys,os,math
+import sys,os,math,re
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import concurrent.futures
 from core.ask_gpt import ask_gpt
@@ -115,11 +115,81 @@ def parallel_split_sentences(sentences, max_length, max_workers, nlp, retry_atte
 
     return [sentence for sublist in new_sentences for sentence in sublist]
 
+def split_by_punctuation(text, max_length, joiner=""):
+    """不调用 LLM 的兜底切分：在标点/连接处就近把长句切成若干段。
+
+    仅在 `llm_sentence_split = false` 时使用。策略：
+      1. 按句末/句中标点切成候选片段
+      2. 贪心合并到接近 max_length（按字符数近似，调用方若需要精确长度可自行再校验）
+      3. 单个片段本身就超长时，硬按 max_length 切
+    """
+    if not text or len(text) <= max_length:
+        return [text] if text else []
+
+    # 标点后保留分隔符（lookbehind 分词）
+    parts = [p for p in re.split(r'(?<=[。！？!?；;，,、：:\.])\s*', text) if p]
+    if not parts:
+        parts = [text]
+
+    chunks, cur = [], ''
+    for p in parts:
+        # 单段超长：先把它硬切
+        while len(p) > max_length:
+            room = max_length - len(cur)
+            if room > 0:
+                chunks.append((cur + p[:room]).strip())
+                p = p[room:]
+            else:
+                if cur.strip():
+                    chunks.append(cur.strip())
+                cur = ''
+                room = max_length
+                chunks.append(p[:room].strip())
+                p = p[room:]
+            cur = ''
+        if len(cur) + len(p) <= max_length:
+            cur += p
+        else:
+            if cur.strip():
+                chunks.append(cur.strip())
+            cur = p
+    if cur.strip():
+        chunks.append(cur.strip())
+
+    # 兜底：清理空段，并保证至少返回一段
+    chunks = [c for c in chunks if c]
+    return chunks or [text]
+
+
+def split_sentences_mechanically(sentences, max_length):
+    """对超长句做纯本地切分（不调 LLM）。"""
+    result = []
+    for s in sentences:
+        if len(s) > max_length:
+            result.extend(split_by_punctuation(s, max_length))
+        else:
+            result.append(s)
+    return result
+
+
 def split_sentences_by_meaning():
-    """The main function to split sentences by meaning."""
+    """The main function to split sentences by meaning.
+
+    受 `llm_sentence_split` 开关控制：
+      - true （默认）：按句意调 LLM 重切（Netflix 标准，消耗 token）
+      - false        ：跳过 LLM，直接把 spaCy 结果作为输出（零 token）
+    """
     # read input sentences
     with open('output/log/sentence_splitbynlp.txt', 'r', encoding='utf-8') as f:
-        sentences = [line.strip() for line in f.readlines()]
+        sentences = [line.strip() for line in f.readlines() if line.strip()]
+
+    if not load_key("llm_sentence_split"):
+        console.print('[yellow]⏭️ llm_sentence_split = false：跳过 LLM 断句优化，'
+                      '直接使用 spaCy 切分结果（零 LLM 调用）[/yellow]')
+        with open('output/log/sentence_splitbymeaning.txt', 'w', encoding='utf-8') as f:
+            f.write('\n'.join(sentences))
+        console.print(f'[green]✅ 已写出 {len(sentences)} 句（未经 LLM 优化）[/green]')
+        return
 
     nlp = init_nlp()
     # 🔄 process sentences multiple times to ensure all are split

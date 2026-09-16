@@ -1,23 +1,4 @@
-# ============================================================================
-# VideoLingo 配置模板（config.example.yaml）
-#
-# 用法：本文件是提交进 git 的模板，**不含任何真实密钥**。
-#   1. 首次运行时会自动复制为 config.yaml（见 core/config_utils.py 的 _read_config）
-#      也可以手动：copy config.example.yaml config.yaml
-#   2. config.yaml 已被 .gitignore 忽略，你的密钥不会进入版本库。
-#
-# 密钥也可以用环境变量提供，优先级高于本文件，这样连文件都不用改：
-#   配置键 `api.key`          -> 环境变量 VIDEOLINGO_API_KEY
-#   配置键 `volcano_asr.app_id` -> 环境变量 VIDEOLINGO_VOLCANO_ASR_APP_ID
-#   （规则：前缀 VIDEOLINGO_ + 键路径中的非字母数字字符替换为下划线 + 全部大写）
-#
-# 另外，值里可以写 ${VAR} 引用环境变量，例如：
-#   key: '${MY_LLM_KEY}'
-# ============================================================================
-# * Settings marked with * are advanced settings that won't appear in the Streamlit page and can only be modified manually in config.py
 version: "2.1.2"
-## ======================== Basic Settings ======================== ##
-# API settings
 api:
   key: 'YOUR_API_KEY'
   base_url: 'https://api.deepseek.com'
@@ -45,16 +26,15 @@ ollama_api:
 
 # Language settings, written into the prompt, can be described in natural language
 target_language: '简体中文'
-
-# Whether to perform transcription only (skip translation)
 transcription_only: true
-
-# ASR engine selection ["whisper", "volcano"]
+transcription_only: false
+# Whether to use the LLM to optimize sentence splitting (step3_2 by meaning, step5 for long lines).
+# true  = Netflix 标准的按意群断句（质量更好，会消耗 LLM token）
+# false = 只用 spaCy 结果 + 标点就近断开（零 LLM 调用，断行略生硬）
+# 注意：关闭后「翻译」相关的 LLM 调用不受影响，只是不做断句优化。
+llm_sentence_split: true
 asr_engine: 'whisper'
-
-# Whether to use Demucs for vocal separation before transcription
 demucs: false
-
 whisper:
   # ["medium", "large-v3", "large-v3-turbo"]. Note: for zh model will force to use Belle/large-v3
   model: 'large-v3'
@@ -111,11 +91,7 @@ tos:
 
 # Video resolution [0x0, 640x360, 1920x1080]  0x0 will generate a 0-second black video placeholder
 resolution: '0x0'
-
-## ======================== Advanced Settings ======================== ##
-# *Default resolution for downloading YouTube videos [360, 1080, best]
 ytb_resolution: '1080'
-
 subtitle:
   # *Maximum length of each subtitle line in characters
   max_length: 75
@@ -126,24 +102,12 @@ subtitle:
 
 # * Summary length, set low to 2k if using local LLM
 summary_length: 8000
-
-# *Number of LLM multi-threaded accesses, set to 1 if using local LLM
 max_workers: 1000
-# *Maximum number of words for the first rough cut, below 18 will cut too finely affecting translation, above 22 is too long and will make subsequent subtitle splitting difficult to align
 max_split_length: 20
-
-# *Whether to reflect the translation result in the original text
 reflect_translate: true
-
-# *Whether to pause after extracting professional terms and before translation, allowing users to manually adjust the terminology table output\log\terminology.json
 pause_before_translate: false
-
-## ======================== Dubbing Settings ======================== ##
-# TTS selection [sf_fish_tts, openai_tts, gpt_sovits, azure_tts, fish_tts, edge_tts, custom_tts]
-min_trim_duration: 3.5 # Subtitles shorter than this value won't be split
+min_trim_duration: 3.5
 model_dir: './_model_cache'
-
-# Supported upload video formats
 allowed_video_formats:
 - 'mp4'
 - 'mov'

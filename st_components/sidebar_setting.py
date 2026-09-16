@@ -196,6 +196,17 @@ def page_setting():
         if transcription_only != load_key("transcription_only"):
             update_key("transcription_only", transcription_only)
 
+        # 断句优化开关：控制 step3_2（按句意切分）与 step5（超长行切分）是否调用 LLM
+        llm_sentence_split = st.toggle(
+            "使用 LLM 优化断句",
+            value=load_key("llm_sentence_split"),
+            help="开启：按意群断句，字幕更符合 Netflix 单行标准，但会消耗 LLM token；"
+                 "关闭：只用 spaCy 结果 + 标点就近断开，零 LLM 调用，断行略生硬。"
+                 "（不影响翻译本身的 LLM 调用）"
+        )
+        if llm_sentence_split != load_key("llm_sentence_split"):
+            update_key("llm_sentence_split", llm_sentence_split)
+
         burn_subtitles = st.toggle("Burn-in Subtitles", value=load_key("resolution") != "0x0", help="takes longer time")
         
         resolution_options = {
