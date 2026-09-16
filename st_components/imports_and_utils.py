@@ -2,7 +2,6 @@ import os, sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core import (
     # Download & Transcribe 📥
-    step11_merge_full_audio,
     step1_ytdlp,
     step2_whisperX,
     
@@ -16,18 +15,8 @@ from core import (
     # Subtitle Timeline & Merging 🎬
     step6_generate_final_timeline,
     step7_merge_sub_to_vid,
-    
-    # Audio Generation & Processing 🎵
-    step8_1_gen_audio_task,
-    step8_2_gen_dub_chunks,
-    step9_extract_refer_audio,
-    step10_gen_audio,
-    
-    # Final Video Composition 🎥
-    step12_merge_dub_to_vid
 )
 from core.onekeycleanup import cleanup  
-from core.delete_retry_dubbing import delete_dubbing_files
 from core.ask_gpt import ask_gpt
 import streamlit as st
 import io, zipfile
@@ -41,71 +30,81 @@ import shutil
 import zipfile
 import streamlit as st
 
+def subtitle_zip_name(file_name: str, video_name: str):
+    """把 output/ 下的字幕文件名映射为打包后的名字。
+
+    用**完整文件名匹配**而不是子串包含（`"src" in file_name`），
+    避免 src_trans / trans_src 这类同时含两个关键字的文件名依赖判断顺序
+    （见 devdocs 已知问题 P3-1）。
+
+    该函数被 st_components 与 batch/utils/video_processor 共用，
+    所以命名**不带下划线前缀**——`from st_components.imports_and_utils import *`
+    不会导入以下划线开头的名字（batch/utils/video_processor.py:3 就是这么用的）。
+    """
+    stem = os.path.splitext(file_name)[0]
+    mapping = {
+        'src_trans': f"{video_name}_src_trans.srt",
+        'trans_src': f"{video_name}_trans_src.srt",
+        'src': f"{video_name}_src.srt",
+        'trans': f"{video_name}_trans.srt",
+    }
+    return mapping.get(stem, file_name)
+
+
+# 向后兼容别名（旧名字带下划线，仅供显式 import 使用）
+_subtitle_zip_name = subtitle_zip_name
+
+
 def download_subtitle_zip_button(text: str):
     zip_buffer = io.BytesIO()
     output_dir = "output"
     log_dir = os.path.join(output_dir, "log")
-    # video_file_name = get_correct_video_file(output_dir)
-    video_name = eu.original_name
+    video_name = eu.original_name or "video"
+
+    # ① 生成"默认字幕" `output/<video_name>.srt`（双语字幕 trans_src 的内容）。
+    #    原版是在打包循环里用 copy_as_default_subbtitle() 顺带写盘的；
+    #    重构时那次调用被移除，导致该文件不再产生。这里显式恢复，保持行为一致。
+    default_srt_src = os.path.join(output_dir, "trans_src.srt")
+    if not os.path.isfile(default_srt_src):
+        default_srt_src = os.path.join(output_dir, "trans.srt")
+    default_srt = os.path.join(output_dir, video_name + ".srt")
+    if os.path.isfile(default_srt_src):
+        shutil.copy(default_srt_src, default_srt)
+
+    # 转录文本也留一份到 output/，方便直接取用
+    transcript_path = os.path.join(log_dir, "sentence_splitbymeaning.txt")
+    transcript_out = os.path.join(output_dir, video_name + ".txt")
+    if os.path.isfile(transcript_path):
+        shutil.copy(transcript_path, transcript_out)
+
+    # ② 收集打包清单再去重后写入（避免 zip 出现重名条目，见 P3-38）
+    entries = {}   # arcname -> 真实路径
+    for file_name in sorted(os.listdir(output_dir)):
+        file_path = os.path.join(output_dir, file_name)
+        if file_name.endswith(".srt") and os.path.isfile(file_path):
+            if file_name == f"{video_name}.srt":
+                # 这是默认字幕（trans_src 的副本），下面单独加入，避免与命名映射冲突
+                continue
+            entries[subtitle_zip_name(file_name, video_name)] = file_path
+
+    if os.path.isfile(default_srt):
+        entries[f"{video_name}.srt"] = default_srt
+    if os.path.isfile(transcript_out):
+        entries[f"{video_name}.txt"] = transcript_out
 
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
-        for file_name in os.listdir(output_dir):
-            file_path = os.path.join(output_dir, file_name)
-            if file_name.endswith(".srt") and os.path.isfile(file_path):
-                if "src_trans" in file_name:
-                    new_name = video_name + "_src_trans.srt"
-                elif "trans_src" in file_name:
-                    new_name = video_name + "_trans_src.srt"
-                    # 复制一份默认字幕
-                    copy_as_default_subbtitle(output_dir, file_name, video_name + ".srt")
-                    zip_file.write(file_path, video_name + ".srt")
-                elif "src" in file_name:
-                    new_name = video_name + "_src.srt"
-                elif "trans" in file_name:
-                    new_name = video_name + "_trans.srt"
-                else:
-                    new_name = file_name
-                
-                zip_file.write(file_path, new_name)
-
-        # 添加log文件夹下的转录文件，用于后续AI总结
-        specific_txt_file = "sentence_splitbymeaning.txt"
-        specific_txt_path = os.path.join(log_dir, specific_txt_file)
-        new_txt_name = video_name + '.txt'
-        if os.path.isfile(specific_txt_path):
-            zip_file.write(specific_txt_path, new_txt_name)
+        for arcname, path in entries.items():
+            zip_file.write(path, arcname)
 
     zip_buffer.seek(0)
-    
+
     st.download_button(
         label=text,
         data=zip_buffer,
-        file_name= video_name + "_subtitles" + ".zip",
+        file_name=video_name + "_subtitles.zip",
         mime="application/zip"
     )
 
-def copy_as_default_subbtitle(folder_path, file_name, file_new_name):
-    file_path = os.path.join(folder_path, file_name)
-    if os.path.isfile(file_path):
-        shutil.copy(file_path, os.path.join(folder_path, file_new_name))
-    else:
-        print(f"{folder_path} 不存在文件 {file_name}")
-
-def get_correct_video_file(output_dir):
-    video_files = []
-    
-    # 遍历output文件夹
-    for file_name in os.listdir(output_dir):
-        file_path = os.path.join(output_dir, file_name)
-        
-        # 检查文件是否为视频文件且不包含"with_subs"
-        if os.path.isfile(file_path) and not "_sub" in file_name and not "_dub" in file_name and file_name.endswith(('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv', '.webm')):
-            video_files.append(file_name)
-    
-    return video_files
-
-def replace_underscore_with_space(input_string):
-    return input_string.replace("_", " ")
 
 # st.markdown
 give_star_button = """

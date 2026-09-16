@@ -1,7 +1,26 @@
-import threading, os
+import threading, os, sys
 
 # 线程锁
 lock = threading.Lock()
+
+
+def ensure_utf8_console():
+    """确保控制台/重定向输出使用 UTF-8。
+
+    Windows 控制台默认是 GBK，而本项目大量使用 emoji 与中文输出，
+    直接运行会在 print 时抛 UnicodeEncodeError（例如 `python core/step6_...py`）。
+    在入口处调用一次即可；重复调用无害。若当前流不支持 reconfigure 则静默跳过。
+    """
+    for stream_name in ('stdout', 'stderr'):
+        stream = getattr(sys, stream_name, None)
+        reconfigure = getattr(stream, 'reconfigure', None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+
 
 # 时间记录
 start_time = 0
@@ -15,9 +34,9 @@ completion_tokens = 0
 total_tokens = 0
 
 # 预估单价（每百万）
-price_input_uncached = 2
-price_input_cached = 0.2
-price_output = 3
+price_input_uncached = 1
+price_input_cached = 0.02
+price_output = 2
 
 # 命中缓存的token比例
 cached_token_rate = 0.3
@@ -55,9 +74,9 @@ def get_total_tokens():
 
 def get_estimated_cost():
     cost_input_uncached = prompt_tokens / 1000000 * (1 - cached_token_rate) * price_input_uncached
-    cost_inpur_cached = prompt_tokens / 1000000 * cached_token_rate * price_input_cached
+    cost_input_cached = prompt_tokens / 1000000 * cached_token_rate * price_input_cached
     cost_output = completion_tokens / 1000000 * price_output
-    total_cost = cost_input_uncached + cost_inpur_cached + cost_output
+    total_cost = cost_input_uncached + cost_input_cached + cost_output
     return total_cost
 
 def get_total_estimated_cost():
@@ -105,9 +124,24 @@ def add_to_total_tokens():
     total_completion_tokens += completion_tokens
 
 def add_to_total_time():
-    """将当前视频的处理时间添加到总计中"""
+    """将当前视频的处理时间添加到总计中。
+
+    注意：若调用方已经走过 core/step6_generate_final_timeline.record_summary_info()
+    （它会自行累加 total_time_duration），就**不要**再调用本函数，否则会算成 2 倍。
+    见 devdocs 已知问题 P3-30。
+    """
     global total_time_duration
     total_time_duration += time_duration
+
+def add_to_total_cost():
+    """把当前视频的预估花费累加到总计中。
+
+    与 get_total_cost()（由累计 token 重算）是两套口径：
+    本函数累加每次 get_estimated_cost() 的快照，适合"每视频独立计价"的场景。
+    批处理统一使用 get_total_cost() 口径，因此这里只做累加以保持旧行为兼容。
+    """
+    global estimated_total_cost
+    estimated_total_cost += get_estimated_cost()
 
 def get_total_tokens_summary():
     """获取总token消耗统计"""
@@ -138,11 +172,16 @@ def get_formatted_total_tokens():
     )
 
 def reset_total_statistics():
-    """重置所有总计统计"""
-    global total_prompt_tokens, total_completion_tokens, total_time_duration
+    """重置所有总计统计
+
+    包含 estimated_total_cost：此前遗漏了它，导致跨批次累加、无法清零
+    （见 devdocs 已知问题 P2-7 / P3-32）。
+    """
+    global total_prompt_tokens, total_completion_tokens, total_time_duration, estimated_total_cost
     total_prompt_tokens = 0
     total_completion_tokens = 0
     total_time_duration = 0
+    estimated_total_cost = 0
 
 def get_safe_filename(filename: str, max_length: int = 100) -> str:
     """

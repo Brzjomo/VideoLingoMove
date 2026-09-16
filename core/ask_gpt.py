@@ -2,7 +2,6 @@ import os, sys, json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from threading import Lock
 import json_repair
-import json 
 from openai import OpenAI
 import time
 import easy_util as eu
@@ -12,7 +11,18 @@ from core.config_utils import load_key
 LOG_FOLDER = 'output/gpt_log'
 LOCK = Lock()
 
-def save_log(model, prompt, response, log_title = 'default', message = None):
+# 不写日志的哨兵值。历史上这里只判断字符串 'None'，导致 log_title=None
+# 写出 None.json、而字符串 'None' 反而会去读它（见 devdocs 已知问题 P1-8）。
+NO_LOG_TITLES = (None, 'None')
+
+
+def _is_no_log(log_title):
+    return log_title in NO_LOG_TITLES
+
+
+def save_log(model, prompt, response, log_title='default', message=None):
+    if _is_no_log(log_title):
+        return
     os.makedirs(LOG_FOLDER, exist_ok=True)
     log_data = {
         "model": model,
@@ -21,109 +31,175 @@ def save_log(model, prompt, response, log_title = 'default', message = None):
         "message": message
     }
     log_file = os.path.join(LOG_FOLDER, f"{log_title}.json")
-    
-    if os.path.exists(log_file):
-        with open(log_file, 'r', encoding='utf-8') as f:
-            logs = json.load(f)
-    else:
-        logs = []
-    logs.append(log_data)
-    with open(log_file, 'w', encoding='utf-8') as f:
-        json.dump(logs, f, ensure_ascii=False, indent=4)
-        
-def check_ask_gpt_history(prompt, model, log_title):
-    # check if the prompt has been asked before
+
+    with LOCK:
+        if os.path.exists(log_file):
+            with open(log_file, 'r', encoding='utf-8') as f:
+                logs = json.load(f)
+        else:
+            logs = []
+        logs.append(log_data)
+        with open(log_file, 'w', encoding='utf-8') as f:
+            json.dump(logs, f, ensure_ascii=False, indent=4)
+
+
+def check_ask_gpt_history(prompt, model, log_title, allow_cache=True):
+    """按 (model, prompt) 命中历史记录。
+
+    缓存键包含模型名——否则切换 LLM 供应商后会静默复用上一个模型的结果
+    （见 devdocs 已知问题 P1-1）。
+    """
+    if _is_no_log(log_title) or not allow_cache:
+        return None
     if not os.path.exists(LOG_FOLDER):
-        return False
+        return None
     file_path = os.path.join(LOG_FOLDER, f"{log_title}.json")
-    if os.path.exists(file_path):
+    if not os.path.exists(file_path):
+        return None
+    try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            for item in data:
-                if item["prompt"] == prompt:
-                    return item["response"]
-    return False
+    except (json.JSONDecodeError, OSError):
+        return None
+    for item in data:
+        if item.get("prompt") == prompt and item.get("model") == model:
+            return item.get("response")
+    return None
+
 
 def increase_prompt_tokens(value):
     with eu.lock:
         eu.prompt_tokens += value
 
+
 def increase_completion_tokens(value):
     with eu.lock:
         eu.completion_tokens += value
 
-def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default'):
+
+def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default', use_cache=True,
+            bypass_cache=False):
+    """调用 LLM 并返回结果。
+
+    Args:
+        prompt: 提示词
+        response_json: 是否要求 JSON 输出（模型需在 llm_support_json 白名单内才会传 response_format）
+        valid_def: 可选的业务校验回调，接收解析后的 dict，返回
+            {"status": "success"|"error", "message": str}
+        log_title: 日志/缓存分区名；传 None 或 'None' 表示不写日志也不读缓存
+        use_cache: 是否允许命中磁盘缓存（连通性检查等场景应传 False）
+        bypass_cache: 只跳过**读取**缓存，仍会写入结果。
+            调用方在"重试同一 prompt 但希望真正重新请求"时使用它——
+            历史上是用 `prompt + ' ' * retry` 加空格来绕过缓存键，语义晦涩（见 devdocs R14）。
+
+    Returns:
+        解析后的 dict（response_json=True）或原始文本（response_json=False）
+
+    Raises:
+        Exception: 3 次尝试全部失败后抛出，异常信息包含最后一次的真实失败原因。
+    """
     api_set = load_key("api")
+    model = api_set["model"]
     llm_support_json = load_key("llm_support_json")
-    with LOCK:
-        history_response = check_ask_gpt_history(prompt, api_set["model"], log_title)
-        if history_response:
-            return history_response
-    
+
+    history_response = check_ask_gpt_history(
+        prompt, model, log_title,
+        allow_cache=use_cache and not bypass_cache
+    )
+    if history_response is not None and history_response is not False:
+        return history_response
+
     if not api_set["key"]:
-        raise ValueError(f"⚠️API_KEY is missing")
-    
+        raise ValueError("API_KEY is missing")
+
     messages = [{"role": "user", "content": prompt}]
-    
+
     base_url = api_set["base_url"].strip('/') + '/v1' if 'v1' not in api_set["base_url"] else api_set["base_url"]
     client = OpenAI(api_key=api_set["key"], base_url=base_url)
-    response_format = {"type": "json_object"} if response_json and api_set["model"] in llm_support_json else None
+    response_format = {"type": "json_object"} if response_json and model in llm_support_json else None
 
     max_retries = 3
+    last_error = None
+
     for attempt in range(max_retries):
+        # 失败重试时，把上一次的真实失败原因回注给模型，否则重试等于原样再问一遍
+        if attempt > 0 and last_error is not None:
+            messages = [
+                {"role": "user", "content": prompt},
+                {"role": "assistant", "content": "<上一次的输出不合规，已丢弃>"},
+                {"role": "user", "content": f"上一次输出不合规：{last_error}\n请严格按要求重新输出，只返回合法 JSON。"},
+            ]
         try:
-            completion_args = {
-                "model": api_set["model"],
-                "messages": messages
-            }
+            completion_args = {"model": model, "messages": messages}
             if response_format is not None:
                 completion_args["response_format"] = response_format
-                
             response = client.chat.completions.create(**completion_args)
-            
-            if response_json:
-                try:
-                    # 记录token
-                    prompt_tokens_cost = int(response.usage.prompt_tokens)
-                    completion_tokens_cost = int(response.usage.completion_tokens)
-                    increase_prompt_tokens(prompt_tokens_cost)
-                    increase_completion_tokens(completion_tokens_cost)
-
-                    response_data = json_repair.loads(response.choices[0].message.content)
-                    
-                    # check if the response is valid, otherwise save the log and raise error and retry
-                    if valid_def:
-                        valid_response = valid_def(response_data)
-                        if valid_response['status'] != 'success':
-                            save_log(api_set["model"], prompt, response_data, log_title="error", message=valid_response['message'])
-                            raise ValueError(f"❎ API response error: {valid_response['message']}")
-                        
-                    break  # Successfully accessed and parsed, break the loop
-                except Exception as e:
-                    response_data = response.choices[0].message.content
-                    print(f"❎ json_repair parsing failed. Retrying: '''{response_data}'''")
-                    save_log(api_set["model"], prompt, response_data, log_title="error", message=f"json_repair parsing failed.")
-                    if attempt == max_retries - 1:
-                        raise Exception(f"JSON parsing still failed after {max_retries} attempts: {e}\n Please check your network connection or API key or `output/gpt_log/error.json` to debug.")
-            else:
-                response_data = response.choices[0].message.content
-                break  # Non-JSON format, break the loop directly
-                
-        except Exception as e:
+        except RequestException as e:
+            last_error = f"网络请求失败: {e}"
             if attempt < max_retries - 1:
-                if isinstance(e, RequestException):
-                    print(f"Request error: {e}. Retrying ({attempt + 1}/{max_retries})...")
-                else:
-                    print(f"Unexpected error occurred: {e}\nRetrying...")
+                print(f"Request error: {e}. Retrying ({attempt + 1}/{max_retries})...")
                 time.sleep(2)
-            else:
-                raise Exception(f"Still failed after {max_retries} attempts: {e}")
-    with LOCK:
-        if log_title != 'None':
-            save_log(api_set["model"], prompt, response_data, log_title=log_title)
+                continue
+            raise Exception(f"Still failed after {max_retries} attempts: {e}") from e
+        except Exception as e:
+            last_error = f"调用失败: {e}"
+            if attempt < max_retries - 1:
+                print(f"Unexpected error occurred: {e}\nRetrying...")
+                time.sleep(2)
+                continue
+            raise Exception(f"Still failed after {max_retries} attempts: {e}") from e
 
-    return response_data
+        # token 只在真正拿到响应时统计一次（重试不再重复累加）
+        try:
+            increase_prompt_tokens(int(response.usage.prompt_tokens))
+            increase_completion_tokens(int(response.usage.completion_tokens))
+        except Exception:
+            pass
+
+        raw_content = response.choices[0].message.content
+
+        if not response_json:
+            save_log(model, prompt, raw_content, log_title=log_title)
+            return raw_content
+
+        # ① 解析（只捕获解析异常）
+        try:
+            response_data = json_repair.loads(raw_content)
+        except Exception as e:
+            last_error = f"JSON 解析失败: {e}"
+            print(f"❎ json_repair parsing failed: '''{raw_content}'''")
+            save_log(model, prompt, raw_content, log_title="error", message=last_error)
+            if attempt == max_retries - 1:
+                raise Exception(
+                    f"JSON parsing still failed after {max_retries} attempts: {e}\n"
+                    "Please check your network connection or API key or `output/gpt_log/error.json` to debug."
+                ) from e
+            continue
+
+        # ② 业务校验（与解析分开，错误信息才不会被误写成"解析失败"）
+        if valid_def:
+            try:
+                valid_response = valid_def(response_data)
+            except Exception as e:
+                valid_response = {"status": "error", "message": f"valid_def 抛异常: {e}"}
+            if valid_response.get('status') != 'success':
+                last_error = valid_response.get('message', '未知校验错误')
+                print(f"❎ API response validation failed: {last_error}")
+                if attempt == max_retries - 1:
+                    save_log(model, prompt, response_data, log_title="error", message=last_error)
+                    raise Exception(
+                        f"API response error after {max_retries} attempts: {last_error}\n"
+                        "See `output/gpt_log/error.json` for the raw response."
+                    )
+                continue
+
+        save_log(model, prompt, response_data, log_title=log_title)
+        return response_data
+
+    # 理论不可达：循环内每条失败路径都会 continue 或 raise
+    raise Exception(f"ask_gpt failed after {max_retries} attempts: {last_error}")
 
 
 if __name__ == '__main__':
-    print(ask_gpt('hi there hey response in json format, just return 200.' , response_json=True, log_title=None))
+    # 注意：log_title=None 不再写出 None.json（见 devdocs 已知问题 P1-8）
+    print(ask_gpt('hi there hey response in json format, just return 200.', response_json=True, log_title=None))

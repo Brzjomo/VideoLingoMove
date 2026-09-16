@@ -17,10 +17,18 @@ current_dir = os.path.dirname(os.path.abspath(__file__))  # utils目录
 batch_dir = os.path.dirname(current_dir)  # batch目录
 root_dir = os.path.dirname(batch_dir)  # 项目根目录
 sys.path.append(root_dir)
+# 同目录模块（video_processor）需要 utils 目录本身在 path 上。
+# 此前依赖"streamlit run """batch\\utils\\gui.py""" 会把脚本目录加入 path"这一隐式行为，
+# 导致 `import batch.utils.batch_processor` 直接失败（ModuleNotFoundError: video_processor）。
+sys.path.append(current_dir)
 
 from core.config_utils import load_key, update_key
 from st_components.imports_and_utils import ask_gpt
-from video_processor import process_video, generate_batch_summary
+try:
+    from batch.utils.video_processor import process_video, generate_batch_summary
+except ImportError:
+    # 以脚本方式加载（gui.py 直接运行）时的回退
+    from video_processor import process_video, generate_batch_summary
 import easy_util as eu
 
 console = Console()
@@ -124,7 +132,7 @@ class BatchProcessor:
         try:
             # 检查并创建模板文件
             if not os.path.exists(self.template_path):
-                df_template = pd.DataFrame(columns=['Video File', 'Source Language', 'Target Language', 'Dubbing', 'Status'])
+                df_template = pd.DataFrame(columns=['Video File', 'Source Language', 'Target Language', 'Status'])
                 df_template.to_excel(self.template_path, index=False)
             
             # 删除旧的任务文件
@@ -148,7 +156,6 @@ class BatchProcessor:
                     'Video File': [video],
                     'Source Language': [source_language],
                     'Target Language': [target_language],
-                    'Dubbing': [0],
                     'Status': [None]
                 })
                 df = pd.concat([df, new_row], ignore_index=True)
@@ -195,36 +202,56 @@ class BatchProcessor:
         os.makedirs(temp_dir, exist_ok=True)
         return temp_dir
     
+    def get_required_preprocess_files(self) -> list:
+        """预处理缓存恢复所需的文件（按 ASR 引擎区分）。
+
+        关键点：`output/audio/for_whisper.mp3` **只在使用 Whisper 引擎时才会生成**
+        （只有 core/step2_whisperX.py 的 whisper 分支会调 compress_audio）。
+        当 `asr_engine` 为 `volcano` 时该文件不存在，如果仍把它列进必需清单，
+        「优先进行本地计算」(prioritize_local) 的缓存恢复会**必然失败**并白跑一遍预处理
+        （见 devdocs 已知问题 R2）。
+        """
+        files = ['raw.mp3', 'cleaned_chunks.xlsx']
+        try:
+            engine = load_key('asr_engine')
+        except Exception:
+            engine = 'whisper'
+        if engine != 'volcano':
+            files.insert(1, 'for_whisper.mp3')
+        return files
+
     def save_preprocess_results(self, video_file: str) -> None:
         """保存预处理结果到临时目录"""
         temp_dir = self.get_temp_dir_for_video(video_file)
-        
-        # 需要保存的文件列表
+
+        # 需要保存的文件列表（for_whisper.mp3 可能存在也可能不存在，存在就一起存）
         files_to_save = [
             ('output/audio/raw.mp3', 'raw.mp3'),
             ('output/audio/for_whisper.mp3', 'for_whisper.mp3'),
             ('output/log/cleaned_chunks.xlsx', 'cleaned_chunks.xlsx')
         ]
-        
+
         # 复制文件到临时目录
         for src_path, dst_name in files_to_save:
             if os.path.exists(src_path):
                 shutil.copy2(src_path, os.path.join(temp_dir, dst_name))
-    
+
     def restore_preprocess_results(self, video_file: str) -> bool:
         """从临时目录恢复预处理结果"""
         temp_dir = self.get_temp_dir_for_video(video_file)
-        
-        # 检查所需文件是否都存在
-        required_files = ['raw.mp3', 'for_whisper.mp3', 'cleaned_chunks.xlsx']
-        if not all(os.path.exists(os.path.join(temp_dir, f)) for f in required_files):
+
+        # 检查所需文件是否都存在（按当前 ASR 引擎决定是否要求 for_whisper.mp3）
+        required_files = self.get_required_preprocess_files()
+        missing = [f for f in required_files if not os.path.exists(os.path.join(temp_dir, f))]
+        if missing:
+            console.print(f"[yellow]预处理缓存缺少文件 {missing}，将重新执行预处理[/yellow]")
             return False
-        
+
         # 确保目标目录存在
         os.makedirs('output/audio', exist_ok=True)
         os.makedirs('output/log', exist_ok=True)
-        
-        # 恢复文件
+
+        # 恢复文件（只恢复实际存在的，不做强制要求）
         try:
             for src_name, dst_path in [
                 ('raw.mp3', 'output/audio/raw.mp3'),
@@ -232,7 +259,8 @@ class BatchProcessor:
                 ('cleaned_chunks.xlsx', 'output/log/cleaned_chunks.xlsx')
             ]:
                 src_path = os.path.join(temp_dir, src_name)
-                shutil.copy2(src_path, dst_path)
+                if os.path.exists(src_path):
+                    shutil.copy2(src_path, dst_path)
             return True
         except Exception as e:
             console.print(f"[red]恢复预处理文件失败: {str(e)}[/red]")
@@ -251,7 +279,7 @@ class BatchProcessor:
                 shutil.rmtree(self.temp_dir)
             os.makedirs(self.temp_dir, exist_ok=True)
     
-    def process_single_video(self, video_file, source_lang, target_lang, dubbing, is_retry=False, skip_preprocess=False):
+    def process_single_video(self, video_file, source_lang, target_lang, is_retry=False, skip_preprocess=False):
         """处理单个视频"""
         if self.time_limit_enabled and not self.is_time_in_range():
             print(f"Paused: Current time is outside the allowed range ({self.start_time}-{self.end_time})")
@@ -281,7 +309,7 @@ class BatchProcessor:
             
             # 处理视频
             status, error_step, error_message = process_video(
-                video_dir, video_filename, dubbing, is_retry,
+                video_dir, video_filename, is_retry,
                 save_to_video_storage_folder=True,
                 skip_preprocess=skip_preprocess
             )
@@ -310,7 +338,6 @@ class BatchProcessor:
             status, error_step, error_message = process_video(
                 video_dir, 
                 video_filename, 
-                dubbing=False, 
                 is_retry=False,
                 preprocess_only=True
             )
@@ -329,6 +356,9 @@ class BatchProcessor:
     
     def process_batch(self):
         """批量处理视频"""
+        # 提前绑定，避免在赋值前抛异常时 except 分支引用它导致 NameError
+        # （覆盖真实错误信息，见 devdocs 已知问题 R3）
+        status_text = None
         try:
             # 重置总计数据
             eu.reset_total_statistics()
@@ -414,7 +444,6 @@ class BatchProcessor:
                         video_file,
                         row['Source Language'],
                         row['Target Language'],
-                        0 if pd.isna(row['Dubbing']) else int(row['Dubbing']),
                         not pd.isna(row['Status']) and 'Error' in str(row['Status']),
                         skip_preprocess=self.prioritize_local and video_file in self.preprocessed_files
                     )
@@ -462,7 +491,12 @@ class BatchProcessor:
             return True
         except Exception as e:
             console.print(f"[bold red]Batch processing error: {str(e)}")
-            status_text.error(f"❌ 处理出错: {str(e)}")
+            # status_text 已在函数开头绑定为 None，这里做存在性判断
+            if status_text is not None:
+                try:
+                    status_text.error(f"❌ 处理出错: {str(e)}")
+                except Exception:
+                    pass
             return False
         finally:
             # 清理所有临时文件
@@ -470,10 +504,10 @@ class BatchProcessor:
             eu.set_processing(False)
 
 def check_api():
-    """检查API状态"""
+    """检查 API 连通性（绕过缓存，见 devdocs 已知问题 P1-8）"""
     try:
         resp = ask_gpt("This is a test, response 'message':'success' in json format.",
-                      response_json=True, log_title='None')
+                      response_json=True, log_title=None, use_cache=False)
         return resp.get('message') == 'success'
     except Exception:
         return False

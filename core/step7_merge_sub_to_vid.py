@@ -1,10 +1,8 @@
-import os, subprocess, time, sys
+import os, subprocess, time, sys, shutil
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config_utils import load_key
-from core.step1_ytdlp import find_video_files
+from core.step1_ytdlp import find_video_files, is_audio_placeholder
 from rich import print as rprint
-import cv2
-import numpy as np
 import platform
 
 SRC_FONT_SIZE = 15
@@ -31,6 +29,12 @@ OUTPUT_VIDEO = f"{OUTPUT_DIR}/output_sub.mp4"
 SRC_SRT = f"{OUTPUT_DIR}/src.srt"
 TRANS_SRT = f"{OUTPUT_DIR}/trans.srt"
 
+# 字幕阶段完成标记。
+# 以前 UI 用"output_sub.mp4 是否存在"判断本阶段是否完成；但在 resolution=0x0
+# 且输入是真实视频时我们**不再生成**任何成片，那个判据就会永远为假、按钮一直挂着。
+# 因此改为显式写一个标记文件（见 devdocs 已知问题与技术债 §5.2 G5）。
+STAGE_DONE_MARKER = f"{OUTPUT_DIR}/log/subtitle_stage_done.txt"
+
 def check_gpu_available():
     try:
         result = subprocess.run(['ffmpeg', '-encoders'], capture_output=True, text=True)
@@ -38,29 +42,43 @@ def check_gpu_available():
     except:
         return False
 
+def _mark_stage_done():
+    """写字幕阶段完成标记（UI 用它判断是否显示"已完成"）。"""
+    os.makedirs(os.path.dirname(STAGE_DONE_MARKER), exist_ok=True)
+    with open(STAGE_DONE_MARKER, 'w', encoding='utf-8') as f:
+        f.write("subtitle stage finished\n")
+
+
 def merge_subtitles_to_video():
     RESOLUTION = load_key("resolution")
     TARGET_WIDTH, TARGET_HEIGHT = RESOLUTION.split('x')
     video_file = find_video_files()
     os.makedirs(os.path.dirname(OUTPUT_VIDEO), exist_ok=True)
 
-    # Check resolution
+    # resolution 为 0x0 等价于侧边栏的 "Burn-in Subtitles" 开关处于关闭状态：
+    # 只出字幕、不做压制，静默跳过（不打印提示）。侧边栏那个 toggle 就是通过
+    # 把 resolution 写成 '0x0' / 具体值来表达开关的，见 st_components/sidebar_setting.py。
     if RESOLUTION == '0x0':
-        rprint("[bold yellow]Warning: A 0-second black video will be generated as a placeholder as Resolution is set to 0x0.[/bold yellow]")
-
-        # Create a black frame
-        frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(OUTPUT_VIDEO, fourcc, 1, (1920, 1080))
-        out.write(frame)
-        out.release()
-
-        rprint("[bold green]Placeholder video has been generated.[/bold green]")
+        if is_audio_placeholder(video_file):
+            # 输入是纯音频：convert_audio_to_video() 已把它包成 black_screen.mp4
+            # （黑底 + 完整音频）。它本身就是一份可播放的成片，**必须原样保留**：
+            # 若用 1 秒黑帧覆盖 output_sub.mp4，用户就无法播放、也就无法校对字幕与音频的对齐。
+            shutil.copy2(video_file, OUTPUT_VIDEO)
+            rprint(f"[bold green]输入为纯音频：已保留 {video_file} 作为成片 {OUTPUT_VIDEO}"
+                   f"（黑底 + 完整音频），不再生成占位视频。[/bold green]")
+        elif os.path.exists(OUTPUT_VIDEO):
+            # 输入是真实视频且未开启 Burn-in：不需要任何成片。
+            # 顺手清掉上一次遗留的占位/成片，避免使用者误以为这次也压制了。
+            os.remove(OUTPUT_VIDEO)
+        _mark_stage_done()
         return
 
     if not os.path.exists(SRC_SRT) or not os.path.exists(TRANS_SRT):
-        print("Subtitle files not found in the 'output' directory.")
-        exit(1)
+        # 抛 Exception 而不是 exit(1)：SystemExit 继承 BaseException，
+        # 会绕过批处理模式的重试逻辑（只捕获 Exception），见 devdocs 已知问题 P3-35。
+        raise FileNotFoundError(
+            f"字幕文件不存在，请先运行 step6 生成字幕。期望: {SRC_SRT}, {TRANS_SRT}"
+        )
 
     ffmpeg_cmd = [
         'ffmpeg', '-i', video_file,
@@ -93,12 +111,19 @@ def merge_subtitles_to_video():
         process.wait()
         if process.returncode == 0:
             print(f"\n✅ Done! Time taken: {time.time() - start_time:.2f} seconds")
+            _mark_stage_done()
         else:
-            print("\n❌ FFmpeg execution error")
+            # 认真检查 returncode：此前失败只打印一行 ❌ 但流程仍当作成功，
+            # 使用者会以为压制好了（见 devdocs 已知问题与技术债 §5.2 G5）。
+            raise RuntimeError(
+                f"FFmpeg 压制失败（returncode={process.returncode}）。"
+                f"请检查 output/src.srt 与 output/trans.srt 是否存在且格式正确。"
+            )
     except Exception as e:
         print(f"\n❌ Error occurred: {e}")
         if process.poll() is None:
             process.kill()
+        raise
 
 if __name__ == "__main__":
     merge_subtitles_to_video()

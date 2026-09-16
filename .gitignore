@@ -157,7 +157,14 @@ _model_cache/
 
 batch/input/
 batch/output/
+# 上一批产物的归档目录（batch/utils/gui.py 自动创建），也不入库
+batch/output_archive_*/
+# 运行期任务表：每次「创建/更新任务配置」都从 tasks_setting-template.xlsx 复制生成，不入库
 batch/tasks_setting.xlsx
+
+# 本地配置（含真实密钥）。模板 config.example.yaml 需要提交，因此这里只忽略 config.yaml 本身。
+config.yaml
+config.yaml.local-backup
 
 # large files
 /ffmpeg.exe
@@ -191,4 +198,7 @@ ffmpeg-master-latest-win64-gpl/
 
 .claude/
 
+# 文档默认不入库，但工程文档 devdocs/ 必须有例外（顺序不能颠倒）
 *.md
+!devdocs/
+!devdocs/**/*.md

@@ -16,7 +16,7 @@ from rich import print as rprint
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from core.config_utils import load_key
-from core.all_whisper_methods.tos_service import TOSService
+from core.all_whisper_methods.tos_service import get_tos_service
 
 
 class VolcanoASR:
@@ -41,10 +41,13 @@ class VolcanoASR:
         self.submit_url = "https://openspeech-direct.zijieapi.com/api/v3/auc/bigmodel/submit"
         self.query_url = "https://openspeech-direct.zijieapi.com/api/v3/auc/bigmodel/query"
 
-        # 初始化TOS服务
-        self.tos_service = TOSService()
+        # 初始化TOS服务（用单例：分段循环里每个音频段都会新建 VolcanoASR，
+        # 若每段都新建 TOSService，文件缓存与"统一清理"都会失效）
+        self.tos_service = get_tos_service()
         self.use_tos = self.tos_service.is_enabled()
 
+        # 语义化名称，用于让对象键在 TOS 控制台可读（通常设为视频名）
+        self.audio_name_hint = None
         # 跟踪最近上传的文件信息
         self.last_uploaded_file_info = None
 
@@ -84,7 +87,9 @@ class VolcanoASR:
         if self.use_tos:
             rprint("[green]🚀 使用火山引擎TOS上传文件...[/green]")
             try:
-                success, object_key, public_url = self.tos_service.upload_file(audio_file)
+                success, object_key, public_url = self.tos_service.upload_file(
+                    audio_file, name_hint=self.audio_name_hint
+                )
                 if success:
                     rprint(f"[green]✅ 文件上传到TOS成功[/green]")
                     rprint(f"[cyan]TOS URL: {public_url}[/cyan]")
@@ -390,7 +395,9 @@ class VolcanoASR:
                 # 提取指定时间范围的音频片段
                 segment_file = self._extract_audio_segment(audio_file, start, end)
                 audio_to_process = segment_file
-                result_start_offset = 0  # 片段从0开始
+                # 片段时间戳从 0 计，必须把区间起点加回去，否则第 2 段起的时间轴会与第 1 段重叠。
+                # 调用方（core/step2_whisperX.py 的火山分支）不会补这个偏移，见 devdocs 已知问题 P1-9。
+                result_start_offset = start
             else:
                 # 处理整个文件
                 audio_to_process = audio_file

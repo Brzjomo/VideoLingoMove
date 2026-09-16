@@ -17,7 +17,7 @@ import numpy as np
 
 from core.config_utils import load_key
 from core.all_whisper_methods.demucs_vl import demucs_main, RAW_AUDIO_FILE, VOCAL_AUDIO_FILE
-from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, convert_to_volcano_wav, CLEANED_CHUNKS_EXCEL_PATH, RAW_AUDIO_WAV_FILE
+from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, CLEANED_CHUNKS_EXCEL_PATH, RAW_AUDIO_WAV_FILE
 from core.step1_ytdlp import find_video_files
 
 # 尝试导入火山引擎ASR
@@ -28,9 +28,9 @@ except ImportError:
     VOLCANO_ASR_AVAILABLE = False
     rprint("[yellow]⚠️ 火山引擎ASR模块导入失败，确保volcano_asr.py文件存在[/yellow]")
 
+# 注意：`ENHANCED_VOCAL_PATH` 只在 demucs=true 时被 enhance_vocals() 使用。
 MODEL_DIR = load_key("model_dir")
 WHISPER_FILE = "output/audio/for_whisper.mp3"
-VOLCANO_FILE = "output/audio/for_volcano.wav"
 ENHANCED_VOCAL_PATH = "output/audio/enhanced_vocals.mp3"
 
 def check_hf_mirror() -> str:
@@ -226,6 +226,13 @@ def transcribe_audio_with_volcano(audio_file: str, start: float, end: float) -> 
     try:
         # 创建火山引擎ASR实例
         asr = VolcanoASR()
+
+        # 让 TOS 对象键带上视频名，便于在控制台按视频检索/清理
+        try:
+            video_file = find_video_files()
+            asr.audio_name_hint = os.path.splitext(os.path.basename(video_file))[0]
+        except Exception:
+            pass  # 拿不到视频名不影响转录，只是对象键退化为时间戳命名
 
         # 转录音频
         result = asr.transcribe_audio(audio_file, start, end)

@@ -24,30 +24,6 @@ def compress_audio(input_file: str, output_file: str):
     return output_file
 
 
-def convert_to_volcano_wav(input_file: str, output_file: str):
-    """
-    将音频文件转换为火山引擎ASR要求的格式：
-    16kHz, 单声道, 16-bit PCM WAV格式
-
-    Args:
-        input_file: 输入音频文件路径
-        output_file: 输出WAV文件路径
-    """
-    if not os.path.exists(output_file):
-        print(f"🌋 Converting to Volcano ASR format: 16kHz mono 16-bit PCM WAV ......")
-        # 火山引擎ASR要求: 16kHz, 单声道, 16-bit PCM WAV
-        subprocess.run([
-            'ffmpeg', '-y', '-i', input_file, '-vn',
-            '-ar', '16000',          # 采样率 16kHz
-            '-ac', '1',              # 单声道
-            '-acodec', 'pcm_s16le',  # 16-bit PCM
-            '-metadata', 'encoding=UTF-8',
-            '-f', 'wav',             # WAV格式
-            output_file
-        ], check=True, stderr=subprocess.PIPE)
-        print(f"🌋 Converted <{input_file}> to Volcano ASR format: <{output_file}>")
-    return output_file
-
 def convert_video_to_audio(video_file: str):
     os.makedirs(AUDIO_DIR, exist_ok=True)
 

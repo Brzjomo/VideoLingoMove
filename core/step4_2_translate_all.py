@@ -5,7 +5,7 @@ import json
 import concurrent.futures
 from core.translate_once import translate_lines
 from core.step4_1_summarize import search_things_to_note_in_prompt
-from core.step8_1_gen_audio_task import check_len_then_trim
+from core.subtitle_trim import check_len_then_trim
 from core.step6_generate_final_timeline import align_timestamp
 from core.config_utils import load_key
 from rich.console import Console
@@ -21,8 +21,12 @@ TERMINOLOGY_FILE = "output/log/terminology.json"
 CLEANED_CHUNKS_FILE = "output/log/cleaned_chunks.xlsx"
 
 # Function to split text into chunks
-def split_chunks_by_chars(chunk_size=400, max_i=8): 
-    """Split text into chunks based on character count, return a list of multi-line text chunks"""
+def split_chunks_by_chars(chunk_size, max_i):
+    """按字符数与行数上限把句子切成翻译块。
+
+    chunk_size 与 max_i 是必填参数（此前有默认值 400/8，但调用处传的是 500/10，
+    默认值从不生效且容易误读，见 devdocs 已知问题 P2-4）。
+    """
     with open(SENTENCE_SPLIT_FILE, "r", encoding="utf-8") as file:
         sentences = file.read().strip().split('\n')
 
@@ -94,8 +98,10 @@ def translate_all():
     # Original translation logic below
     console.print("[bold green]Start Translating All...[/bold green]")
     chunks = split_chunks_by_chars(chunk_size=500, max_i=10)
+    # 键名与提示词保持一致：get_summary_prompt 要求输出 "topic"
+    # （此前读的是 'theme'，导致主题上下文恒为 None，见 devdocs 已知问题 P1-6）
     with open(TERMINOLOGY_FILE, 'r', encoding='utf-8') as file:
-        theme_prompt = json.load(file).get('theme')
+        theme_prompt = json.load(file).get('topic')
 
     # 🔄 Use concurrent execution for translation
     with Progress(
@@ -115,15 +121,17 @@ def translate_all():
                 results.append(future.result())
                 progress.update(task, advance=1)
 
-    results.sort(key=lambda x: x[0])  # Sort results based on original order
-
     # 💾 Save results to lists and Excel file
     src_text, trans_text = [], []
     for i, chunk in enumerate(chunks):
         chunk_lines = chunk.split('\n')
         src_text.extend(chunk_lines)
 
-        # Calculate similarity between current chunk and translation results
+        # 把并发返回的结果匹配回原 chunk。
+        # 注意：translate_lines() 的第二个返回值就是传入的 chunk 本身
+        # （core/translate_once.py:67/:90），因此这里本质上是自匹配（ratio 恒为 1.0）。
+        # 真正的作用只剩下"内容完全相同的重复 chunk 会被任选其一"这一种风险；
+        # 保留它是为了在 translate_lines 未来改为返回不同文本时仍能对齐。
         chunk_text = ''.join(chunk_lines).lower()
         matching_results = [(r, similar(''.join(r[1].split('\n')).lower(), chunk_text))
                           for r in results]

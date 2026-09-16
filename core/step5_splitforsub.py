@@ -88,14 +88,21 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str]) -> Tuple[List[st
             console.print(table)
     
     def process(i):
-        split_src = split_sentence(src_lines[i], num_parts=2).strip()
-        src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
+        try:
+            split_src = split_sentence(src_lines[i], num_parts=2).strip()
+            src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
+        except Exception as e:
+            # 单行切分失败不应该让整批静默失败：记录告警并保留原始行
+            console.print(f"[yellow]⚠️ 第 {i} 行切分失败（保留原行）: {type(e).__name__}: {e}[/yellow]")
+            return
         src_lines[i] = src_parts
         tr_lines[i] = tr_parts
         remerged_tr_lines[i] = tr_remerged
-    
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=load_key("max_workers")) as executor:
-        executor.map(process, to_split)
+        # 必须消费 map 的返回值：executor.map 是惰性的，不迭代就不会取回结果，
+        # 工作线程里的异常会被完全吞掉（见 devdocs 已知问题 P3-6）。
+        list(executor.map(process, to_split))
     
     # Flatten `src_lines` and `tr_lines`
     src_lines = [item for sublist in src_lines for item in (sublist if isinstance(sublist, list) else [sublist])]
@@ -114,8 +121,9 @@ def split_for_sub_main():
     MAX_SUB_LENGTH = subtitle_set["max_length"]
     TARGET_SUB_MULTIPLIER = subtitle_set["target_multiplier"]
     
-    for attempt in range(3):  # 使用固定的3次重试
-        console.print(Panel(f"🔄 Split attempt {attempt + 1}", expand=False))
+    MAX_SPLIT_ATTEMPTS = 3
+    for attempt in range(MAX_SPLIT_ATTEMPTS):  # 固定的 3 轮：每轮只把超长行再切一次
+        console.print(Panel(f"🔄 Split attempt {attempt + 1}/{MAX_SPLIT_ATTEMPTS}", expand=False))
         split_src, split_trans, remerged = split_align_subs(src.copy(), trans)
         
         # 检查是否所有字幕都符合长度要求

@@ -278,7 +278,7 @@ Pre-processed {src_language} Subtitles ([br] indicates split points): {src_part}
     )
 
 ## ================================================================
-# @ step8_gen_audio_task.py @ step10_gen_audio.py
+# @ core/subtitle_trim.py（配音链路已移除，此提示词仅服务于字幕压缩）
 def get_subtitle_trim_prompt(text, duration):
  
     rule = '''Consider a. Reducing filler words without modifying meaningful content. b. Omitting unnecessary modifiers or pronouns, for example:
@@ -319,25 +319,3 @@ Please follow these steps and provide the results in the JSON output:
         rule=rule
     )
 
-## ================================================================
-# @ tts_main
-def get_correct_text_prompt(text):
-    return f'''
-### Role
-You are a text cleaning expert for TTS (Text-to-Speech) systems.
-
-### Task
-Clean the given text by:
-1. Keep only basic punctuation (.,?!)
-2. Preserve the original meaning
-
-### Input Text
-{text}
-
-### Output in JSON FORMAT
-{{
-    "text": "cleaned text here"
-}}
-
-### Your Answer, Provide ONLY a valid JSON object:
-'''.strip()

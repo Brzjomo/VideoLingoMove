@@ -7,7 +7,9 @@ import shutil
 def cleanup(history_dir="history"):
     # Get video file name
     video_file = find_video_files()
-    video_name = video_file.split("/")[1]
+    # 用 basename 而不是 split("/")[1]：后者依赖 find_video_files 返回的分隔符形式
+    # 与路径深度，在非 Windows 平台会 IndexError（见 devdocs 已知问题 P3-11）
+    video_name = os.path.basename(video_file.replace("\\", "/"))
     video_name = os.path.splitext(video_name)[0]
     video_name = sanitize_filename(video_name)
     

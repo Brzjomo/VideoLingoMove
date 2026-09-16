@@ -50,7 +50,11 @@ def find_split_positions(original, modified):
     return split_positions
 
 def split_sentence(sentence, num_parts, word_limit=18, index=-1, retry_attempt=0):
-    """Split a long sentence using GPT and return the result as a string."""
+    """Split a long sentence using GPT and return the result as a string。
+
+    retry_attempt > 0 表示这是同一句的第 N 轮重试：用 bypass_cache 真正重新请求，
+    而不是靠 `prompt + ' ' * retry_attempt` 改变 prompt 字符串去绕过缓存（见 devdocs R14）。
+    """
     split_prompt = get_split_prompt(sentence, num_parts, word_limit)
     def valid_split(response_data):
         if 'split' not in response_data:
@@ -58,8 +62,10 @@ def split_sentence(sentence, num_parts, word_limit=18, index=-1, retry_attempt=0
         if "[br]" not in response_data["split"]:
             return {"status": "error", "message": "Split failed, no [br] found"}
         return {"status": "success", "message": "Split completed"}
-    
-    response_data = ask_gpt(split_prompt + ' ' * retry_attempt, response_json=True, valid_def=valid_split, log_title='sentence_splitbymeaning')
+
+    response_data = ask_gpt(split_prompt, response_json=True, valid_def=valid_split,
+                            log_title='sentence_splitbymeaning',
+                            bypass_cache=retry_attempt > 0)
     best_split = response_data["split"]
     split_points = find_split_positions(sentence, best_split)
     # split the sentence based on the split points

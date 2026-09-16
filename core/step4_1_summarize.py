@@ -64,6 +64,11 @@ def get_summary():
     summary = ask_gpt(summary_prompt, response_json=True, valid_def=valid_summary, log_title='summary')
     if 'terms' in summary:
         summary['terms'].extend(custom_terms_json['terms'])
+    else:
+        summary['terms'] = list(custom_terms_json['terms'])
+    # 统一主题键名，供 step4_2 读取（见 devdocs 已知问题 P1-6）
+    if 'topic' not in summary:
+        summary['topic'] = ''
     
     with open(TERMINOLOGY_JSON_PATH, 'w', encoding='utf-8') as f:
         json.dump(summary, f, ensure_ascii=False, indent=4)

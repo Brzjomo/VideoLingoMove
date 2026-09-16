@@ -21,11 +21,11 @@ ruamel.yaml
 plyer
 autocorrect-py
 ctranslate2==4.4.0
-edge-tts
 
 demucs[dev] @ git+https://github.com/adefossez/demucs
 whisperx @ git+https://github.com/m-bain/whisperx.git@v3.2.0
 
+# 字幕朗读时长估算（core/estimate_duration.py），仍被 core/subtitle_trim.py 使用
 syllables
 pypinyin
 g2p-en

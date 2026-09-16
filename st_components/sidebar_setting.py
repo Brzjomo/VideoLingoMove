@@ -1,20 +1,38 @@
 import os, sys
 import streamlit as st
-from core.config_utils import update_key, load_key, assign_key
+from core.config_utils import update_key, load_key, assign_key, _to_env_name
 from st_components.imports_and_utils import ask_gpt
 
 def config_input(label, key, help=None):
-    """Generic config input handler"""
+    """Generic config input handler
+
+    环境变量优先：若 `<键>` 被 `VIDEOLINGO_<KEY>` 覆盖，输入框会显示环境变量的值，
+    且在此处的编辑**不会生效**（下次读取仍返回环境变量）。为避免"改了没用"的困惑，
+    检测到覆盖时给出明确提示（见 devdocs 已知问题 R11）。
+    """
+    env_name = _to_env_name(key)
+    overridden = bool(os.environ.get(env_name))
+
     val = st.text_input(label, value=load_key(key), help=help)
+    if overridden:
+        st.caption(f"⚠️ 该项已被环境变量 `{env_name}` 覆盖；在此处的修改不会生效。")
     if val != load_key(key):
-        update_key(key, val)
+        if overridden:
+            st.warning(f"`{key}` 当前由环境变量 `{env_name}` 决定，修改未写入。")
+        else:
+            update_key(key, val)
     return val
 
 def check_api():
-    """检查API状态"""
+    """检查 API 连通性。
+
+    必须绕过缓存（use_cache=False）：否则一旦磁盘上存在旧的
+    output/gpt_log/None.json，就会命中历史记录而根本不发请求，
+    从而在密钥已失效时仍然显示"有效"（见 devdocs 已知问题 P1-8）。
+    """
     try:
         resp = ask_gpt("This is a test, response 'message':'success' in json format.",
-                      response_json=True, log_title='None')
+                      response_json=True, log_title=None, use_cache=False)
         return resp.get('message') == 'success'
     except Exception:
         return False
@@ -47,12 +65,28 @@ def page_setting():
         config_options = ["Deepseek", "千问", "硅基流动", "Ollama"]
         selected_config = st.selectbox("选择配置", options=config_options)
         
-        # 添加自定义样式的按钮
+        # 侧边栏按钮样式。
+        # 注意：这里曾写成 `div[data-testid="stButton"] button { color: white !important; }`，
+        # 该选择器命中**全页**所有按钮，并与 imports_and_utils.button_style 的
+        # `div.stButton > button:first-child { color: #144070 }` 冲突——因为带 !important，
+        # 主区域按钮文字被强制成白色，而 hover 背景是 #ffffff，会变成白字白底。
+        #
+        # 现在把作用域限定在侧边栏内。选择器同时写 `.stSidebar` 与
+        # `[data-testid="stSidebar"]` 两种形式，不绑定具体标签名——streamlit 1.38
+        # 渲染侧边栏用的是 className="stSidebar" + data-testid="stSidebar"，
+        # 写死 `section[...]` 会在标签变化时静默失效（见 devdocs 已知问题 R4）。
         st.markdown(
             """
             <style>
-            div[data-testid="stButton"] button {
+            .stSidebar div[data-testid="stButton"] button,
+            [data-testid="stSidebar"] div[data-testid="stButton"] button {
                 color: white !important;
+            }
+            .stSidebar div[data-testid="stButton"] button:hover,
+            [data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
+                color: white !important;
+                border-color: white !important;
+                background-color: transparent !important;
             }
             </style>
             """,
@@ -299,8 +333,8 @@ def page_setting():
                 # Test TOS connection
                 if st.button("测试TOS连接", type="secondary"):
                     try:
-                        from core.all_whisper_methods.tos_service import TOSService
-                        tos_service = TOSService()
+                        from core.all_whisper_methods.tos_service import get_tos_service
+                        tos_service = get_tos_service()
                         if tos_service.is_enabled():
                             st.success("✅ TOS连接成功")
                         else:
@@ -308,61 +342,3 @@ def page_setting():
                     except Exception as e:
                         st.error(f"❌ TOS连接错误: {str(e)}")
 
-    with st.expander("Dubbing Settings", expanded=False):
-        tts_methods = ["azure_tts", "openai_tts", "fish_tts", "sf_fish_tts", "edge_tts", "gpt_sovits", "custom_tts"]
-        select_tts = st.selectbox("TTS Method", options=tts_methods, index=tts_methods.index(load_key("tts_method")))
-        if select_tts != load_key("tts_method"):
-            update_key("tts_method", select_tts)
-
-        # sub settings for each tts method
-        if select_tts == "sf_fish_tts":
-            config_input("SiliconFlow API Key", "sf_fish_tts.api_key")
-            
-            # Add mode selection dropdown
-            mode_options = {
-                "preset": "Preset",
-                "custom": "Refer_stable",
-                "dynamic": "Refer_dynamic"
-            }
-            selected_mode = st.selectbox(
-                "Mode Selection",
-                options=list(mode_options.keys()),
-                format_func=lambda x: mode_options[x],
-                index=list(mode_options.keys()).index(load_key("sf_fish_tts.mode")) if load_key("sf_fish_tts.mode") in mode_options.keys() else 0
-            )
-            if selected_mode != load_key("sf_fish_tts.mode"):
-                update_key("sf_fish_tts.mode", selected_mode)
-
-            if selected_mode == "preset":
-                config_input("Voice", "sf_fish_tts.voice")
-
-        elif select_tts == "openai_tts":
-            config_input("302ai API", "openai_tts.api_key")
-            config_input("OpenAI Voice", "openai_tts.voice")
-
-        elif select_tts == "fish_tts":
-            config_input("302ai API", "fish_tts.api_key")
-            fish_tts_character = st.selectbox("Fish TTS Character", options=list(load_key("fish_tts.character_id_dict").keys()), index=list(load_key("fish_tts.character_id_dict").keys()).index(load_key("fish_tts.character")))
-            if fish_tts_character != load_key("fish_tts.character"):
-                update_key("fish_tts.character", fish_tts_character)
-
-        elif select_tts == "azure_tts":
-            config_input("302ai API", "azure_tts.api_key")
-            config_input("Azure Voice", "azure_tts.voice")
-        
-        elif select_tts == "gpt_sovits":
-            st.info("Please refer to Github homepage for GPT_SoVITS configuration")
-            config_input("SoVITS Character", "gpt_sovits.character")
-            
-            refer_mode_options = {1: "Mode 1: Use provided reference audio only", 2: "Mode 2: Use first audio from video as reference", 3: "Mode 3: Use each audio from video as reference"}
-            selected_refer_mode = st.selectbox(
-                "Refer Mode",
-                options=list(refer_mode_options.keys()),
-                format_func=lambda x: refer_mode_options[x],
-                index=list(refer_mode_options.keys()).index(load_key("gpt_sovits.refer_mode")),
-                help="Configure reference audio mode for GPT-SoVITS"
-            )
-            if selected_refer_mode != load_key("gpt_sovits.refer_mode"):
-                update_key("gpt_sovits.refer_mode", selected_refer_mode)
-        elif select_tts == "edge_tts":
-            config_input("Edge TTS Voice", "edge_tts.voice")

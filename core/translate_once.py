@@ -31,11 +31,13 @@ def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_
             return valid_translate_result(response_data, ['1'], ['direct'])
         def valid_express(response_data):
             return valid_translate_result(response_data, ['1'], ['free'])
+        valid_def = valid_faith if step_name == 'faithfulness' else valid_express
         for retry in range(3):
-            if step_name == 'faithfulness':
-                result = ask_gpt(prompt+retry* " ", response_json=True, valid_def=valid_faith, log_title=f'translate_{step_name}')
-            elif step_name == 'expressiveness':
-                result = ask_gpt(prompt+retry* " ", response_json=True, valid_def=valid_express, log_title=f'translate_{step_name}')
+            # 第 2 次起 bypass_cache：此前用 `prompt + retry * " "` 加空格改 prompt 来绕过缓存，
+            # 语义晦涩且会污染日志（见 devdocs R14）
+            result = ask_gpt(prompt, response_json=True, valid_def=valid_def,
+                             log_title=f'translate_{step_name}',
+                             bypass_cache=retry > 0)
             if len(lines.split('\n')) == len(result):
                 return result
             if retry != 2:

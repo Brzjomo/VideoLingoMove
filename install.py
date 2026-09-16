@@ -14,12 +14,9 @@ __     ___     _            _     _
 """
 
 def install_package(*packages):
-    # 添加项目目录下的Python环境到PATH环境变量
-    project_dir = os.path.dirname(os.path.abspath(__file__))
-    python_path = os.path.join(project_dir, "runtime", "python")
-    os.environ["PATH"] = python_path + os.pathsep + os.environ["PATH"]
-
-    # 使用项目目录下的Python环境安装包
+    # 注意：这里曾把 <项目根>/runtime/python 前置到 PATH，但该目录在仓库中并不存在
+    # （被 .gitignore 排除），因此那段注入实际不生效；真正使用的是 sys.executable。
+    # 已移除以免误导（见 devdocs 已知问题 R12）。
     subprocess.check_call([sys.executable, "-m", "pip", "install", *packages])
 
 def check_nvidia_gpu():
@@ -83,6 +80,7 @@ def download_ffmpeg_windows(target_dir):
         return True
     except Exception as e:
         console.print(f"❌ Failed to download or extract FFmpeg: {e}", style="red")
+        return False
 
 
 def check_ffmpeg():
@@ -98,7 +96,10 @@ def check_ffmpeg():
     except (subprocess.CalledProcessError, FileNotFoundError):
         system = platform.system()
         install_cmd = ""
-        
+        # 默认值：Windows 分支不走"手动安装"提示，但共用代码引用了它，
+        # 此前 Windows 上 ffmpeg 缺失会因未定义变量抛 NameError（见 devdocs 已知问题 P3-19）。
+        extra_note = ""
+
         if system == "Windows":
            target_dir = os.getcwd()  # 获取当前工作目录
            os.makedirs(target_dir, exist_ok=True)  # 确保目录存在

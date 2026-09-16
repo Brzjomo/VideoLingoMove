@@ -18,7 +18,7 @@ SAVE_DIR = 'batch/output'
 ERROR_OUTPUT_DIR = 'batch/output/ERROR'
 YTB_RESOLUTION_KEY = "ytb_resolution"
 
-def process_video(video_storage_folder, file, dubbing=False, is_retry=False, save_to_video_storage_folder=True, preprocess_only=False, skip_preprocess=False):
+def process_video(video_storage_folder, file, is_retry=False, save_to_video_storage_folder=True, preprocess_only=False, skip_preprocess=False):
     global INPUT_DIR
     INPUT_DIR = video_storage_folder
 
@@ -29,14 +29,15 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False, sav
         os.makedirs('output/audio', exist_ok=True)
         os.makedirs('output/log', exist_ok=True)
 
-    # 批量处理TOS监控
+    # TOS 状态提示（真正的上传/删除由 core/all_whisper_methods/tos_service.py 完成，
+    # 该模块是唯一的 TOS 实现；历史上这里曾有一个未接线的 BatchTOSManager，已合并）
     try:
-        from tos_manager import get_batch_tos_manager
-        tos_manager = get_batch_tos_manager()
-        if tos_manager.is_enabled():
-            console.print(f"[cyan]🔧 批量处理TOS监控: 视频 '{file}' 开始处理[/cyan]")
-    except ImportError:
-        pass  # 如果TOS管理器不可用，继续正常处理
+        from core.all_whisper_methods.tos_service import get_tos_service
+        tos_service = get_tos_service()
+        if tos_service.is_enabled():
+            console.print(f"[cyan]🔧 TOS 已启用（自动清理: {tos_service.auto_cleanup}）: 视频 '{file}' 开始处理[/cyan]")
+    except Exception as e:
+        console.print(f"[yellow]⚠️ TOS 状态检查失败，继续正常处理: {e}[/yellow]")
     
     # 如果跳过预处理，先尝试恢复预处理文件
     if skip_preprocess:
@@ -61,24 +62,12 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False, sav
         ("⚡ Processing and aligning subtitles", process_and_align_subtitles),
     ]
 
-    # 如果不是预处理模式，检查是否需要添加字幕烧录步骤
-    if not preprocess_only and not skip_preprocess:
-        try:
-            # 检查分辨率是否为"0x0"来判断是否启用字幕烧录
-            if load_key("resolution") != "0x0":
-                remaining_steps.append(("🎬 Merging subtitles to video", step7_merge_sub_to_vid.merge_subtitles_to_video))
-        except Exception as e:
-            console.print(f"[yellow]Warning: {str(e)}. Skipping subtitle burning.[/yellow]")
-    
-    if dubbing:
-        dubbing_steps = [
-            ("🔊 Generating audio tasks", gen_audio_tasks),
-            ("🎵 Extracting reference audio", step9_extract_refer_audio.extract_refer_audio_main),
-            ("🗣️ Generating audio", step10_gen_audio.gen_audio),
-            ("🔄 Merging full audio", step11_merge_full_audio.merge_full_audio),
-            ("🎞️ Merging dubbing to video", step12_merge_dub_to_vid.merge_video_audio),
-        ]
-        remaining_steps.extend(dubbing_steps)
+    # 是否烧录字幕只取决于 preprocess_only 与 "Burn-in Subtitles" 开关。
+    # 该开关在侧边栏以 resolution 表达：开启=具体分辨率，关闭='0x0'。
+    # 曾经这里的条件是 `not preprocess_only and not skip_preprocess`，导致勾选
+    # "优先进行本地计算"（skip_preprocess=True）时被静默跳过烧录，不产出 output_sub.mp4。
+    if not preprocess_only and load_key("resolution") != "0x0":
+        remaining_steps.append(("🎬 Merging subtitles to video", step7_merge_sub_to_vid.merge_subtitles_to_video))
 
     # 选择要执行的步骤
     if preprocess_only:
@@ -128,9 +117,11 @@ def process_video(video_storage_folder, file, dubbing=False, is_retry=False, sav
     if not preprocess_only:
         # 更新总token数
         eu.add_to_total_tokens()
-        # 更新总时间
-        eu.add_to_total_time()
-        
+        # 注意：总耗时已由 core/step6_generate_final_timeline.record_summary_info()
+        # 累加到 eu.total_time_duration，这里**不能**再调 add_to_total_time()，
+        # 否则批量统计里的总耗时约为真值的 2 倍（见 devdocs 已知问题 P3-30）。
+        eu.add_to_total_cost()
+
         # 记录当前视频的消耗
         eu.record_messages()
         
@@ -179,10 +170,6 @@ def process_and_align_subtitles():
     step5_splitforsub.split_for_sub_main()
     step6_generate_final_timeline.align_timestamp_main()
 
-def gen_audio_tasks():
-    step8_1_gen_audio_task.gen_audio_task_main()
-    step8_2_gen_dub_chunks.gen_dub_chunks()
-
 def record_start():
     record_start_time()
     reset_tokens()
@@ -196,109 +183,154 @@ def reset_tokens():
     eu.total_tokens = 0
 
 def save_subbtitles(save_to_video_storage_folder):
+    """保存字幕。
+
+    产出三份：
+      1. `batch/output/SavedSubbtitles/<video_name>_subtitles.zip`（打包字幕 + 转录文本）
+      2. `output/<video_name>.srt` 与 `output/<video_name>.txt`
+         → 随后被 `cleanup(SAVE_DIR)` 整体搬进 `batch/output/<video_name>/`
+      3. 复制到**输入视频所在目录**（`INPUT_DIR`），作为"该视频已翻译"的判据，
+         批量模式下次运行时会据此跳过
+
+    ⚠️ 顺序很重要：`<video_name>.srt` 必须在**做任何 `os.path.isfile` 判断或打包之前**
+    就写到 output/ 下。历史上这一步是靠 zip 循环里的 `copy_as_default_subbtitle()`
+    顺带完成的；重构时该调用被移除、但"先判断后写"的顺序被保留，导致：
+      - 字幕没有出现在 output/ → 归档目录里也就没有
+      - 复制到输入目录的 `os.path.isfile` 判断恒为 False → 输入目录拿不到字幕
+    """
     console.print("Saving subtitles...")
     subbtitles_save_dir = "batch/output/SavedSubbtitles"
     os.makedirs(subbtitles_save_dir, exist_ok=True)
     zip_buffer = io.BytesIO()
     output_dir = "output"
     log_dir = os.path.join(output_dir, "log")
-    video_name = eu.original_name
+    video_name = eu.original_name or "video"
+
+    # ① 先把"默认字幕"落盘（双语字幕 trans_src 的内容），文件名与视频同名。
+    #    这是后续所有复制动作的来源，必须先于任何存在性判断执行。
+    default_srt_src = os.path.join(output_dir, "trans_src.srt")
+    if not os.path.isfile(default_srt_src):
+        default_srt_src = os.path.join(output_dir, "trans.srt")
+    default_srt = os.path.join(output_dir, video_name + ".srt")
+    if os.path.isfile(default_srt_src):
+        shutil.copy(default_srt_src, default_srt)
+        console.print(f"[green]✓ 已生成默认字幕: {default_srt}[/green]")
+    else:
+        console.print(f"[yellow]⚠️ 未找到 trans_src.srt / trans.srt，无法生成 {video_name}.srt[/yellow]")
+
+    # 转录文本同样先落到 output/，便于归档与复制
+    transcript_path = os.path.join(log_dir, "sentence_splitbymeaning.txt")
+    transcript_out = os.path.join(output_dir, video_name + ".txt")
+    if os.path.isfile(transcript_path):
+        shutil.copy(transcript_path, transcript_out)
+
+    # ② 打包 zip（与 st_components.imports_and_utils.download_subtitle_zip_button 同一套命名与去重逻辑）
+    entries = {}
+    for file_name in sorted(os.listdir(output_dir)):
+        file_path = os.path.join(output_dir, file_name)
+        if file_name.endswith(".srt") and os.path.isfile(file_path):
+            if file_name == f"{video_name}.srt":
+                continue  # 默认字幕，下面单独加入，避免重名条目
+            entries[subtitle_zip_name(file_name, video_name)] = file_path
+
+    if os.path.isfile(default_srt):
+        entries[f"{video_name}.srt"] = default_srt
+    if os.path.isfile(transcript_out):
+        entries[f"{video_name}.txt"] = transcript_out
 
     with zipfile.ZipFile(zip_buffer, "w") as zip_file:
-        for file_name in os.listdir(output_dir):
-            file_path = os.path.join(output_dir, file_name)
-            if file_name.endswith(".srt") and os.path.isfile(file_path):
-                if "src_trans" in file_name:
-                    new_name = video_name + "_src_trans.srt"
-                elif "trans_src" in file_name:
-                    new_name = video_name + "_trans_src.srt"
-                    # 复制一份默认字幕
-                    copy_as_default_subbtitle(output_dir, file_name, video_name + ".srt")
-                    zip_file.write(file_path, video_name + ".srt")
-                elif "src" in file_name:
-                    new_name = video_name + "_src.srt"
-                elif "trans" in file_name:
-                    new_name = video_name + "_trans.srt"
-                else:
-                    new_name = file_name
-                
-                zip_file.write(file_path, new_name)
+        for arcname, path in entries.items():
+            zip_file.write(path, arcname)
 
-        # 添加log文件夹下的转录文件，用于后续AI总结
-        specific_txt_file = "sentence_splitbymeaning.txt"
-        specific_txt_path = os.path.join(log_dir, specific_txt_file)
-        new_txt_name = video_name + '.txt'
-        if os.path.isfile(specific_txt_path):
-            zip_file.write(specific_txt_path, new_txt_name)
-            shutil.copy(specific_txt_path, os.path.join(output_dir, new_txt_name))
-
+    # ③ 复制到输入视频所在目录，形成"已翻译"闭环（下次批量运行会据此跳过该视频）
     if save_to_video_storage_folder:
-        # 将与video_name同名的srt文件和txt文件复制到视频存储文件夹INPUT_DIR
-        if os.path.isfile(os.path.join(output_dir, video_name + ".srt")):
-            shutil.copy(os.path.join(output_dir, video_name + ".srt"), os.path.join(INPUT_DIR, video_name + ".srt"))
-        if os.path.isfile(os.path.join(output_dir, video_name + '.txt')):
-            shutil.copy(os.path.join(output_dir, video_name + '.txt'), os.path.join(INPUT_DIR, video_name + '.txt'))
+        copied = []
+        for src, name in ((default_srt, video_name + ".srt"), (transcript_out, video_name + ".txt")):
+            if os.path.isfile(src):
+                try:
+                    os.makedirs(INPUT_DIR, exist_ok=True)
+                    shutil.copy(src, os.path.join(INPUT_DIR, name))
+                    copied.append(name)
+                except Exception as e:
+                    console.print(f"[red]❌ 复制 {name} 到输入目录失败: {e}[/red]")
+        if copied:
+            console.print(f"[green]✓ 已复制到输入目录 {INPUT_DIR}: {copied}[/green]")
+        else:
+            console.print(f"[yellow]⚠️ 没有可复制到输入目录 {INPUT_DIR} 的字幕文件[/yellow]")
 
     zip_buffer.seek(0)
-    with open(os.path.join(subbtitles_save_dir, video_name + "_subtitles" + ".zip"), 'wb') as f:
+    zip_path = os.path.join(subbtitles_save_dir, video_name + "_subtitles" + ".zip")
+    with open(zip_path, 'wb') as f:
         f.write(zip_buffer.read())
+    console.print(f"[green]✓ 已保存字幕包: {zip_path}（{len(entries)} 个条目）[/green]")
 
-def copy_as_default_subbtitle(folder_path, file_name, file_new_name):
-    file_path = os.path.join(folder_path, file_name)
-    if os.path.isfile(file_path):
-        shutil.copy(file_path, os.path.join(folder_path, file_new_name))
-    else:
-        print(f"{folder_path} 不存在文件 {file_name}")
+def required_preprocess_files():
+    """预处理缓存所需的文件清单（按 ASR 引擎区分）。
+
+    `for_whisper.mp3` 只在使用 Whisper 引擎时才生成；火山引擎路径不存在该文件。
+    若把它列为必需，`prioritize_local` 的缓存恢复会必然失败（见 devdocs 已知问题 R2）。
+    """
+    files = ['raw.mp3', 'cleaned_chunks.xlsx']
+    try:
+        engine = load_key('asr_engine')
+    except Exception:
+        engine = 'whisper'
+    if engine != 'volcano':
+        files.insert(1, 'for_whisper.mp3')
+    return files
+
+
+PREPROCESS_FILE_MAP = [
+    ('raw.mp3', 'output/audio/raw.mp3'),
+    ('for_whisper.mp3', 'output/audio/for_whisper.mp3'),
+    ('cleaned_chunks.xlsx', 'output/log/cleaned_chunks.xlsx'),
+]
+
 
 def restore_preprocessed_files(file):
     """从临时目录恢复预处理文件"""
     # 获取视频名（不含扩展名）
     video_name = os.path.splitext(os.path.basename(file))[0]
     temp_dir = os.path.join('batch', 'temp_preprocess', video_name)
-    
+
     console.print(f"[cyan]Restoring preprocessed files from {temp_dir}[/cyan]")
-    
+
     # 检查临时目录是否存在
     if not os.path.exists(temp_dir):
         raise Exception(f"临时目录不存在: {temp_dir}")
-    
+
     # 检查所需文件是否都存在
-    required_files = ['raw.mp3', 'for_whisper.mp3', 'cleaned_chunks.xlsx']
+    required_files = required_preprocess_files()
     missing_files = [f for f in required_files if not os.path.exists(os.path.join(temp_dir, f))]
     if missing_files:
         raise Exception(f"缺少预处理文件: {', '.join(missing_files)}")
-    
+
     # 确保目标目录存在
     os.makedirs('output/audio', exist_ok=True)
     os.makedirs('output/log', exist_ok=True)
-    
-    # 恢复文件
+
+    # 恢复文件（只恢复实际存在的；非必需文件缺失不报错）
+    restored = []
     try:
-        for src_name, dst_path in [
-            ('raw.mp3', 'output/audio/raw.mp3'),
-            ('for_whisper.mp3', 'output/audio/for_whisper.mp3'),
-            ('cleaned_chunks.xlsx', 'output/log/cleaned_chunks.xlsx')
-        ]:
+        for src_name, dst_path in PREPROCESS_FILE_MAP:
             src_path = os.path.join(temp_dir, src_name)
-            dst_dir = os.path.dirname(dst_path)
-            os.makedirs(dst_dir, exist_ok=True)
+            if not os.path.exists(src_path):
+                continue
+            os.makedirs(os.path.dirname(dst_path), exist_ok=True)
             shutil.copy2(src_path, dst_path)
+            restored.append(dst_path)
             console.print(f"[green]✓ Restored {src_name} to {dst_path}[/green]")
     except Exception as e:
         raise Exception(f"恢复文件失败: {str(e)}")
-    
-    # 验证文件是否已正确恢复
-    for _, dst_path in [
-        ('raw.mp3', 'output/audio/raw.mp3'),
-        ('for_whisper.mp3', 'output/audio/for_whisper.mp3'),
-        ('cleaned_chunks.xlsx', 'output/log/cleaned_chunks.xlsx')
-    ]:
-        if not os.path.exists(dst_path):
-            raise Exception(f"文件恢复失败，目标文件不存在: {dst_path}")
+
+    # 验证必需文件已正确恢复且非空
+    for _, dst_path in PREPROCESS_FILE_MAP:
+        if dst_path not in restored:
+            continue
         if os.path.getsize(dst_path) == 0:
             raise Exception(f"文件恢复失败，目标文件为空: {dst_path}")
-    
-    console.print("[bold green]✓ All preprocessed files restored successfully[/bold green]")
+
+    console.print("[bold green]✓ All required preprocessed files restored successfully[/bold green]")
     return None
 
 # 添加新的函数用于生成总结报告

@@ -23,14 +23,39 @@ console = Console()
 # 定义全局配置文件路径
 CONFIG_PATH = os.path.join(root_dir, 'config.yaml')
 
+# Windows 控制台默认 GBK，emoji 输出会崩，这里统一成 UTF-8
+import easy_util as _eu
+_eu.ensure_utf8_console()
+
 def check_api():
-    """检查API状态"""
+    """检查 API 连通性（绕过缓存，见 devdocs 已知问题 P1-8）"""
     try:
         resp = ask_gpt("This is a test, response 'message':'success' in json format.",
-                      response_json=True, log_title='None')
+                      response_json=True, log_title=None, use_cache=False)
         return resp.get('message') == 'success'
     except Exception:
         return False
+
+
+def archive_previous_batch_output(batch_output_dir):
+    """把上一批的 batch/output 移到带时间戳的归档目录，而不是直接删除。
+
+    这样重复点击「开始批量处理」不会丢掉上一次的结果。
+    归档目录名形如 `output_archive_20260206_153012`，位于 batch/ 下。
+    """
+    if not os.path.isdir(batch_output_dir):
+        return
+    if not os.listdir(batch_output_dir):
+        return  # 空目录无需归档
+    import time as _time
+    stamp = _time.strftime('%Y%m%d_%H%M%S')
+    archive_dir = os.path.join(root_dir, 'batch', f'output_archive_{stamp}')
+    try:
+        os.rename(batch_output_dir, archive_dir)
+        print(f"[batch] 上一批产物已归档到 {archive_dir}")
+    except OSError:
+        # 归档失败（如被占用）时退回删除，保证流程能继续
+        shutil.rmtree(batch_output_dir, ignore_errors=True)
 
 def init_session_state():
     if 'processing' not in st.session_state:
@@ -376,11 +401,11 @@ def main():
                     use_container_width=True,
                     on_click=start_processing):
             try:
-                # 清理并重建output目录
+                # 把上一批的产物归档而不是直接删除（此前每次点击都会 rmtree，
+                # 导致历史结果丢失，见 devdocs 已知问题 P3-34）
                 batch_output_dir = os.path.join(root_dir, 'batch', 'output')
-                if os.path.exists(batch_output_dir):
-                    shutil.rmtree(batch_output_dir)
-                os.makedirs(batch_output_dir)
+                archive_previous_batch_output(batch_output_dir)
+                os.makedirs(batch_output_dir, exist_ok=True)
                 
                 # 修改工作目录到项目根目录
                 os.chdir(root_dir)
