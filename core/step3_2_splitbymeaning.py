@@ -6,7 +6,7 @@ from core.prompts_storage import get_split_prompt
 from difflib import SequenceMatcher
 import math
 from core.spacy_utils.load_nlp_model import init_nlp
-from core.config_utils import load_key, get_joiner
+from core.config_utils import load_key, get_joiner, use_llm_sentence_split
 from rich.console import Console
 from rich.table import Table
 
@@ -175,17 +175,16 @@ def split_sentences_mechanically(sentences, max_length):
 def split_sentences_by_meaning():
     """The main function to split sentences by meaning.
 
-    受 `llm_sentence_split` 开关控制：
-      - true （默认）：按句意调 LLM 重切（Netflix 标准，消耗 token）
-      - false        ：跳过 LLM，直接把 spaCy 结果作为输出（零 token）
+    是否调 LLM 由 `core.config_utils.use_llm_sentence_split()` 统一判定：
+      - 正常翻译模式：强制使用 LLM（保证按意群断句）
+      - 仅转录模式  ：受 `llm_sentence_split` 控制，可关闭以省 token
     """
     # read input sentences
     with open('output/log/sentence_splitbynlp.txt', 'r', encoding='utf-8') as f:
         sentences = [line.strip() for line in f.readlines() if line.strip()]
 
-    if not load_key("llm_sentence_split"):
-        console.print('[yellow]⏭️ llm_sentence_split = false：跳过 LLM 断句优化，'
-                      '直接使用 spaCy 切分结果（零 LLM 调用）[/yellow]')
+    if not use_llm_sentence_split():
+        console.print('[yellow]⏭️ 已关闭 LLM 断句优化：直接使用 spaCy 切分结果（零 LLM 调用）[/yellow]')
         with open('output/log/sentence_splitbymeaning.txt', 'w', encoding='utf-8') as f:
             f.write('\n'.join(sentences))
         console.print(f'[green]✅ 已写出 {len(sentences)} 句（未经 LLM 优化）[/green]')

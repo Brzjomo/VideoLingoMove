@@ -141,6 +141,34 @@ def is_placeholder(value: Any) -> bool:
     return any(marker in stripped for marker in PLACEHOLDER_MARKERS)
 
 
+def use_llm_sentence_split() -> bool:
+    """是否使用 LLM 优化断句（step3_2 按句意切分、step5 切超长行）。
+
+    规则（单一判定点，避免各处判断漂移）：
+      - 正常翻译模式：**强制使用** LLM 断句。译文长度与源文差异大，
+        不做按意群的断句会直接影响双语对齐与单行长度达标。
+      - 仅转录模式（`transcription_only = true`）：允许用 `llm_sentence_split`
+        关闭它，此时只出原语言字幕，用 spaCy 结果 + 标点就近断开即可，可省下全部断句 token。
+
+    也就是说 `llm_sentence_split: false` 只在只生成原语言字幕时生效。
+    """
+    if not load_key("transcription_only"):
+        return True
+    try:
+        return bool(load_key("llm_sentence_split"))
+    except KeyError:
+        return True
+
+
+def llm_split_disabled_reason() -> str:
+    """给 UI 用的一句话说明：为什么当前不能关闭 LLM 断句。"""
+    if not load_key("transcription_only"):
+        return ("当前为翻译模式，断句优化**强制开启**（译文与源文长度差异大，"
+                "不做按意群断句会影响双语对齐与单行长度）。"
+                "如需关闭，请先打开「只生成原语言字幕 (跳过翻译)」。")
+    return ""
+
+
 if __name__ == "__main__":
     print(load_key('language_split_with_space'))
 

@@ -196,16 +196,25 @@ def page_setting():
         if transcription_only != load_key("transcription_only"):
             update_key("transcription_only", transcription_only)
 
-        # 断句优化开关：控制 step3_2（按句意切分）与 step5（超长行切分）是否调用 LLM
-        llm_sentence_split = st.toggle(
-            "使用 LLM 优化断句",
-            value=load_key("llm_sentence_split"),
-            help="开启：按意群断句，字幕更符合 Netflix 单行标准，但会消耗 LLM token；"
-                 "关闭：只用 spaCy 结果 + 标点就近断开，零 LLM 调用，断行略生硬。"
-                 "（不影响翻译本身的 LLM 调用）"
-        )
-        if llm_sentence_split != load_key("llm_sentence_split"):
-            update_key("llm_sentence_split", llm_sentence_split)
+        # 断句优化开关。
+        # 规则：翻译模式下**强制开启**（译文与源文长度差异大，不做按意群断句会影响
+        # 双语对齐与单行长度达标），因此那时不显示开关；只有"只生成原语言字幕"时才允许关闭。
+        # 判定与执行统一走 core.config_utils.use_llm_sentence_split()，避免 UI 与代码漂移。
+        if transcription_only:
+            llm_sentence_split = st.toggle(
+                "使用 LLM 优化断句",
+                value=load_key("llm_sentence_split"),
+                help="开启：按意群断句，字幕更符合 Netflix 单行标准，但会消耗 LLM token；"
+                     "关闭：只用 spaCy 结果 + 标点就近断开，零 LLM 调用，断行略生硬。"
+            )
+            if llm_sentence_split != load_key("llm_sentence_split"):
+                update_key("llm_sentence_split", llm_sentence_split)
+        else:
+            # 翻译模式：把配置强制纠正为 true，保证后续步骤真的走 LLM 断句
+            if not load_key("llm_sentence_split"):
+                update_key("llm_sentence_split", True)
+            st.caption("ℹ️ 断句优化已启用且不可关闭：翻译模式下需要按意群断句来保证"
+                       "双语对齐与单行长度。如需关闭，请先打开上面的「只生成原语言字幕」。")
 
         burn_subtitles = st.toggle("Burn-in Subtitles", value=load_key("resolution") != "0x0", help="takes longer time")
         

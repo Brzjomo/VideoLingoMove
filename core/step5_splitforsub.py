@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.step3_2_splitbymeaning import split_sentence, split_by_punctuation
 from core.ask_gpt import ask_gpt
 from core.prompts_storage import get_align_prompt
-from core.config_utils import load_key, get_joiner
+from core.config_utils import load_key, get_joiner, use_llm_sentence_split
 from rich.panel import Panel
 from rich.console import Console
 from rich.table import Table
@@ -97,9 +97,10 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str]) -> Tuple[List[st
 
     # 直通模式（transcription_only）下 Source 与 Translation 是同一份文本，
     # 此时 align_subs 等于"让 LLM 把一段文本与它自己对- 齐"，结果必然等于输入。
-    # 直接按行数机械切分即可，省掉每条超长字幕的一次 LLM 调用（见 devdocs）。
+    # 直接按行数机械切分即可，省掉每条超长字幕的一次 LLM 调用（见 devdocs R16）。
     identical_src_trans = src_lines == tr_lines
-    use_llm = bool(load_key("llm_sentence_split"))
+    # 是否用 LLM 切分由 use_llm_sentence_split() 统一判定（翻译模式强制开启）
+    use_llm = use_llm_sentence_split()
 
     to_split = []
     for i, (src, tr) in enumerate(zip(src_lines, tr_lines)):
