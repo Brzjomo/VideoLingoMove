@@ -79,6 +79,12 @@ TORCHVISION_VERSION = "0.23.0"
 #   3. 重新运行安装脚本，它会**优先使用已存在的本地文件**，不再联网。
 # 目录名以 "_" 开头，排序时靠前、便于手动找到；已在 .gitignore 中排除。
 DEFAULT_DOWNLOAD_DIR = "_downloads"
+#: 项目根 —— **所有项目内路径都必须挂在这里，不能依赖 cwd**。
+#: 2026-09-19 实测踩到：`nltk_data_dir()` 原先返回相对路径，从别的 cwd 调用时
+#: `punkt_tab_installed()` 会去看 `C:\_model_cache\nltk_data` 从而误判为"未安装"，
+#: 明明装好了却触发下载（或反之）。安装器虽然一般从项目根启动，但用户可能
+#: 从任意目录调用 `python <路径>\installer.py`。
+PROJECT_ROOT = Path(__file__).resolve().parent
 # pip 下载缓存也指到这里，便于统一清理/搬移
 PIP_DL_CACHE_DIR = os.path.join(DEFAULT_DOWNLOAD_DIR, ".pip-cache")
 # uv 生成的锁定文件（带平台信息，不进版本库，每次安装重新生成）
@@ -1434,8 +1440,12 @@ def _extract_ffmpeg_zip(cached_zip, target_dir):
 
 
 def nltk_data_dir():
-    """返回项目内 NLTK 数据目录（`_model_cache/nltk_data`）。"""
-    return Path(NLTK_DATA_DIR_NAME)
+    """返回项目内 NLTK 数据目录（`<项目>/_model_cache/nltk_data`）。
+
+    ⚠️ 用 `PROJECT_ROOT` 而不是相对路径：安装器可能被从任意 cwd 调用，
+    相对路径会让"是否已安装"的判断看错目录（见 `PROJECT_ROOT` 的注释）。
+    """
+    return PROJECT_ROOT / NLTK_DATA_DIR_NAME
 
 
 def punkt_tab_dir():
@@ -1476,7 +1486,11 @@ def install_nltk_punkt_tab(download_dir=None):
     import zipfile
 
     if punkt_tab_installed():
-        info(f"✅ NLTK punkt_tab 已就位：{punkt_tab_dir()}", style="green")
+        # 必须**显式打印**。原先这里是静默返回，用户跑 Install.bat 时看不到
+        # 任何与 punkt_tab 有关的输出，会误以为"这步没执行/没下载"（实测反馈）。
+        langs = len([p for p in punkt_tab_dir().iterdir() if p.is_dir()])
+        info(f"✅ NLTK punkt_tab 已就位（{langs} 种语言），跳过下载：{punkt_tab_dir()}",
+             style="green")
         return nltk_data_dir()
 
     cache_dir = ensure_download_dir(download_dir)
@@ -1988,8 +2002,10 @@ __     ___     _            _     _
     # `nltk.download()` 会被网络策略拦（SSRF/Security Violation），
     # 必须在安装期先装到项目内。装不上不致命 —— 报一条 warning 继续，
     # 由体检的 --smoke 或运行时错误暴露。
-    if not punkt_tab_installed():
-        install_nltk_punkt_tab(download_dir=args.download_dir)
+    #
+    # 注意是**无条件调用**（函数内部自己判断"已就位就跳过"并打印），
+    # 这样跑安装时一定能看到 punkt_tab 这一行的状态，不会像原先那样静默。
+    install_nltk_punkt_tab(download_dir=args.download_dir)
 
     maybe_configure_mirror(args.auto_mirror)
 
