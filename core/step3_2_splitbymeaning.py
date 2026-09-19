@@ -55,17 +55,24 @@ def split_sentence(sentence, num_parts, word_limit=18, index=-1, retry_attempt=0
     而不是靠 `prompt + ' ' * retry_attempt` 改变 prompt 字符串去绕过缓存（见 devdocs R14）。
     """
     split_prompt = get_split_prompt(sentence, num_parts, word_limit)
+
     def valid_split(response_data):
-        if 'split' not in response_data:
-            return {"status": "error", "message": "Missing required key: `split`"}
-        if "[br]" not in response_data["split"]:
-            return {"status": "error", "message": "Split failed, no [br] found"}
+        # 提示词要求模型给出两个候选并自行选定：choice ∈ {1, 2}，选中项在 split{choice}。
+        # 与提示词必须成对修改 —— 只改一边会让每个长句都校验失败并重试 3 次。
+        choice = str(response_data.get("choice", "")).strip()
+        if choice not in ("1", "2"):
+            return {"status": "error", "message": "Missing or invalid `choice` (expected 1 or 2)"}
+        if f"split{choice}" not in response_data:
+            return {"status": "error", "message": f"Missing required key: `split{choice}`"}
+        if "[br]" not in str(response_data[f"split{choice}"]):
+            return {"status": "error", "message": f"Split failed, no [br] found in `split{choice}`"}
         return {"status": "success", "message": "Split completed"}
 
     response_data = ask_gpt(split_prompt, response_json=True, valid_def=valid_split,
                             log_title='sentence_splitbymeaning',
                             bypass_cache=retry_attempt > 0)
-    best_split = response_data["split"]
+    # 归一化后再取键：choice 可能返回数字 1 或字符串 "1"
+    best_split = response_data[f"split{str(response_data.get('choice', '')).strip()}"]
     split_points = find_split_positions(sentence, best_split)
     # split the sentence based on the split points
     for i, split_point in enumerate(split_points):

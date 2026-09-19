@@ -15,14 +15,23 @@ Split the given subtitle text into {num_parts} parts, each less than {word_limit
 
 ### Instructions
 1. Maintain sentence meaning coherence according to Netflix subtitle standards
-2. Keep parts roughly equal in length (minimum 3 words each)
+2. MOST IMPORTANT: Keep parts roughly equal in length (minimum 3 words each)
 3. Split at natural points like punctuation marks or conjunctions
 4. If provided text is repeated words, simply split at the middle of the repeated words.
 
+### Steps
+1. Analyze the sentence structure, complexity, and key splitting challenges
+2. Generate two alternative splitting approaches with [br] tags at split positions
+3. Compare both approaches, highlighting their strengths and weaknesses
+4. Choose the better approach
+
 ### Output Format in JSON
 {{
-    "analysis": "Brief analysis of the text structure",
-    "split": "Complete sentence with [br] tags at split positions"
+    "analysis": "Brief description of sentence structure, complexity, and key splitting challenges",
+    "split1": "First splitting approach with [br] tags at split positions",
+    "split2": "Alternative splitting approach with [br] tags at split positions",
+    "assess": "Comparison of both approaches, highlighting their strengths and weaknesses",
+    "choice": "1 or 2"
 }}
 
 ### Given Text
@@ -67,7 +76,7 @@ For the provided {src_lang} video text:
    - Mark professional terms and names (excluding those listed in Existing Terms)
    - Provide {tgt_lang} translation or keep original
    - Add brief explanation
-   - Keep abbreviations and proper nouns unchanged
+   - Extract less than 15 terms
 
 ### Output Format
 Please output your analysis results in the following JSON format, where <> represents placeholders:
@@ -203,7 +212,7 @@ Please use a two-step thinking process to handle the text line by line:
 1. Direct Translation Reflection:
    - Evaluate language fluency
    - Check if the language style is consistent with the original text
-   - Check the conciseness of the subtitles, point out where the translation is too wordy, the translation should be close to the original text in length
+   - Check the conciseness of the subtitles, point out where the translation is too wordy
 
 2. {TARGET_LANGUAGE} Free Translation:
    - Aim for contextual smoothness and naturalness, conforming to {TARGET_LANGUAGE} expression habits

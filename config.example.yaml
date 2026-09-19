@@ -133,9 +133,12 @@ allowed_audio_formats:
 - 'flac'
 - 'm4a'
 
-# LLMs that support returning JSON format
+# 支持 response_format={"type":"json_object"} 的模型白名单（精确匹配 api.model）。
+# 不在此列表中的模型不会传 response_format，此时完全依赖 json_repair 兜底解析 ——
+# 能用，但遇到不合规输出时会走重试。换用新模型时记得把它加进来。
 llm_support_json:
 - 'deepseek-flash'
+- 'deepseek/deepseek-v4-flash' # OpenRouter 命名风格（上游 3.x 的默认模型）
 - 'deepseek-v4-pro'
 - 'gpt-4o'
 - 'gpt-4o-mini'

@@ -97,7 +97,7 @@ def translate_all():
 
     # Original translation logic below
     console.print("[bold green]Start Translating All...[/bold green]")
-    chunks = split_chunks_by_chars(chunk_size=500, max_i=10)
+    chunks = split_chunks_by_chars(chunk_size=600, max_i=10)
     # 键名与提示词保持一致：get_summary_prompt 要求输出 "topic"
     # （此前读的是 'theme'，导致主题上下文恒为 None，见 devdocs 已知问题 P1-6）
     with open(TERMINOLOGY_FILE, 'r', encoding='utf-8') as file:
