@@ -1,9 +1,13 @@
 [server]
 maxUploadSize = 4096
-# 关闭文件监听：本流水线会在运行中持续写 output/ 并重写 config.yaml，
-# 开着 watcher 会不断触发 "Source file changed" 重跑，干扰长时间任务。
-fileWatcherType = "none"
+# 故意不动 fileWatcherType（保持默认 "auto"）：
+# 实测 Streamlit 的 watcher 只对**已导入的 Python 模块文件**注册监听
+# （watcher/local_sources_watcher.py 里是 PathWatcher(filepath, ...)，
+# 非模块文件的变更会打出 "Received event for non-watched file"）。
+# 因此本流水线写 output/、重写 config.yaml 都不会触发重跑，
+# 设成 "none" 只会让开发时改 .py 不再自动重载 —— 没有收益，故不设置。
 
 [client]
-# 隐藏 Deploy / 开发者菜单，避免误触；与 st.set_option("client.toolbarMode", ...) 等价。
+# 隐藏 Deploy / 开发者菜单，避免误触。
+# 若开发时需要 ⋮ 菜单里的 Rerun，把它改回 "auto"。
 toolbarMode = "viewer"
