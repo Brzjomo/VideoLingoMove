@@ -18,7 +18,7 @@ Python 3.13 的升级 —— 环境大升级是独立的一步，需要单独验
 用法：
     python install.py                # 等价于 installer.py --launch
     python installer.py --check       # 只体检，不安装（退出码 1 表示有错误）
-    python installer.py --yes         # 非交互
+    python installer.py --force       # 忽略安装状态指纹，强制重装
     python installer.py --auto-mirror # 显式允许自动切换 pip 镜像
     python installer.py --no-launch   # 装完不启动
 """
@@ -54,11 +54,11 @@ TORCHVISION_INDEX_SUFFIX = "cu118"
 CUDA_INDEX = "https://download.pytorch.org/whl/cu118"
 CPU_INDEX = "https://download.pytorch.org/whl/cpu"
 
-# dev 的本地 wheel 约定（用户手动下载后放在项目根目录）
-LOCAL_TORCH_WHEEL = f"torch-{TORCH_VERSION}+cu118-cp310-cp310-win_amd64.whl"
+_PY_TAG = f"cp{sys.version_info[0]}{sys.version_info[1]}"  # 不能写死 cp310：闸门允许 3.10–3.12
+LOCAL_TORCH_WHEEL = f"torch-{TORCH_VERSION}+cu118-{_PY_TAG}-{_PY_TAG}-win_amd64.whl"
 
 # torch 2.1.2 + ctranslate2 4.4.0 的可用 Python 范围
-PYTHON_MIN, PYTHON_MAX = (3, 10), (3, 13)
+PYTHON_MIN, PYTHON_MAX = (3, 10), (3, 12)  # torch 2.1.2 无 cp312 wheel
 
 STATE_FILE_NAME = ".videolingo-install.json"
 
@@ -182,7 +182,7 @@ def detect_cuda_version():
     return int(match.group(1)), int(match.group(2))
 
 
-def install_torch(force=False):
+def install_torch():
     """安装与硬件匹配的 PyTorch。
 
     这是相对 dev 原脚本最实质的修复：原"无 GPU/macOS"分支打印 CPU 版提示，
@@ -370,7 +370,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="VideoLingo 安装 / 体检")
     parser.add_argument("--check", action="store_true", help="只体检不安装")
     parser.add_argument("--quiet", action="store_true", help="体检时只输出问题")
-    parser.add_argument("--yes", action="store_true", help="非交互，跳过所有确认")
+    # 故意不提供 --yes：本脚本全程非交互（不提问、不确认），没有需要"跳过"的环节
     parser.add_argument("--force", action="store_true", help="忽略安装状态，强制重装")
     parser.add_argument("--auto-mirror", action="store_true",
                         help="允许自动切换 pip 镜像（默认不改动用户全局设置）")
@@ -417,7 +417,7 @@ __     ___     _            _     _
         panel("✅ 环境已与 requirements 指纹一致，跳过基础安装。\n"
               "（需要强制重装请加 --force）", style="green")
     else:
-        install_torch(force=args.force)
+        install_torch()
         info("📦 安装 requirements.txt ...")
         pip(["-r", "requirements.txt"], retries=2, check=True)
         write_state()
