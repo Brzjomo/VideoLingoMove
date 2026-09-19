@@ -149,6 +149,14 @@ def split_sentences_main(nlp):
     print("[green]💾 Sentences split by connectors saved to →  `sentence_splitbyconnector.txt`[/green]")
 
 if __name__ == "__main__":
+    # Windows 控制台默认是 GBK，本模块会打印 emoji 与中文，直接运行会抛
+    # UnicodeEncodeError（实测 `python -m core.step2_whisperX` 会崩）。
+    # rich 的终端编码是首次打印时才决定的，因此在入口处补一次即可修复。
+    try:
+        import easy_util as _eu
+        _eu.ensure_utf8_console()
+    except Exception:
+        pass
     nlp = init_nlp()
     split_sentences_main(nlp)
     # nlp = init_nlp()
