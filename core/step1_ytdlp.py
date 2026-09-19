@@ -3,7 +3,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import glob
 import re
 import subprocess
-from core.config_utils import load_key
+from core.config_utils import load_key, load_key_or
 
 def sanitize_filename(filename):
     # Remove or replace illegal characters
@@ -36,11 +36,39 @@ def download_video_ytdlp(url, save_path='output', resolution='1080', cutoff_time
         'outtmpl': f'{save_path}/%(title)s.%(ext)s',
         'noplaylist': True,
         'writethumbnail': True,
+        # 明确要求合并成 mp4。否则 bestvideo+bestaudio 可能被合并成 mkv/webm，
+        # 后续 -c copy 与字幕烧录都按 mp4 假设，容易在这一步踩坑。
+        'merge_output_format': 'mp4',
         'postprocessors': [{
             'key': 'FFmpegThumbnailsConvertor',
             'format': 'jpg',
         }],
     }
+
+    # --- YouTube 专用设置（config 的 `youtube:` 段，缺失时视为未配置）---
+    # 用 load_key_or 是因为旧 config.yaml 里可能还没有这个段：
+    # config_utils 只在文件缺失时才从模板引导，已存在的旧文件不会自动补键。
+    youtube = load_key_or("youtube") or {}
+    if not isinstance(youtube, dict):
+        youtube = {}
+
+    # 需要登录 / 年龄限制 / 会员视频：填 Netscape 格式的 cookies.txt 路径
+    cookies_path = youtube.get("cookies_path") or ""
+    if cookies_path:
+        if os.path.exists(cookies_path):
+            ydl_opts["cookiefile"] = str(cookies_path)
+        else:
+            print(f"[yellow]⚠️ youtube.cookies_path 指向的文件不存在：{cookies_path}[/yellow]")
+
+    # 代理语义（与 yt-dlp 约定一致）：
+    #   缺省/None = 交给 yt-dlp 自己按系统与环境变量发现
+    #   空串 ""   = 显式禁用代理（环境里有 HTTP_PROXY 时很有用）
+    #   URL       = 强制使用该代理
+    proxy = youtube.get("proxy")
+    if proxy is not None:
+        if not isinstance(proxy, str):
+            raise ValueError("youtube.proxy 必须是 null、空字符串或代理 URL")
+        ydl_opts["proxy"] = proxy.strip()
 
     # Update yt-dlp to avoid download failure due to API changes
     try:
@@ -90,6 +118,13 @@ def download_video_ytdlp(url, save_path='output', resolution='1080', cutoff_time
         else:
             print(f"Video duration ({duration:.2f}s) is not longer than cutoff time. No need to cut.")
 
+# 本流程自己生成的成品，永远不算"待处理的源视频"。
+# 旧实现用 `not file.startswith("output/output")` 过滤，方向是错的（两个方向都错）：
+#   - 标题以 output 开头的合法输入（如 `output tutorial.mp4`）会被误排除；
+#   - 自己生成的 `output/OUTPUT_SUB.MP4`（大写扩展名）反而绕过过滤被当成输入。
+# 注意：`black_screen.mp4`（上传音频时包装出的占位视频）是**合法源文件**，不能排除。
+GENERATED_VIDEO_NAMES = {"output_sub.mp4", "output_dub.mp4"}
+
 def find_video_files(save_path='output'):
     """定位待处理的源视频，要求 output/ 下恰好一个视频文件。
 
@@ -98,11 +133,18 @@ def find_video_files(save_path='output'):
       - 1 个 → 返回该文件
       - 多个 → 打印告警并返回**修改时间最新**的那个（旧行为是直接抛错）
     """
-    video_files = [file for file in glob.glob(save_path + "/*") if os.path.splitext(file)[1][1:].lower() in load_key("allowed_video_formats")]
+    video_files = [
+        file for file in glob.glob(save_path + "/*")
+        if os.path.isfile(file)
+        and os.path.splitext(file)[1][1:].lower() in load_key("allowed_video_formats")
+    ]
     # change \\ to /, this happen on windows
     if sys.platform.startswith('win'):
         video_files = [file.replace("\\", "/") for file in video_files]
-    video_files = [file for file in video_files if not file.startswith("output/output")]
+    video_files = [
+        file for file in video_files
+        if os.path.basename(file).lower() not in GENERATED_VIDEO_NAMES
+    ]
 
     if len(video_files) == 0:
         raise FileNotFoundError(

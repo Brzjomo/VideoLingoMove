@@ -26,7 +26,8 @@ ollama_api:
 
 # Language settings, written into the prompt, can be described in natural language
 target_language: '简体中文'
-transcription_only: true
+# 只生成原语言字幕，跳过翻译。注意此处**只能出现一次**：
+# 曾经同时写了 true 和 false 两行，YAML 后键覆盖前键，语义完全靠顺序决定。
 transcription_only: false
 # Whether to use the LLM to optimize sentence splitting (step3_2 by meaning, step5 for long lines).
 # true  = Netflix 标准的按意群断句（质量更好，会消耗 LLM token）
@@ -92,6 +93,15 @@ tos:
 # Video resolution [0x0, 640x360, 1920x1080]  0x0 will generate a 0-second black video placeholder
 resolution: '0x0'
 ytb_resolution: '1080'
+
+# YouTube 下载设置
+youtube:
+  # 需要登录 / 年龄限制 / 会员视频：填 Netscape 格式 cookies.txt 的路径（留空表示不用）
+  cookies_path: ''
+  # 代理。留空字符串 = 显式禁用代理（环境里有 HTTP_PROXY 时有用）；
+  # 删除本行或写 null = 交给 yt-dlp 按系统/环境变量自动发现；填 URL = 强制使用该代理
+  proxy: null
+
 subtitle:
   # *Maximum length of each subtitle line in characters
   max_length: 75
