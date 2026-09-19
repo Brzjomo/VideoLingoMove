@@ -118,13 +118,21 @@ def translate_all():
                 futures.append(future)
 
             results = []
-            for future in concurrent.futures.as_completed(futures):
-                # 暂停时阻塞、停止时抛 StopTask 提前脱身：
-                # 不这样做的话，点停止后仍会把剩下所有 chunk 翻译完
-                # （max_workers 可达上千，尾巴很长）
-                eu.check_cancel()
-                results.append(future.result())
-                progress.update(task, advance=1)
+            try:
+                for future in concurrent.futures.as_completed(futures):
+                    # 暂停时阻塞、停止时抛 StopTask 提前脱身
+                    eu.check_cancel()
+                    results.append(future.result())
+                    progress.update(task, advance=1)
+            except BaseException:
+                # 撤掉**尚未开始**的任务。
+                # 只跳出收集循环是不够的：with ThreadPoolExecutor 退出时会
+                # shutdown(wait=True)，仍在排队的 chunk 会照跑完。max_workers
+                # 可达上千（dev 的默认值是 1000），不取消的话"停止"要等很久。
+                # 已经开始执行的那些无法中断，数量上界是 max_workers。
+                for pending in futures:
+                    pending.cancel()
+                raise
 
     # 按 chunk 下标还原顺序。as_completed 的返回顺序随机，而下面的回配依赖
     # 相似度取 max：内容完全相同的重复 chunk 会因为顺序不同而选到不同的那一份。
