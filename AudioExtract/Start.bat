@@ -23,7 +23,7 @@ set "CONDA_ENV=%USERPROFILE%\anaconda3\envs\videolingo"
 set "PY="
 
 if exist "%VENV_PY%" (
-    "%VENV_PY%" -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14) else 1)" >nul 2>&1
+    "%VENV_PY%" -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14)and __import__('streamlit')and __import__('rich')else 1)" >nul 2>&1
     if not errorlevel 1 (
         set "PY=%VENV_PY%"
         echo [env] using project .venv
@@ -33,7 +33,7 @@ if exist "%VENV_PY%" (
 )
 
 if exist "%CONDA_ENV%\python.exe" (
-    "%CONDA_ENV%\python.exe" -c "import sys" >nul 2>&1
+    "%CONDA_ENV%\python.exe" -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14)and __import__('streamlit')and __import__('rich')else 1)" >nul 2>&1
     if not errorlevel 1 (
         set "PY=%CONDA_ENV%\python.exe"
         echo [env] using conda env videolingo
@@ -41,7 +41,7 @@ if exist "%CONDA_ENV%\python.exe" (
     )
 )
 
-python -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14) else 1)" >nul 2>&1
+python -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14)and __import__('streamlit')and __import__('rich')else 1)" >nul 2>&1
 if not errorlevel 1 (
     set "PY=python"
     echo [env] using python on PATH
@@ -56,7 +56,7 @@ pause
 exit /b 1
 
 :run
-%PY% -c "import sys" >nul 2>&1
+%PY% -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14)and __import__('streamlit')and __import__('rich')else 1)" >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Interpreter is not usable: %PY%
     pause

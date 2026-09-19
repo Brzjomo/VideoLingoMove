@@ -28,7 +28,7 @@ set "PY="
 
 rem ---- 1) project-local .venv ------------------------------------------------
 if exist "%VENV_PY%" (
-    "%VENV_PY%" -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14) else 1)" >nul 2>&1
+    "%VENV_PY%" -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14)and __import__('streamlit')else 1)" >nul 2>&1
     if not errorlevel 1 (
         set "PY=%VENV_PY%"
         echo [env] using project .venv
@@ -39,7 +39,7 @@ if exist "%VENV_PY%" (
 
 rem ---- 2) legacy conda env --------------------------------------------------
 if exist "%CONDA_ENV%\python.exe" (
-    "%CONDA_ENV%\python.exe" -c "import sys" >nul 2>&1
+    "%CONDA_ENV%\python.exe" -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14)and __import__('streamlit')else 1)" >nul 2>&1
     if not errorlevel 1 (
         set "PY=%CONDA_ENV%\python.exe"
         echo [env] using conda env videolingo
@@ -48,7 +48,7 @@ if exist "%CONDA_ENV%\python.exe" (
 )
 
 rem ---- 3) python on PATH -----------------------------------------------------
-python -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14) else 1)" >nul 2>&1
+python -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14)and __import__('streamlit')else 1)" >nul 2>&1
 if not errorlevel 1 (
     set "PY=python"
     echo [env] using python on PATH
@@ -69,7 +69,7 @@ exit /b 1
 rem Guard: if PY somehow still points at a broken interpreter, python would
 rem drop into an interactive REPL and the window would look "hung". Verify
 rem once more and abort cleanly instead.
-%PY% -c "import sys" >nul 2>&1
+%PY% -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14)and __import__('streamlit')else 1)" >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Interpreter is not usable: %PY%
     pause
