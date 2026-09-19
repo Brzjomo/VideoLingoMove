@@ -287,7 +287,7 @@ stateDiagram-v2
 | `task_control_panel` | `st.py` | 进度条 + 暂停/继续/停止 + 术语确认界面 | `@st.fragment(run_every=1)` 每秒重跑本片段；状态分支见 §3.5 |
 | `text_processing_section` | `st.py` | 渲染「翻译和生成字幕」/「音频转录和生成原语言字幕」区块 | 读 `transcription_only` 决定标题、步骤文案、按钮文案与成功文案；`runner.state != "idle"` 时只画控制面板并 `return`；**无返回值**（返回值在 `st.py` 被忽略） |
 | `cache_maintenance_section` | `st.py` | 缓存清理入口，**与是否有素材无关** | 两个 expander：火山二级缓存 `output/log/asr_results/*.json`、内容寻址转录缓存 `.cache/asr`（，调 `transcription_cache.clear_cache`） |
-| `subtitle_length_controls` | `st.py` | 字幕长度面板 | 两个 `st.number_input` 写 `max_split_length`与 `subtitle.max_length`，「保存」按需 `update_key`、「恢复默认 (20 / 75)」；注释明确 dev 固定的 streamlit 1.38 不支持 `number_input(width=)`，故用 `use_container_width` |
+| `subtitle_length_controls` | `st.py` | 字幕长度面板 | 两个 `st.number_input` 写 `max_split_length`与 `subtitle.max_length`，「保存」按需 `update_key`、「恢复默认 (20 / 75)」；按钮宽度用官方新写法 `width="stretch"`（`use_container_width` 自 streamlit 1.49 弃用，见 §5.1 下方「宽度参数」） |
 | `main` | `st.py` | 组装页面 | `st.set_page_config` 必须在最前；`download_video_section` 的返回值决定是否渲染处理区块；`cache_maintenance_section` 无条件调用 |
 
 ### 5.2 `st_components/imports_and_utils.py`
@@ -458,7 +458,27 @@ Streamlit 只在运行期把**脚本所在目录**插入 `sys.path`（`streamlit
 `st.py` 用 `page_icon="assets/logo.svg"`，并用 `st.image("assets/logo.png", width="stretch")`。
 `use_column_width` 在 streamlit **1.40 起弃用、1.61 才从签名里移除**，而 `width="stretch"` 是 **1.49 才引入**的，
 所以真正的约束是 `streamlit>=1.49`（`requirements.txt` 钉的就是 `streamlit>=1.49.1,<2.0.0`）。
-`st.button` / `st.dataframe` / `st.download_button` 等控件的 `use_container_width=True` 不受影响。
+
+### 7.14.1 宽度参数：统一 `width="stretch"` / `width="content"`
+
+`use_container_width` 自 1.49 起也被 `width` 取代（1.61 起从签名移除、2025-12-31 后彻底删除）。
+原来给 `st.button`/`st.dataframe` 传 `use_container_width=True` 的地方**也已全部改成
+`width="stretch"`**（2026-09-20，控制台不再打弃用警告）：
+
+| 文件 | 处数 | 原来 |
+| --- | --- | --- |
+| `st.py` | 8 | `st.button(..., use_container_width=True)` |
+| `batch/utils/gui.py` | 4 | 3× `st.button` + `1× st.dataframe(styled_df, …)` |
+| `AudioExtract/gui.py` | 3 | `st.button` |
+| `st_components/sidebar_setting.py` | 1 | `st.button("🔄 获取模型列表", …)` |
+| `st_components/download_video_section.py` | 1 | `st.button("下载视频", …)` |
+
+映射规则就是官方给的那两条：`True → "stretch"`、`False → "content"`。
+本分支钉的 1.49+ 里，`number_input` / `text_input` / `selectbox` 等**也都有 `width`**
+（默认就是 `"stretch"`），所以不再需要为"1.38 不认 width"写兼容代码。
+防回归：`tests/test_streamlit_api.py` 用 `ast` 全仓扫这两种旧参数，并校验
+`width=` 只出现在签名里真的支持它的元素上（后者防"机械替换到不支持的元素"，
+同类事故见 `devdocs/05-guides/04-已知问题与技术债.md` 的 G4）。
 
 ### 7.15 音频阶段的完成判据问题已随配音链路消失
 

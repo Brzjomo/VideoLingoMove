@@ -87,11 +87,13 @@ Install.bat
 
 它会自动完成下面全部步骤，可反复运行（已装好的会跳过）：
 
-1. 准备 **Python 3.11**（3.10–3.13 也可）—— 依次尝试：复用已有 `.venv` → `py` 启动器
-   → PATH 上的 python → 让 uv 下载 → `winget` 安装 → 下载官方安装包静默安装；
+1. 准备 **Python 3.11**（3.10–3.13 也可）—— 依次尝试：**项目内 `.python\`（装过一次之后
+   就不再依赖系统 Python）** → 复用已有 `.venv` → `py` 启动器 → PATH 上的 python →
+   让 uv 下载到项目内 → `winget` 安装 → 下载官方安装包静默安装；
 2. 安装 **uv**（用于在项目内建虚拟环境，不占 C 盘）；
-3. 建 `<项目>\.venv`，把模型与下载缓存都指向项目内
-   （`_model_cache\`、`.uv-cache\`、`_downloads\`），**整个项目可直接搬移**；
+3. 建 `<项目>\.python`（解释器）与 `<项目>\.venv`（环境），把模型与下载缓存都指向项目内
+   （`_model_cache\`、`.uv-cache\`、`.pip-cache\`、`_downloads\`），**整个项目可直接搬移**；
+   `.venv` 的宿主解释器就是 `.python\` 里那个 —— 标准库不会跑到别的项目去；
 4. 安装依赖。**torch 的 CUDA 版本按显卡算力自动选择**，无需你指定：
 
    | 显卡 | 算力 | 选用的 torch 后端 |
@@ -107,7 +109,12 @@ Install.bat
 
 ### 网络不佳？先下大文件，再安装
 
-torch 的单个 wheel 有 **2.7–3.6 GB**。脚本支持"下载与安装分离"：
+torch 的单个 wheel 有 **2.7–3.6 GB**。安装脚本默认会自己把这三个轮子下到
+`_downloads\` 并**一直留在那里**（装完不删），之后无论是重装、`--force` 还是
+重建 `.venv`，都直接用本地文件，不再联网 —— 想去掉这个行为用
+`Install.bat --no-keep-wheels`。
+
+网络实在太差时还能"下载与安装分离"：
 
 ```shell
 Install.bat --download-only     # 只打印文件名/下载地址/sha256/存放位置
@@ -115,13 +122,17 @@ Install.bat --download-only     # 只打印文件名/下载地址/sha256/存放�
 Install.bat                     # 再次安装：优先使用本地文件，不再联网
 ```
 
+脚本自己下载时也支持**断点续传**（中断会留下 `xxx.whl.part`，下次接着下），
+并按索引页里的 sha256 校验，避免把损坏的 3 GB 文件装进去。
+
 同样的机制也覆盖 FFmpeg 压缩包（`_downloads\ffmpeg-win64.zip`）与其余 pip 依赖
-（`_downloads\python\`）。
+（`_downloads\python\`）。`_downloads\` 因此会有几个 GB；确认不再重装时可用
+`Cleanup.bat --clean --only downloads --yes` 释放。
 
 ### 手工步骤（等价于 Install.bat）
 
 ```shell
-python setup_env.py --python 3.11      # 建项目内 .venv + 装依赖
+python setup_env.py --python 3.11      # 建项目内 .python + .venv + 装依赖
 python installer.py --check --smoke    # 体检：逐个 import whisperx/torchcodec/pyannote
 ```
 
@@ -131,6 +142,9 @@ python installer.py --check --smoke    # 体检：逐个 import whisperx/torchco
 三个 `.bat` 都会**优先使用项目内 `.venv`**，检测不到才回退到 conda 环境 `videolingo`
 —— 旧的 conda 流程仍然可用：`conda create -n videolingo python=3.11` 后直接
 `python installer.py`。
+
+> 想让 `.venv` 换一个 Python（例如 3.11 → 3.12）要**显式重建**：`python setup_env.py --recreate`。
+> 脚本不会自作主张清空 `.venv` —— 那会连带删掉 2.7–3.6 GB 的 torch。
 
 ### 清理 / 释放 C 盘空间
 

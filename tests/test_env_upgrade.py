@@ -9,15 +9,20 @@
 """
 
 import contextlib
+import hashlib
 import io
 import os
 import pathlib
+import subprocess
 import sys
+import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import installer  # noqa: E402
+import setup_env  # noqa: E402
 
 
 class TestParseFfmpegVersion(unittest.TestCase):
@@ -233,6 +238,263 @@ class TestDownloadDirAndLocalWheels(unittest.TestCase):
     def test_python_tag_matches_interpreter(self):
         self.assertEqual(installer.current_python_tag(),
                          f"cp{sys.version_info[0]}{sys.version_info[1]}")
+
+
+class _FakeResponse:
+    """`urllib.request.urlopen` 的最小替身：够 `download_file` 用。"""
+
+    def __init__(self, body, status=200, headers=None):
+        self._body = body
+        self._pos = 0
+        self.status = status
+        self.headers = headers if headers is not None else {
+            "Content-Length": str(len(body))}
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            chunk = self._body[self._pos:]
+            self._pos = len(self._body)
+        else:
+            chunk = self._body[self._pos:self._pos + size]
+            self._pos += len(chunk)
+        return chunk
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+class TestTorchWheelRetention(unittest.TestCase):
+    """torch 轮子下完要**留在** `_downloads/`，不能装完就丢。
+
+    2026-09-19 用户要求：装好后这些 `.whl` 还得留在下载目录里，否则下次重装 /
+    重建 venv 又要重下 2.7–3.6 GB（实际就撞上了一次：`.venv` 被清空后想恢复，
+    本地一个轮子都没有）。
+
+    这些用例不联网：`download_file` 用假 response 打桩，`index_wheel_info`
+    直接给定 URL。
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = pathlib.Path(self._tmp.name) / "_downloads"
+        self.dir.mkdir(parents=True)
+
+    def _write_wheel(self, filename, size=32):
+        path = self.dir / filename
+        path.write_bytes(b"w" * size)
+        return path
+
+    # ------------------------------------------------------------ 保留下载
+    def test_all_present_means_no_download(self):
+        expect = {}
+        for pkg, _ver, filename in installer.wheel_names_for("cu128"):
+            expect[pkg] = self._write_wheel(filename)
+        with mock.patch.object(installer, "download_file",
+                               side_effect=AssertionError("不该重新下载")), \
+             mock.patch.object(installer, "index_wheel_info",
+                               side_effect=AssertionError("不该解析索引")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                found = installer.ensure_torch_wheels("cu128", str(self.dir))
+        self.assertEqual(found, expect)
+        for path in found.values():
+            self.assertTrue(path.is_file(), "已存在的轮子必须留在原地")
+
+    def test_only_missing_wheels_are_downloaded_and_kept(self):
+        names = installer.wheel_names_for("cu128")
+        kept = self._write_wheel(names[0][2])
+        calls = []
+
+        def fake_download(url, dest, sha256=None, **kwargs):
+            calls.append((url, pathlib.Path(dest).name))
+            pathlib.Path(dest).write_bytes(b"w" * 64)
+            return True
+
+        with mock.patch.object(installer, "index_wheel_info",
+                               return_value=("https://example.invalid/x.whl", None)), \
+             mock.patch.object(installer, "download_file", side_effect=fake_download):
+            with contextlib.redirect_stdout(io.StringIO()):
+                found = installer.ensure_torch_wheels("cu128", str(self.dir))
+
+        self.assertEqual(len(calls), 2, "只该下缺的那两个")
+        self.assertEqual({name for _url, name in calls},
+                         {names[1][2], names[2][2]})
+        self.assertEqual(found["torch"], kept)
+        self.assertEqual(set(found), {"torch", "torchaudio", "torchvision"})
+        # 下完就留在下载目录，下一次安装能直接复用
+        again = installer.local_wheels_for("cu128", str(self.dir))
+        self.assertEqual(set(again), {"torch", "torchaudio", "torchvision"})
+
+    def test_download_failure_is_not_fatal(self):
+        """下不下来只告警：剩下的交给 uv/pip 在线装，不能因此中断安装。"""
+        with mock.patch.object(installer, "index_wheel_info",
+                               return_value=("https://example.invalid/x.whl", None)), \
+             mock.patch.object(installer, "download_file", return_value=False):
+            with contextlib.redirect_stdout(io.StringIO()):
+                found = installer.ensure_torch_wheels("cu128", str(self.dir))
+        self.assertEqual(found, {})
+
+    # ------------------------------------------------------------ 下载器本体
+    def _patch_urlopen(self, response):
+        captured = {}
+
+        def fake_urlopen(request, timeout=None):
+            captured["headers"] = dict(getattr(request, "headers", {}) or {})
+            captured["url"] = getattr(request, "full_url", None)
+            return response
+
+        return mock.patch("urllib.request.urlopen", side_effect=fake_urlopen), captured
+
+    def test_resumes_from_part_file_with_range(self):
+        """断线留下的 `.part` 必须用 Range 接着下，而不是从头再来。"""
+        body = b"a" * 500 + b"b" * 500
+        dest = self.dir / "torch-x.whl"
+        part = self.dir / "torch-x.whl.part"
+        part.write_bytes(b"a" * 500)
+        response = _FakeResponse(b"b" * 500, status=206,
+                                 headers={"Content-Length": "500"})
+        patcher, captured = self._patch_urlopen(response)
+        with patcher:
+            with contextlib.redirect_stdout(io.StringIO()):
+                ok = installer.download_file(
+                    "https://example.invalid/w.whl", dest,
+                    sha256=hashlib.sha256(body).hexdigest())
+        self.assertTrue(ok)
+        self.assertEqual(dest.read_bytes(), body)
+        self.assertFalse(part.exists(), "成功后 .part 应该被改名成正式文件")
+        self.assertEqual(captured["headers"].get("Range"), "bytes=500-")
+
+    def test_restarts_when_server_ignores_range(self):
+        """服务器回 200（不支持 Range）时必须从头写，否则文件会被写坏。"""
+        body = b"c" * 400
+        dest = self.dir / "torch-y.whl"
+        (self.dir / "torch-y.whl.part").write_bytes(b"garbage")
+        response = _FakeResponse(body)
+        patcher, captured = self._patch_urlopen(response)
+        with patcher:
+            with contextlib.redirect_stdout(io.StringIO()):
+                ok = installer.download_file("https://example.invalid/w.whl", dest)
+        self.assertTrue(ok)
+        self.assertEqual(dest.read_bytes(), body)
+        # 仍然会带 Range（先问一句），但服务器回 200 → 必须整个重写
+        self.assertEqual(captured["headers"].get("Range"), "bytes=7-")
+
+    def test_bad_sha256_is_rejected_and_removed(self):
+        body = b"d" * 300
+        dest = self.dir / "torch-z.whl"
+        response = _FakeResponse(body)
+        patcher, _captured = self._patch_urlopen(response)
+        with patcher:
+            with contextlib.redirect_stdout(io.StringIO()):
+                ok = installer.download_file("https://example.invalid/w.whl", dest,
+                                             sha256="0" * 64)
+        self.assertFalse(ok)
+        self.assertFalse(dest.exists(), "校验没过的文件不能留在下载目录里冒充好轮子")
+        self.assertFalse((self.dir / "torch-z.whl.part").exists())
+
+    def test_existing_file_is_left_untouched(self):
+        dest = self._write_wheel("torch-keep.whl", size=8)
+        with mock.patch("urllib.request.urlopen",
+                        side_effect=AssertionError("已存在就不该联网")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                ok = installer.download_file("https://example.invalid/w.whl", dest)
+        self.assertTrue(ok)
+        self.assertEqual(dest.read_bytes(), b"w" * 8)
+
+    def test_browser_user_agent_is_sent(self):
+        """默认 `Python-urllib/3.x` 会被本机网络策略拦（实测）。"""
+        body = b"e" * 64
+        dest = self.dir / "torch-ua.whl"
+        patcher, captured = self._patch_urlopen(_FakeResponse(body))
+        with patcher:
+            with contextlib.redirect_stdout(io.StringIO()):
+                installer.download_file("https://example.invalid/w.whl", dest)
+        self.assertTrue(any("Mozilla" in str(value)
+                            for value in captured["headers"].values()))
+
+    def test_range_not_satisfiable_restarts_from_scratch(self):
+        """服务器回 416（Range 越界）时必须丢掉坏 `.part` 重来，不能一直卡住。"""
+        from urllib.error import HTTPError
+
+        body = b"f" * 128
+        dest = self.dir / "torch-416.whl"
+        (self.dir / "torch-416.whl.part").write_bytes(b"x" * 99999)
+        calls = {"n": 0}
+
+        def fake_urlopen(request, timeout=None):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise HTTPError(request.full_url, 416, "Range Not Satisfiable",
+                                {}, None)
+            return _FakeResponse(body)
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            with contextlib.redirect_stdout(io.StringIO()):
+                ok = installer.download_file("https://example.invalid/w.whl", dest,
+                                             retries=2)
+        self.assertTrue(ok)
+        self.assertEqual(dest.read_bytes(), body)
+        self.assertEqual(calls["n"], 2)
+
+    # ------------------------------------------------------------ 接线
+    def test_install_torch_wires_keep_wheels(self):
+        order = []
+        with mock.patch.object(installer, "detect_torch_backend",
+                               return_value=("cu128", "测试用")), \
+             mock.patch.object(installer, "detect_gpu_compute_cap",
+                               return_value=None), \
+             mock.patch.object(installer, "detect_cuda_version",
+                               return_value=None), \
+             mock.patch.object(installer, "ensure_torch_wheels",
+                               side_effect=lambda *a, **k: order.append("download")), \
+             mock.patch.object(installer, "report_torch_download_plan",
+                               side_effect=lambda *a, **k: order.append("report")), \
+             mock.patch.object(installer, "uv_install_torch",
+                               side_effect=lambda *a, **k: order.append("install")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                backend = installer.install_torch("cu128", download_dir=str(self.dir))
+        self.assertEqual(backend, "cu128")
+        self.assertEqual(order, ["download", "report", "install"],
+                         "必须先把轮子下下来并保留，再打印清单和安装")
+
+    def test_dry_run_never_downloads(self):
+        with mock.patch.object(installer, "detect_torch_backend",
+                               return_value=("cu128", "测试用")), \
+             mock.patch.object(installer, "detect_gpu_compute_cap",
+                               return_value=None), \
+             mock.patch.object(installer, "detect_cuda_version",
+                               return_value=None), \
+             mock.patch.object(installer, "ensure_torch_wheels",
+                               side_effect=AssertionError("dry-run 不该下载")), \
+             mock.patch.object(installer, "report_torch_download_plan"), \
+             mock.patch.object(installer, "uv_install_torch"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                backend = installer.install_torch("cu128", dry_run=True,
+                                                  download_dir=str(self.dir))
+        self.assertEqual(backend, "cu128")
+
+    def test_no_keep_wheels_skips_downloading(self):
+        with mock.patch.object(installer, "detect_torch_backend",
+                               return_value=("cu128", "测试用")), \
+             mock.patch.object(installer, "detect_gpu_compute_cap",
+                               return_value=None), \
+             mock.patch.object(installer, "detect_cuda_version",
+                               return_value=None), \
+             mock.patch.object(installer, "ensure_torch_wheels",
+                               side_effect=AssertionError("--no-keep-wheels 不该下载")), \
+             mock.patch.object(installer, "report_torch_download_plan"), \
+             mock.patch.object(installer, "uv_install_torch"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                installer.install_torch("cu128", download_dir=str(self.dir),
+                                        keep_wheels=False)
+
+    def test_cli_flag_exists(self):
+        args = installer.build_parser().parse_args(["--no-keep-wheels"])
+        self.assertTrue(args.no_keep_wheels)
+        self.assertFalse(installer.build_parser().parse_args([]).no_keep_wheels)
 
 
 class TestFfmpegSharedLibs(unittest.TestCase):
@@ -643,8 +905,58 @@ class TestUvNativePath(unittest.TestCase):
         joined = " ".join(calls[0])
         self.assertIn("--torch-backend", calls[0])
         self.assertIn("cu126", calls[0])
-        self.assertIn("torch==2.8.0", joined)
-        self.assertIn("--no-deps", calls[0])
+
+    def _uv_install_torch_args(self, backend, download_dir):
+        calls = []
+
+        class _Result:
+            returncode = 0
+
+        def fake_uv_pip(args, **kwargs):
+            calls.append(list(args))
+            return _Result()
+
+        saved = installer.uv_pip, installer.uv_exe
+        installer.uv_exe = lambda: "uv"
+        installer.uv_pip = fake_uv_pip
+        try:
+            installer.uv_install_torch(backend, download_dir=download_dir)
+        finally:
+            installer.uv_pip, installer.uv_exe = saved
+        self.assertEqual(len(calls), 1)
+        return calls[0]
+
+    def test_all_local_wheels_use_copy_link_mode(self):
+        """三个轮子都在本地时必须带 `--link-mode=copy`（实测踩到的 uv 警告）。
+
+        `--no-cache-dir` 让 uv 把轮子解到**系统临时目录**（多半 C 盘），再往项目内
+        （例如 E 盘）的 venv 里硬链接 —— 跨文件系统必然失败，于是它每次都先试一遍、
+        再退回整份复制，并打印：
+
+            warning: Failed to hardlink files; falling back to full copy.
+            This may lead to degraded performance. … set UV_LINK_MODE=copy
+
+        我们的场景里复制本来就是预期行为，所以直接指明 copy。这里同时锁住：
+        **不能**把 copy 变成全局默认 —— 从索引装（缓存与 venv 同盘）时硬链接是好的，
+        硬链上能省下一整份几 GB 的文件。
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            for _pkg, _ver, filename in installer.wheel_names_for("cu126"):
+                (pathlib.Path(tmp) / filename).write_bytes(b"w" * 32)
+            with contextlib.redirect_stdout(io.StringIO()):
+                args = self._uv_install_torch_args("cu126", tmp)
+        self.assertIn("--no-cache-dir", args)
+        self.assertIn("--link-mode=copy", args)
+
+    def test_index_wheels_keep_hardlink_mode(self):
+        """要走索引时不能带 copy：缓存与 venv 同盘，硬链接能省一整份几 GB 文件。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            with contextlib.redirect_stdout(io.StringIO()):
+                args = self._uv_install_torch_args("cu126", tmp)
+        self.assertNotIn("--no-cache-dir", args)
+        self.assertNotIn("--link-mode=copy", args)
+        self.assertIn(f"torch=={installer.TORCH_VERSION}", " ".join(args))
+        self.assertIn("--no-deps", args)
 
 
 class TestSearchboxDependency(unittest.TestCase):
@@ -817,6 +1129,213 @@ class TestNltkPunktTab(unittest.TestCase):
         self.assertEqual(os.environ.get("NLTK_DATA"), registered)
         import nltk.data
         self.assertIn(registered, nltk.data.path)
+
+
+class TestProjectLocalPython(unittest.TestCase):
+    """venv 的宿主解释器必须是**项目内**的那个（`.python/`）。
+
+    2026-09-19 实测 bug：`uv venv --python 3.11` 让 uv 在整机范围内找 3.11，
+    结果它挑中 `G:\\Git\\EOE Calendar Subscription Generator\\python`——于是
+    `.venv\\pyvenv.cfg` 写着 `home = G:\\Git\\...`：那个项目一删/一挪，本项目立刻
+    不可用，标准库路径还会出现在本项目所有 traceback 里。
+
+    更严重的是排查过程中发现的两个坑（都有回归用例在下面）：
+      * `pyvenv.cfg` 带 BOM 时 `home` 读不出来 → 被误判成"版本对不上"；
+      * 误判后的分支会 `--clear` 重建整个环境，把 3 GB 的 torch 就地删掉。
+
+    这些用例都不联网、不建真环境：只造目录结构和假的 pyvenv.cfg。
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = pathlib.Path(self._tmp.name).resolve()
+        # 用 module 级别名：`self.setup_env` 会被 unittest 当成测试方法之外的
+        # 属性，读起来也更短（下面用例里出现几十次）。
+        self.setup_env = setup_env
+        patcher = mock.patch.object(setup_env, "ROOT", self.root)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    # ---------------------------------------------------------- 造一个假环境
+    def make_venv(self, home, version_info="3.11.9"):
+        """造 `<root>/.venv`：有 Scripts/python.exe 和一份 pyvenv.cfg。
+
+        `home` 为 None 表示 pyvenv.cfg 里不写 home 这一行（模拟被删/被改坏）。
+        """
+        venv = self.root / ".venv"
+        (venv / "Scripts").mkdir(parents=True, exist_ok=True)
+        (venv / "Scripts" / "python.exe").write_bytes(b"")
+        lines = []
+        if home is not None:
+            lines.append(f"home = {home}")
+        if version_info is not None:
+            lines.append(f"version_info = {version_info}")
+        (venv / "pyvenv.cfg").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return venv
+
+    def make_project_python(self, version="3.11.14"):
+        """造 `<root>/.python/cpython-<version>-.../python.exe`。"""
+        out = (self.root / ".python" / f"cpython-{version}-windows-x86_64-none")
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "python.exe").write_bytes(b"")
+        return out / "python.exe"
+
+    # ---------------------------------------------------------- 纯函数
+    def test_version_minor_variants(self):
+        f = self.setup_env.version_minor
+        self.assertEqual(f("3.11.14"), "3.11")
+        self.assertEqual(f("3.11"), "3.11")
+        self.assertEqual(f(" 3.11.9\n"), "3.11")
+        self.assertEqual(f("3.11.14 (main, Sep 19 2026)"), "3.11")
+        self.assertIsNone(f("未知"))
+        self.assertIsNone(f(None))
+
+    def test_cfg_value_tolerates_bom(self):
+        """带 BOM 的 pyvenv.cfg 必须照样读出 home。
+
+        踩坑记录：`read_text(encoding="utf-8")` 会把 BOM 留成行首的 `\\ufeff`，
+        而 `str.strip()` 不删它（不是空白字符），于是 home 读成 None。
+        """
+        venv = self.root / ".venv"
+        venv.mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text(
+            f"home = {self.root / '.python'}\nversion_info = 3.11.14\n",
+            encoding="utf-8-sig")
+        self.assertEqual(self.setup_env.venv_base_python(venv),
+                         self.root / ".python")
+        self.assertEqual(self.setup_env.venv_base_version(venv), "3.11.14")
+
+    def test_cfg_value_matches_key_exactly(self):
+        """`version` 和 `version_info` 不能互相误命中（标准库 venv 两个都写）。"""
+        venv = self.root / ".venv"
+        venv.mkdir(parents=True)
+        (venv / "pyvenv.cfg").write_text(
+            "version = 3.11.14\nversion_info = 3.11.14\n", encoding="utf-8")
+        self.assertEqual(str(self.setup_env.venv_cfg_value(venv, "version")),
+                         "3.11.14")
+        self.assertIsNone(self.setup_env.venv_cfg_value(venv, "home"))
+
+    def test_find_project_python_filters_by_version(self):
+        """项目内有多个版本时要挑对，不能"随便给一个"。"""
+        want_311 = self.make_project_python("3.11.14")
+        want_312 = self.make_project_python("3.12.7")
+        self.assertEqual(self.setup_env.find_project_python("3.11"), want_311)
+        self.assertEqual(self.setup_env.find_project_python("3.12"), want_312)
+        self.assertIsNone(self.setup_env.find_project_python("3.13"))
+
+    # ---------------------------------------------------------- 主判断
+    def test_repairs_host_outside_project_instead_of_recreating(self):
+        """宿主在项目外 → 改 pyvenv.cfg，**绝不能**重建（会删掉已装的包）。"""
+        outside = self.root.parent / "some-other-project" / "python"
+        venv = self.make_venv(home=outside, version_info="3.11.9")
+        base = self.make_project_python("3.11.14")
+
+        with mock.patch.object(self.setup_env, "interpreter_version",
+                               return_value=(3, 11, 14)), \
+             mock.patch.object(self.setup_env, "create_venv_uv",
+                               side_effect=AssertionError("不该重建环境")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = self.setup_env.ensure_venv_base(venv, base)
+
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.setup_env.venv_base_is_project_local(venv))
+        self.assertEqual(self.setup_env.venv_base_python(venv), base.parent)
+        self.assertEqual(self.setup_env.venv_base_version(venv), "3.11.14")
+
+    def test_repairs_when_old_host_is_gone(self):
+        """旧宿主目录已经不存在（最常见：宿主是别的项目的 python）也要能修。"""
+        venv = self.make_venv(home="Z:\\gone\\python", version_info="3.11.9")
+        base = self.make_project_python("3.11.14")
+        self.assertFalse(self.setup_env.venv_base_is_project_local(venv))
+
+        with mock.patch.object(self.setup_env, "interpreter_version",
+                               return_value=(3, 11, 14)), \
+             mock.patch.object(self.setup_env, "create_venv_uv",
+                               side_effect=AssertionError("不该重建环境")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = self.setup_env.ensure_venv_base(venv, base)
+        self.assertEqual(rc, 0)
+        self.assertTrue(self.setup_env.venv_base_is_project_local(venv))
+
+    def test_cross_minor_never_wipes_silently(self):
+        """3.11 环境遇到 3.12 目标：返回失败并要用户显式 --recreate。"""
+        base = self.make_project_python("3.12.7")
+        venv = self.make_venv(home=base.parent, version_info="3.11.9")
+
+        with mock.patch.object(self.setup_env, "interpreter_version",
+                               return_value=(3, 12, 7)), \
+             mock.patch.object(self.setup_env, "create_venv_uv",
+                               side_effect=AssertionError("跨版本不该自动重建")), \
+             mock.patch.object(self.setup_env, "repair_venv_host",
+                               side_effect=AssertionError("跨版本不该就地修")):
+            with contextlib.redirect_stdout(io.StringIO()) as buf:
+                rc = self.setup_env.ensure_venv_base(venv, base)
+        self.assertEqual(rc, 1)
+        self.assertIn("--recreate", buf.getvalue())
+
+    def test_healthy_venv_is_left_alone(self):
+        """宿主已在项目内且版本一致 → 一个字都不改。"""
+        base = self.make_project_python("3.11.14")
+        venv = self.make_venv(home=base.parent, version_info="3.11.14")
+        cfg = venv / "pyvenv.cfg"
+        before = cfg.read_text(encoding="utf-8")
+        with mock.patch.object(self.setup_env, "interpreter_version",
+                               return_value=(3, 11, 14)), \
+             mock.patch.object(self.setup_env, "create_venv_uv",
+                               side_effect=AssertionError("不该重建")), \
+             mock.patch.object(self.setup_env, "repair_venv_host",
+                               side_effect=AssertionError("不该修")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                rc = self.setup_env.ensure_venv_base(venv, base)
+        self.assertEqual(rc, 0)
+        self.assertEqual(cfg.read_text(encoding="utf-8"), before)
+
+    def test_cache_dirs_include_uv_python_install_dir(self):
+        """uv 下载的 Python 也必须落在项目内，否则又回到 C 盘。"""
+        var = "UV_PYTHON_INSTALL_DIR"
+        self.assertIn(var, self.setup_env.CACHE_DIRS)
+        self.assertEqual(self.setup_env.CACHE_DIRS[var],
+                         self.setup_env.PROJECT_PYTHON_DIR)
+        self.assertEqual(self.setup_env.project_python_dir(),
+                         self.root / self.setup_env.PROJECT_PYTHON_DIR)
+        # 运行期（launch.py / st.py）也要设，否则子进程里的 uv 会写到 C 盘
+        import runtime_libraries
+        self.assertIn(var, runtime_libraries._CACHE_ENV)
+
+
+class TestUtf8ConsoleGuard(unittest.TestCase):
+    """`import core` 必须**先**把 stdout/stderr 切成 UTF-8。
+
+    2026-09-20 实测（用 `streamlit.testing` 的 AppTest 跑 batch 模式时撞到）：
+    `core/step2_whisperX.py` 在**模块级**就 `rprint(f"🔧 whisperx {…}")`，而
+    `batch/utils/gui.py` 的 `_eu.ensure_utf8_console()` 排在第 29 行、import 在第
+    16–20 行 —— 顺序反了。控制台不是 UTF-8 时（没经过 `.bat` 的 `chcp 65001`：
+    在 IDE 里直接跑、或手工 `python -m streamlit run batch\\utils\\gui.py`）：
+
+        UnicodeEncodeError: 'gbk' codec can't encode character '\\U0001f527'
+
+    应用连首页都出不来。修法是在包入口（唯一早于一切子模块的地方）调用
+    `ensure_utf8_console()`。本用例用 `PYTHONIOENCODING=gbk` 的子进程复现该环境。
+    """
+
+    def test_core_init_switches_console_to_utf8(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        env = {**os.environ, "PYTHONIOENCODING": "gbk", "PYTHONUTF8": "0"}
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "import sys, core; print('\\U0001f527 中文'); "
+             "print(sys.stdout.encoding)"],
+            capture_output=True, cwd=root, env=env, timeout=300)
+        # 不传 text=True：子进程写的是 **UTF-8 字节**（这正是本修复的效果），
+        # 交给父进程按本地代码页（GBK）解码反而会解错/解码失败。
+        out = (proc.stdout or b"").decode("utf-8", "replace")
+        err = (proc.stderr or b"").decode("utf-8", "replace")
+        self.assertEqual(proc.returncode, 0,
+                         f"控制台是 GBK 时 import core 就崩了：{err[-400:]}")
+        self.assertIn("utf-8", out.lower())
+        self.assertIn("\U0001f527", out,
+                      "emoji 应当原样打出来（errors='replace' 也不该吃掉它）")
 
 
 if __name__ == "__main__":
