@@ -16,6 +16,7 @@ sys.path.append(root_dir)
 from core.config_utils import update_key, load_key
 from st_components.imports_and_utils import button_style, ask_gpt
 from batch_processor import BatchProcessor
+import batch_paths
 import easy_util as eu
 
 console = Console()
@@ -35,6 +36,30 @@ def check_api():
         return resp.get('message') == 'success'
     except Exception:
         return False
+
+
+def default_input_dir():
+    """批量模式的默认输入目录：<项目根>/batch/input。
+
+    实现放在 `batch_paths.py`（零依赖，便于单测）；这里保留同名包装是为了
+    向后兼容，避免外部代码/文档引用失效。
+    """
+    return batch_paths.default_input_dir(root_dir)
+
+
+def ensure_default_input_dir():
+    """确保默认输入目录存在，返回 (路径, 是否新建)。
+
+    这个目录在 `.gitignore` 里（`batch/input/`），所以刚克隆/刚搬迁的仓库里
+    根本没有它。旧实现只在下游 `video_processor.py` 里 `os.makedirs`，但 GUI 在
+    更早的地方就先判断「目录不存在」并 return 了 —— 于是默认路径必然报
+    「目录不存在: <项目根>/batch/input」，永远走不到创建那一步。
+    界面自己负责把它建出来。
+    """
+    folder, created, error = batch_paths.ensure_default_input_dir(root_dir)
+    if error:
+        console.print(f"[yellow]无法创建默认输入目录 {folder}: {error}[/yellow]")
+    return folder, created
 
 
 def archive_previous_batch_output(batch_output_dir):
@@ -220,13 +245,21 @@ def main():
         )
     
     if path_mode == "使用默认路径":
-        folder_path = os.path.join(root_dir, 'batch', 'input')
+        # 默认目录由界面自己保证存在（见 ensure_default_input_dir 的说明）
+        folder_path, created = ensure_default_input_dir()
         st.text_input(
             "默认路径",
             value=folder_path,
             disabled=True,
             key="default_path"
         )
+        if created:
+            st.info(f"📁 已自动创建默认目录：{folder_path}\n\n"
+                    f"把要批量处理的视频/音频放进这个文件夹即可。")
+        elif not os.path.isdir(folder_path):
+            st.error(f"❌ 无法创建默认目录：{folder_path}\n\n"
+                     f"请检查项目目录的写入权限。")
+            return
     else:
         # 手动输入路径
         folder_path = st.text_input(
@@ -250,8 +283,17 @@ def main():
         st.warning("⚠️ 请输入视频文件夹路径")
         return
     
-    if not os.path.exists(folder_path):
+    if not os.path.isdir(folder_path):
+        # 手动输入的路径可能是打错了，不擅自创建；但给一个一键创建的出口
         st.error(f"❌ 目录不存在: {folder_path}")
+        if path_mode != "使用默认路径":
+            if st.button("📁 创建这个目录", key="create_custom_dir"):
+                try:
+                    os.makedirs(folder_path, exist_ok=True)
+                    st.success(f"已创建：{folder_path}")
+                    st.rerun()
+                except OSError as e:
+                    st.error(f"创建失败：{e}")
         return
         
     # 更新session state中的路径
@@ -356,7 +398,13 @@ def main():
             for i, video in enumerate(video_files, 1):
                 st.text(f"{i}. {video}")
     else:
-        st.warning("⚠️ 未在选择的文件夹中找到视频文件")
+        st.warning(
+            f"⚠️ 未在选择的文件夹中找到视频文件：{folder_path}\n\n"
+            f"把要处理的视频（.mp4/.mkv/.mov/.avi/.flv/.wmv/.webm）或音频"
+            f"（.mp3/.wav/.m4a/.flac）放进这个目录即可；已存在同名 `.srt` 的"
+            f"文件会被跳过（视为已处理）。\n\n"
+            f"可以用上面的「🗂️ 在资源管理器中打开」按钮直接打开该目录。"
+        )
         return
     
     # 显示任务状态
