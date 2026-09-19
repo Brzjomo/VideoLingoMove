@@ -100,6 +100,19 @@ def load_key(key: str) -> Any:
     return _expand_env(value)
 
 
+def load_key_or(key: str, default: Any = None) -> Any:
+    """读取配置项，键不存在时返回 default 而不抛 KeyError。
+
+    用于"模板新增的键在已存在的旧 config.yaml 里还没有"的场景：
+    `_read_config()` 只会在文件**缺失**时从 config.example.yaml 引导，
+    已经存在的旧文件不会自动补键。
+    """
+    try:
+        return load_key(key)
+    except KeyError:
+        return default
+
+
 def update_key(key: str, new_value: Any) -> bool:
     with config_lock:
         data = _read_config()
@@ -114,11 +127,38 @@ def update_key(key: str, new_value: Any) -> bool:
 
         if isinstance(current, dict) and keys[-1] in current:
             current[keys[-1]] = new_value
+            # 手动改识别语言时，原子地把 detected_language 一起对齐。
+            # 否则切换语言后残留的旧检测值会继续影响提示词与 spaCy 模型
+            # （见 devdocs 已知问题：Recog Lang 切换后提示词仍用旧语言）。
+            # 选择 "auto" 时不覆盖：此时应交给下一次转录写入真实检测结果。
+            if key == "whisper.language" and new_value != "auto" and "detected_language" in current:
+                current["detected_language"] = new_value
             with open(CONFIG_PATH, 'w', encoding='utf-8') as file:
                 yaml.dump(data, file)
             return True
         else:
             raise KeyError(f"Key '{keys[-1]}' not found in configuration")
+
+
+def get_source_language() -> str:
+    """解析"实际生效的源语言"，作为全流程唯一判定点。
+
+    规则：
+      - `whisper.language` 是明确的语言代码时，一律以它为准；
+      - 只有它是 `auto`（或空）时，才回退到 ASR 写入的 `whisper.detected_language`。
+
+    此前 `prompts_storage.py` 无条件读 `detected_language`，而侧边栏切换识别
+    语言时只写 `whisper.language`，于是出现"切成 en 之后提示词仍声称源语言是
+    zh、spaCy 也仍加载中文模型"的错配。
+    """
+    language = load_key_or("whisper.language")
+    if not isinstance(language, str) or not language.strip() or language.strip() == "auto":
+        language = load_key_or("whisper.detected_language")
+    if not isinstance(language, str) or not language.strip() or language.strip() == "auto":
+        raise ValueError(
+            "源语言未知：请先在侧边栏选择识别语言，或先运行一次转录以自动检测。"
+        )
+    return language.strip()
 
 
 # basic utils

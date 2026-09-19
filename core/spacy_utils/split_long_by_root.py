@@ -3,7 +3,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 import os,sys
 sys.path.append(os.path.abspath(os.path.join(__file__, '..', '..', '..')))
 from core.spacy_utils.load_nlp_model import init_nlp
-from core.config_utils import load_key, get_joiner
+from core.config_utils import get_joiner, get_source_language
 from rich import print
 import string
 
@@ -30,8 +30,7 @@ def split_long_sentence(doc):
     # rebuild sentences based on optimal split points
     sentences = []
     i = n
-    whisper_language = load_key("whisper.language")
-    language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language # consider force english case
+    language = get_source_language()
     joiner = get_joiner(language)
     while i > 0:
         j = prev[i]
@@ -49,8 +48,7 @@ def split_extremely_long_sentence(doc):
     part_length = n // num_parts
     
     sentences = []
-    whisper_language = load_key("whisper.language")
-    language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language # consider force english case
+    language = get_source_language()
     joiner = get_joiner(language)
     for i in range(num_parts):
         start = i * part_length

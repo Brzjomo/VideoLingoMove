@@ -105,8 +105,10 @@ def page_setting():
         with c2:
             st.markdown('<div style="margin-top: 25px; margin-right: 10px;"></div>', unsafe_allow_html=True)
             if st.button("📡", key="api", help="Check API connection"):
-                st.toast("API密钥有效" if check_api() else "API密钥无效",
-                        icon="✅" if check_api() else "❌")
+                # 只调用一次：check_api() 刻意绕过了缓存，双调用=两次真实请求
+                is_valid = check_api()
+                st.toast("API密钥有效" if is_valid else "API密钥无效",
+                        icon="✅" if is_valid else "❌")
     
     with st.expander("Subtitles Settings", expanded=False):
         # ASR Engine Selection
@@ -126,6 +128,7 @@ def page_setting():
         c1, c2 = st.columns(2)
         with c1:
             langs = {
+                "🌐 自动检测": "auto",
                 "🇺🇸 英语": "en",
                 "🇨🇳 简体中文": "zh",
                 "🇪🇸 西班牙语": "es",
@@ -149,15 +152,19 @@ def page_setting():
                 current_whisper_lang = load_key("whisper.language")
                 
                 if new_lang_code != current_whisper_lang:
-                    # 3. 更新 Whisper 语言
+                    # 3. 更新 Whisper 语言。
+                    #    update_key() 会同步写入 whisper.detected_language（选 auto 时跳过），
+                    #    否则残留的旧检测值会继续影响提示词与 spaCy 模型。
                     update_key("whisper.language", new_lang_code)
                     
-                    # 4. 处理火山引擎同步逻辑
+                    # 4. 处理火山引擎同步逻辑（与 whisper.language 保持同一语义）
                     current_asr_engine = load_key("asr_engine")
                     if current_asr_engine == "volcano":
                         current_volcano_lang = load_key("volcano_asr.language")
                         
                         lang_map = {
+                            # 与火山侧下拉框一致：空串表示让火山自行检测
+                            "auto": "",
                             "en": "en-US", "zh": "zh-CN", "ja": "ja-JP", 
                             "ko": "ko-KR", "fr": "fr-FR", "de": "de-DE", 
                             "es": "es-MX", "pt": "pt-BR"
@@ -165,7 +172,7 @@ def page_setting():
                         # 直接查找对应的火山语言代码
                         new_volcano_lang = lang_map.get(new_lang_code)
                         
-                        if new_volcano_lang and new_volcano_lang != current_volcano_lang:
+                        if new_volcano_lang is not None and new_volcano_lang != current_volcano_lang:
                             update_key("volcano_asr.language", new_volcano_lang)
 
             # --- UI 组件 ---

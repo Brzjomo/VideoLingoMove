@@ -4,12 +4,11 @@ import os,sys
 import pandas as pd
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from core.spacy_utils.load_nlp_model import init_nlp
-from core.config_utils import load_key, get_joiner
+from core.config_utils import get_joiner, get_source_language
 from rich import print
 
 def split_by_mark(nlp):
-    whisper_language = load_key("whisper.language")
-    language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language # consider force english case
+    language = get_source_language()
     joiner = get_joiner(language)
     print(f"[blue]🔍 Using {language} language joiner: '{joiner}'[/blue]")
     chunks = pd.read_excel("output/log/cleaned_chunks.xlsx")

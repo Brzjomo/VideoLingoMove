@@ -7,7 +7,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.step3_2_splitbymeaning import split_sentence, split_by_punctuation
 from core.ask_gpt import ask_gpt
 from core.prompts_storage import get_align_prompt
-from core.config_utils import load_key, get_joiner, use_llm_sentence_split
+from core.config_utils import load_key, get_joiner, get_source_language, use_llm_sentence_split
 from rich.panel import Panel
 from rich.console import Console
 from rich.table import Table
@@ -74,8 +74,7 @@ def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], Lis
     src_parts = src_part.split('\n')
     tr_parts = [item[f'target_part_{i+1}'].strip() for i, item in enumerate(align_data)]
     
-    whisper_language = load_key("whisper.language")
-    language = load_key("whisper.detected_language") if whisper_language == 'auto' else whisper_language
+    language = get_source_language()
     joiner = get_joiner(language)
     tr_remerged = joiner.join(tr_parts)
     
