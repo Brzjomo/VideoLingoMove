@@ -39,7 +39,9 @@ def demucs_main():
     console.print("🎵 Separating audio...")
     _, outputs = separator.separate_audio_file(RAW_AUDIO_FILE)
     
-    kwargs = {"samplerate": model.samplerate, "bitrate": 64, "preset": 2, 
+    # bitrate 128（原为 64）：vocal.mp3 既是强制对齐的参考，在 demucs=true 时
+    # 还是 Whisper 的识别输入，64kbps 会抹掉强制对齐所依赖的瞬态细节。
+    kwargs = {"samplerate": model.samplerate, "bitrate": 128, "preset": 2, 
              "clip": "rescale", "as_float": False, "bits_per_sample": 16}
     
     console.print("🎤 Saving vocals track...")

@@ -10,16 +10,41 @@ RAW_AUDIO_FILE = "output/audio/raw.mp3"  # 向后兼容
 RAW_AUDIO_WAV_FILE = "output/audio/raw.wav"  # 新的原始WAV文件
 CLEANED_CHUNKS_EXCEL_PATH = "output/log/cleaned_chunks.xlsx"
 
+def _ffmpeg_has_encoder(encoder_name: str) -> bool:
+    """探测当前 ffmpeg 是否带某个编码器。
+
+    conda-forge / 精简构建的 ffmpeg 常常没有 libmp3lame，此前会直接抛
+    CalledProcessError 让整条流程失败。这里探测一次，缺失时回退到 PCM。
+    """
+    try:
+        result = subprocess.run(['ffmpeg', '-hide_banner', '-encoders'],
+                                capture_output=True, text=True, check=False)
+    except OSError:
+        return False
+    return encoder_name in (result.stdout or '')
+
+
 def compress_audio(input_file: str, output_file: str):
     """将输入音频文件压缩为低质量音频文件，用于转录"""
     if not os.path.exists(output_file):
         print(f"🗜️ Converting to low quality audio with FFmpeg ......")
         # 16000 Hz, 1 channel, (Whisper default) , 96kbps to keep more details as well as smaller file size
-        subprocess.run([
-            'ffmpeg', '-y', '-i', input_file, '-vn', '-b:a', '96k',
-            '-ar', '16000', '-ac', '1', '-metadata', 'encoding=UTF-8',
-            '-f', 'mp3', output_file
-        ], check=True, stderr=subprocess.PIPE)
+        if _ffmpeg_has_encoder('libmp3lame'):
+            cmd = [
+                'ffmpeg', '-y', '-i', input_file, '-vn', '-b:a', '96k',
+                '-ar', '16000', '-ac', '1', '-metadata', 'encoding=UTF-8',
+                '-f', 'mp3', output_file
+            ]
+        else:
+            # 回退：无 libmp3lame 时输出 PCM/WAV。下游（whisperX 的 load_audio、
+            # pydub）都按文件头识别格式，不依赖扩展名。
+            print("[yellow]⚠️ ffmpeg 缺少 libmp3lame，回退为 WAV(PCM) 编码[/yellow]")
+            cmd = [
+                'ffmpeg', '-y', '-i', input_file, '-vn',
+                '-c:a', 'pcm_s16le', '-ar', '16000', '-ac', '1',
+                '-f', 'wav', output_file
+            ]
+        subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
         print(f"🗜️ Converted <{input_file}> to <{output_file}> with FFmpeg")
     return output_file
 
@@ -27,12 +52,19 @@ def compress_audio(input_file: str, output_file: str):
 def convert_video_to_audio(video_file: str):
     os.makedirs(AUDIO_DIR, exist_ok=True)
 
-    # 首先检查是否需要生成原始WAV文件（火山引擎格式）
+    # --- 1) raw.wav：火山引擎 ASR 专用 ---
+    # ⚠️ 16kHz / 单声道 / 16-bit PCM 这三个参数是火山侧的硬约定：
+    #    volcano_asr._convert_audio_for_volcano() 会用 ffprobe 校验 sample_rate=16000、
+    #    channels=1、bits_per_sample=16，改动任意一项都会让火山分支直接失败。
+    #
+    # `aresample=async=1:first_pts=0` 用于把"解码出的采样点"与"容器呈现时间轴"
+    # 重新对齐：压缩帧可能解码出比容器时长更多的采样点，逐点拼接会把识别时钟
+    # 越推越后，导致字幕整体逐渐偏移（且下游无法修复，因为成片用的是同一条时钟）。
     if not os.path.exists(RAW_AUDIO_WAV_FILE):
         print(f"🎬➡️🎵 Converting video to high quality WAV audio (Volcano ASR format) ......")
-        # 火山引擎ASR要求: 16kHz, 单声道, 16-bit PCM WAV
         subprocess.run([
             'ffmpeg', '-y', '-i', video_file, '-vn',
+            '-af', 'aresample=async=1:first_pts=0',
             '-ar', '16000',          # 采样率 16kHz
             '-ac', '1',              # 单声道
             '-acodec', 'pcm_s16le',  # 16-bit PCM
@@ -42,17 +74,23 @@ def convert_video_to_audio(video_file: str):
         ], check=True, stderr=subprocess.PIPE)
         print(f"🎬➡️🎵 Converted <{video_file}> to Volcano ASR format: <{RAW_AUDIO_WAV_FILE}>\n")
 
-    # 向后兼容：如果RAW_AUDIO_FILE不存在，从WAV转换生成MP3
-    # 这个MP3文件只在Whisper引擎需要时使用
+    # --- 2) raw.mp3：Whisper 转录 + Demucs 人声分离的输入 ---
+    # 必须直接从**源视频**编码。旧实现是从上面那个 16kHz 的 raw.wav 转码出来的，
+    # 虽然写着 `-ar 32000`，实际带宽已被 raw.wav 限制在 8kHz 以内 —— 参数是假的，
+    # Demucs 与 Whisper 拿到的都是窄带音频。
     if not os.path.exists(RAW_AUDIO_FILE):
-        print(f"🎬➡️🎵 Generating MP3 for Whisper compatibility ......")
-        subprocess.run([
-            'ffmpeg', '-y', '-i', RAW_AUDIO_WAV_FILE,
-            '-c:a', 'libmp3lame', '-b:a', '128k',
-            '-ar', '32000',
-            '-ac', '1',
-            '-metadata', 'encoding=UTF-8', RAW_AUDIO_FILE
-        ], check=True, stderr=subprocess.PIPE)
+        print(f"🎬➡️🎵 Generating MP3 for Whisper/Demucs ......")
+        common = ['ffmpeg', '-y', '-i', video_file, '-vn',
+                  '-af', 'aresample=async=1:first_pts=0']
+        if _ffmpeg_has_encoder('libmp3lame'):
+            cmd = common + ['-c:a', 'libmp3lame', '-b:a', '128k',
+                            '-ar', '32000', '-ac', '1',
+                            '-metadata', 'encoding=UTF-8', RAW_AUDIO_FILE]
+        else:
+            print("[yellow]⚠️ ffmpeg 缺少 libmp3lame，回退为 WAV(PCM) 编码[/yellow]")
+            cmd = common + ['-c:a', 'pcm_s16le', '-ar', '32000', '-ac', '1',
+                            '-f', 'wav', RAW_AUDIO_FILE]
+        subprocess.run(cmd, check=True, stderr=subprocess.PIPE)
         print(f"🎬➡️🎵 Generated MP3 for Whisper: <{RAW_AUDIO_FILE}>\n")
 
 def _detect_silence(audio_file: str, start: float, end: float) -> List[float]:
