@@ -236,6 +236,99 @@ class TestFfmpegSkipWhenUsable(unittest.TestCase):
         self.assertEqual(installer.FFMPEG_ZIP_NAME, "ffmpeg-win64.zip")
 
 
+class TestPipBackend(unittest.TestCase):
+    """安装后端：uv 建的 venv 默认**没有 pip**，这条链子曾经直接崩掉整个安装。
+
+    实测故障：`uv venv`（不带 --seed）→ 环境里 `import pip` 失败 →
+    installer.py 引导 rich 失败 → 连报错用的 info() 也因为缺 rich 抛异常，
+    真正的错误被盖掉。所以三层都要有测试：后端选择、ensurepip 兜底、纯文本输出。
+    """
+
+    def test_pip_command_when_pip_present(self):
+        if not installer.python_has_pip():
+            self.skipTest("当前解释器没有 pip，跳过")
+        base, kind = installer.pip_command()
+        self.assertEqual(kind, "pip")
+        self.assertEqual(base, [sys.executable, "-m", "pip"])
+
+    def test_python_has_pip_is_boolean(self):
+        self.assertIn(installer.python_has_pip(), (True, False))
+
+    def test_uv_exe_detection(self):
+        uv = installer.uv_exe()
+        self.assertTrue(uv is None or os.path.isfile(uv), f"uv 路径不存在: {uv}")
+
+    def test_missing_pip_explains_instead_of_crashing(self):
+        """两个后端都不可用时，必须给出修复指引而不是抛 ModuleNotFoundError。"""
+        import contextlib
+        import io
+        saved_pip, saved_ensure, saved_uv = (installer.python_has_pip,
+                                             installer._try_ensurepip,
+                                             installer.uv_exe)
+        installer.python_has_pip = lambda: False
+        installer._try_ensurepip = lambda: False
+        installer.uv_exe = lambda: None
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                base, kind = installer.pip_command()
+                self.assertIsNone(base)
+                self.assertIsNone(kind)
+                # check=False 时应返回非零码而不是抛异常
+                result = installer.pip(["nonexistent-package"], check=False)
+            self.assertNotEqual(result.returncode, 0)
+        finally:
+            installer.python_has_pip = saved_pip
+            installer._try_ensurepip = saved_ensure
+            installer.uv_exe = saved_uv
+
+    def test_output_works_without_rich(self):
+        """没有 rich 时 info()/panel() 必须退化成纯文本（这是当初盖掉真实错误的原因）。"""
+        import contextlib
+        import io
+        saved_console, saved_panel = installer._RichConsole, installer._RichPanel
+        installer._RichConsole = None
+        installer._RichPanel = None
+        try:
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                installer.info("[bold cyan]hello[/bold cyan]")
+                installer.panel("body with [green]markup[/green]")
+            text = buffer.getvalue()
+            self.assertIn("hello", text)          # 标记被剥掉、正文还在
+            self.assertIn("body with markup", text)
+            self.assertNotIn("[bold", text)
+        finally:
+            installer._RichConsole, installer._RichPanel = saved_console, saved_panel
+
+    def test_plain_strips_rich_markup(self):
+        self.assertEqual(installer._plain("[bold cyan]x[/bold cyan]"),
+                         installer._plain("[bold cyan]x[/bold cyan]").replace("[", ""))
+        self.assertNotIn("[", installer._plain("[green]ok[/green]"))
+
+    def test_uv_has_no_download_subcommand(self):
+        """uv pip 没有 download 子命令：拿不到 pip 时必须优雅跳过预下载，而不是报错。"""
+        import contextlib
+        import io
+        saved_pip, saved_ensure = installer.python_has_pip, installer._try_ensurepip
+        installer.python_has_pip = lambda: False
+        installer._try_ensurepip = lambda: False
+        try:
+            if installer.uv_exe() is None:
+                self.skipTest("本机没有 uv，跳过")
+            with contextlib.redirect_stdout(io.StringIO()):
+                base, kind = installer.pip_command()
+                self.assertEqual(kind, "uv")
+                # 非 pip 后端下 pip_download 返回 None（跳过），不抛异常
+                result = installer.pip_download("requirements.txt", self._tmp_dir())
+            self.assertIsNone(result)
+        finally:
+            installer.python_has_pip, installer._try_ensurepip = saved_pip, saved_ensure
+
+    def _tmp_dir(self):
+        import tempfile
+        return tempfile.mkdtemp()
+
+
 class TestTorchBackend(unittest.TestCase):
     """算力 → 后端映射。这是本次升级最关键的一条：cu128/cu129 已移除 Pascal。"""
 

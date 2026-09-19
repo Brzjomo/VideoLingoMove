@@ -141,7 +141,11 @@ def uv_env_supported_version():
 
 def create_venv_uv(venv_dir, python_version, recreate=False):
     uv = find_uv()
-    cmd = [uv, "venv", str(venv_dir), "--python", python_version]
+    # --seed：让 uv 在新环境里同时装上 pip。
+    # 不加这个参数时 uv 建出的 venv **没有 pip**，而 installer.py 大量依赖
+    # `python -m pip`（实测会直接死在 `No module named pip` 上）。
+    # installer.py 自己也有 ensurepip / uv pip 的兜底，这里只是从源头避免。
+    cmd = [uv, "venv", str(venv_dir), "--python", python_version, "--seed"]
     if recreate:
         cmd.append("--clear")
     info(f"🐍 用 uv 建虚拟环境：{' '.join(cmd)}", style="cyan")
@@ -175,6 +179,38 @@ def describe_python(exe):
         return lines[0] if lines else "未知"
     except (OSError, subprocess.SubprocessError):
         return "未知"
+
+
+def venv_has_pip(python_exe):
+    """环境里能否 `import pip`。uv 不带 --seed 时建出的环境是没有的。"""
+    try:
+        proc = subprocess.run([str(python_exe), "-c", "import pip"],
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def seed_pip(python_exe):
+    """用标准库 ensurepip 给环境补上 pip；失败再退回 uv pip。"""
+    try:
+        proc = subprocess.run([str(python_exe), "-m", "ensurepip", "--upgrade"],
+                              capture_output=True, text=True, timeout=600)
+        if proc.returncode == 0 and venv_has_pip(python_exe):
+            return True
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    uv = find_uv()
+    if uv is None:
+        return False
+    info("   ensurepip 不可用，改用 uv 安装 pip ...", style="yellow")
+    try:
+        proc = subprocess.run([uv, "pip", "install", "--python", str(python_exe), "pip"],
+                              capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and venv_has_pip(python_exe)
 
 
 def version_supported(version):
@@ -289,6 +325,17 @@ def main(argv=None):
         panel(f"❌ 建好环境后仍找不到解释器：{venv_dir}", style="red")
         return 1
     info(f"✅ 解释器：{python_exe}（Python {describe_python(python_exe)}）", style="green")
+
+    # 环境里必须有 pip。旧版 uv venv 没有 --seed，会建出无 pip 的环境，
+    # 检测到就直接补一个（等价于 python -m pip install pip 的最小形态）。
+    if not venv_has_pip(python_exe):
+        info("🔧 环境里没有 pip，正在用 ensurepip 补装 ...", style="yellow")
+        if not seed_pip(python_exe):
+            panel("❌ 无法为环境补装 pip。请删掉环境后重建：\n"
+                  f"     rmdir /s /q \"{venv_dir}\"\n"
+                  f"     python setup_env.py --python {args.python}", style="red")
+            return 1
+        info("✅ pip 已就绪", style="green")
 
     # 让 uv 之后的调用与运行期都用同一套缓存
     env["VIRTUAL_ENV"] = str(venv_dir)

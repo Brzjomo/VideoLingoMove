@@ -149,18 +149,51 @@ SMOKE_IMPORTS_OPTIONAL = ("demucs.api", "torchcodec.decoders")
 
 
 # ---------------------------------------------------------------- 输出
+# 输出必须能在**没有 rich** 的情况下工作。
+# 实测踩过：uv 建出的 venv 里没有 pip，导致引导安装 rich 失败，接着
+# info() 自己 `from rich.console import Console` 抛 ModuleNotFoundError，
+# 把真正的错误（No module named pip / No module named rich）盖掉了，
+# 用户只看到一条莫名其妙的 Traceback。所以这里做纯文本兜底。
+try:
+    from rich.console import Console as _RichConsole
+    from rich.panel import Panel as _RichPanel
+except ImportError:  # 引导阶段
+    _RichConsole = None
+    _RichPanel = None
+
+_MARKUP_TAGS = ("[bold]", "[/bold]", "[cyan]", "[/cyan]", "[green]", "[/green]",
+                "[yellow]", "[/yellow]", "[red]", "[/red]", "[bright_black]",
+                "[bright_blue]", "[/bright_blue]", "[bold cyan]", "[/bold cyan]",
+                "[bold green]", "[/bold green]", "[bold magenta]",
+                "[/bold magenta]")
+
+
+def _plain(msg):
+    """把 rich 标记去掉，得到可以直接 print 的纯文本。"""
+    text = str(msg)
+    for tag in _MARKUP_TAGS:
+        text = text.replace(tag, "")
+    return text
+
+
 def _console():
-    from rich.console import Console
-    return Console()
+    return _RichConsole() if _RichConsole is not None else None
 
 
 def info(msg, style=None):
-    _console().print(msg, style=style)
+    console = _console()
+    if console is None:
+        print(_plain(msg), flush=True)
+        return
+    console.print(msg, style=style)
 
 
 def panel(msg, style="cyan", title=None):
-    from rich.panel import Panel
-    _console().print(Panel.fit(msg, style=style, title=title))
+    if _RichPanel is None or _RichConsole is None:
+        bar = "-" * 60
+        print(f"{bar}\n{_plain(msg)}\n{bar}", flush=True)
+        return
+    _RichConsole().print(_RichPanel.fit(msg, style=style, title=title))
 
 
 # ---------------------------------------------------------------- 基础工具
@@ -184,15 +217,112 @@ def run(cmd, retries=1, check=True, env=None):
     return result
 
 
-def pip(args, retries=2, check=True, cache_dir=None):
-    """统一的 pip 调用，带上对国内网络更友好的参数。
+def uv_exe():
+    """返回 uv 可执行文件路径，没有则 None（含 ~/.local/bin 兜底）。"""
+    found = shutil.which("uv")
+    if found:
+        return found
+    for candidate in (Path.home() / ".local" / "bin" / "uv.exe",
+                      Path.home() / ".local" / "bin" / "uv",
+                      Path.home() / ".cargo" / "bin" / "uv.exe",
+                      Path.home() / ".cargo" / "bin" / "uv"):
+        if candidate.is_file():
+            return str(candidate)
+    return None
 
-    `cache_dir` 用来把 pip 的下载缓存也收进项目内（默认 requirements 走的
-    是项目内 `.pip-cache`），避免动辄几个 GB 的轮子落到 C 盘用户目录。
+
+def python_has_pip():
+    """当前解释器里 `import pip` 是否可用。"""
+    try:
+        proc = subprocess.run([sys.executable, "-c", "import pip"],
+                              capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0
+
+
+def pip_command():
+    """决定用哪个 pip 实现。
+
+    为什么需要这一层：**uv 建出来的虚拟环境默认没有 pip**（uv 的设计如此），
+    而本脚本大量依赖 `python -m pip`。实测 `uv venv` + 立刻安装会直接死在
+    `No module named pip` 上。处理顺序：
+
+      1. 解释器自带 pip      → `[python, -m, pip]`（功能最全，首选）
+      2. 能 ensurepip 引导   → 引导后仍用 `[python, -m, pip]`
+      3. 有 uv               → `[uv, pip]`（uv 自带的 pip 兼容层）
+      4. 都没有              → 报错并给出修复命令
     """
-    cmd = [sys.executable, "-m", "pip", "install",
-           "--disable-pip-version-check", "--prefer-binary",
-           "--retries", "5", "--timeout", "120", *args]
+    if python_has_pip():
+        return [sys.executable, "-m", "pip"], "pip"
+
+    if _try_ensurepip():
+        info("🔧 该环境没有 pip，已用 ensurepip 引导安装", style="yellow")
+        return [sys.executable, "-m", "pip"], "pip"
+
+    uv = uv_exe()
+    if uv:
+        info("🔧 该环境没有 pip 且无法引导，改用 uv 的 pip 兼容层（uv pip）",
+             style="yellow")
+        return [uv, "pip"], "uv"
+
+    return None, None
+
+
+_ENSUREPIP_TRIED = False
+
+
+def _try_ensurepip():
+    """尝试用标准库 ensurepip 把 pip 装进当前解释器。只试一次。"""
+    global _ENSUREPIP_TRIED
+    if _ENSUREPIP_TRIED:
+        return False
+    _ENSUREPIP_TRIED = True
+    try:
+        proc = subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"],
+                              capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and python_has_pip()
+
+
+def explain_missing_pip():
+    """两个后端都不能用时，给出可执行的修复指引。"""
+    uv = uv_exe()
+    panel(
+        "❌ 当前环境既没有 pip，也无法自动引导。\n\n"
+        "这通常是因为虚拟环境由 uv 创建且未包含 pip。任选一种修复方式：\n"
+        f"  1) 删掉环境重建（推荐）：\n"
+        f"       rmdir /s /q .venv\n"
+        f"       uv venv .venv --python 3.11 --seed\n"
+        f"  2) 直接补装 pip：\n"
+        f"       {sys.executable} -m ensurepip --upgrade\n"
+        + (f"  3) 用 uv 装（无需 pip）：\n"
+           f"       uv pip install --python \"{sys.executable}\" pip\n" if uv else
+           "  3) 安装 uv 后重试：winget install --id=astral-sh.uv\n"),
+        style="red")
+
+
+def pip(args, retries=2, check=True, cache_dir=None):
+    """统一的 pip 调用（自动适配 pip / uv pip），带上更友好的网络参数。
+
+    `cache_dir` 用来把下载缓存收进项目内（默认 requirements 走项目内
+    `.pip-cache`），避免动辄几个 GB 的轮子落到 C 盘用户目录。
+    """
+    base, kind = pip_command()
+    if base is None:
+        explain_missing_pip()
+        if check:
+            raise SystemExit("没有可用的 pip 实现")
+        return subprocess.CompletedProcess(args=[], returncode=1)
+
+    if kind == "pip":
+        cmd = [*base, "install",
+               "--disable-pip-version-check", "--prefer-binary",
+               "--retries", "5", "--timeout", "120", *args]
+    else:
+        # uv pip 的兼容层：没有 --disable-pip-version-check / --prefer-binary
+        cmd = [*base, "install", "--python", sys.executable, "--timeout", "120", *args]
     env = {**os.environ, "PIP_NO_INPUT": "1", "PYTHONIOENCODING": "utf-8"}
     if cache_dir:
         env["PIP_CACHE_DIR"] = str(cache_dir)
@@ -205,8 +335,18 @@ def pip_download(requirements, target_dir, retries=2, check=False, cache_dir=Non
     这一步是"下载与安装分离"的关键：下载阶段只往磁盘写文件，失败了也不影响
     已经装好的部分；用户可以拿这个目录里的文件做离线安装，或者在中途断网时
     用外部工具补齐缺的那几个。
+
+    注意：`pip download` 是 pip 独有的子命令，uv **没有**对应实现
+    （`uv pip download` 不存在）。所以这里强制要求 pip 可用；拿不到 pip 时
+    跳过下载阶段，让后面的安装直接走网络 —— 不影响正确性，只是少了缓存。
     """
-    cmd = [sys.executable, "-m", "pip", "download",
+    base, kind = pip_command()
+    if base is None or kind != "pip":
+        info("ℹ️ 跳过依赖预下载（当前后端不是 pip，uv 没有 download 子命令）",
+             style="bright_black")
+        return None
+
+    cmd = [*base, "download",
            "--disable-pip-version-check", "--prefer-binary",
            "--retries", "5", "--timeout", "120",
            "-r", str(requirements), "-d", str(target_dir)]
@@ -220,7 +360,7 @@ def pip_install_local_dir(target_dir, requirements, cache_dir=None):
     """优先用已下载到 `target_dir` 的轮子安装，缺的再走索引。"""
     # 1) 只用本地文件装（最快，且完全不联网）
     result = pip(["-r", str(requirements), "--no-index",
-                  "--find-links", str(target_dir), "--no-cache-dir"],
+                  "--find-links", str(target_dir)],
                  retries=1, check=False, cache_dir=cache_dir)
     if result.returncode == 0:
         return 0
@@ -1248,6 +1388,15 @@ def main(argv=None):
              f"--no-index --find-links {ensure_download_dir(args.download_dir) / 'python'}")
         ensure_ffmpeg(dry_run=True)
         return 0
+
+    # 安装后端先自证：uv 建的 venv 默认没有 pip，必须在这里就发现并修好，
+    # 否则后面每个 pip 调用都会各自炸一次（实测就是这样丢掉真实错误的）。
+    base, kind = pip_command()
+    if base is None:
+        explain_missing_pip()
+        return 1
+    if not args.quiet:
+        info(f"🧰 安装后端：{'pip' if kind == 'pip' else 'uv pip（当前环境没有 pip）'}")
 
     # 引导依赖：rich 用于输出，ruamel.yaml / requests 供 core 使用
     try:
