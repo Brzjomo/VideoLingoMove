@@ -158,6 +158,9 @@ _model_cache/
 # 故意放在 output/ 之外，这样归档/清理 output 不会让它失效。
 /.cache/
 
+# launch.py 的运行日志目录
+logs/
+
 batch/input/
 batch/output/
 # 上一批产物的归档目录（batch/utils/gui.py 自动创建），也不入库
