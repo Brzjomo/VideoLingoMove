@@ -157,6 +157,10 @@ _model_cache/
 # 项目内缓存：uv / pip 下载缓存（环境大升级后由 setup_env.py 使用，可随时删）
 /.uv-cache/
 /.pip-cache/
+# 项目内 Python 解释器（setup_env.py 用 uv 装进来的，`.venv` 的宿主就是它）。
+# 必须忽略：一个解释器上百 MB，且与平台绑定。注意第 10 行还有个 `.Python`，
+# 有些平台上会连带匹配到这里，所以这里显式再写一遍、避免歧义。
+/.python/
 # 大文件下载目录：torch 轮子（单个 2.7-3.6 GB）、FFmpeg 压缩包、pip download 产物。
 # 存在的意义是"下载与安装分离"——网络不佳时可用外部工具下好放进来。
 /_downloads/

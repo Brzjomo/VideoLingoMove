@@ -123,6 +123,8 @@ _CACHE_ENV = {
     "TORCH_HOME": os.path.join("_model_cache", "torch"),
     "UV_CACHE_DIR": ".uv-cache",
     "PIP_CACHE_DIR": ".pip-cache",
+    # uv 下载的 Python 也留在项目内（`<项目>/.python`），别落到 C 盘
+    "UV_PYTHON_INSTALL_DIR": ".python",
 }
 
 _CACHE_ENV_APPLIED: dict[str, str] = {}

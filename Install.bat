@@ -3,11 +3,12 @@ rem ============================================================================
 rem  VideoLingo one-click setup for Windows
 rem
 rem  What it does:
-rem    1. Makes sure Python 3.11 is available (3.10-3.13 also work), trying
-rem       uv, then winget, then the official installer;
+rem    1. Makes sure a Python 3.11 is available (3.10-3.13 also work), trying
+rem       the project-local .python, then uv, then winget, then python.org;
 rem    2. Installs uv, used to create a project-local virtual environment so
 rem       nothing is written to the C: drive;
-rem    3. Creates .venv inside the project and points every cache at it;
+rem    3. Creates .python (the interpreter) and .venv (the environment) inside
+rem       the project, and points every cache at the project too;
 rem    4. Installs dependencies. The torch wheels are chosen automatically
 rem       (cu126 / cu128 / cu129) from your GPU compute capability;
 rem    5. Runs the health check plus the unit tests, then prints how to start.
@@ -36,6 +37,11 @@ rem the Chinese diagnostics show up as mojibake. Safe here because everything
 rem written before this line is pure ASCII.
 chcp 65001 >nul
 
+rem Every Python that uv downloads must land INSIDE the project. Without this
+rem uv puts it in %LocalAppData%\uv\python, i.e. back on the C: drive -- which
+rem is exactly what this setup exists to avoid. setup_env.py sets the same
+rem variable for the processes it spawns.
+set "UV_PYTHON_INSTALL_DIR=%~dp0.python"
 set "PYVER=3.11"
 set "PYDIR=%LocalAppData%\Programs\Python\Python311"
 set "PYEXE=%PYDIR%\python.exe"
@@ -131,11 +137,24 @@ goto :eof
 
 
 :ensure_python
-rem 1) reuse an existing project-local environment
-if exist "%VENV_PY%" (
-    set "PY=%VENV_PY%"
-    echo       Reusing the existing .venv
+rem 0) the project-local interpreter a previous run installed into .python
+for /d %%D in ("%~dp0.python\cpython-%PYVER%*") do (
+    if exist "%%~fD\python.exe" set "PY=%%~fD\python.exe"
+)
+if defined PY (
+    echo       Reusing the project-local Python in .python
     goto :eof
+)
+rem 1) reuse an existing project-local environment (only if it still runs:
+rem    its host interpreter may have been deleted or moved)
+if exist "%VENV_PY%" (
+    "%VENV_PY%" -c "import sys" >nul 2>&1
+    if not errorlevel 1 (
+        set "PY=%VENV_PY%"
+        echo       Reusing the existing .venv
+        goto :eof
+    )
+    echo       [WARN] .venv exists but does not run, rebuilding it
 )
 rem 2) versions already registered with the py launcher, 3.11 first
 call :try_pyver 3.11
@@ -159,14 +178,16 @@ if exist "%PYEXE%" (
     echo       Using %PYEXE%
     goto :eof
 )
-rem 5) let uv download a suitable Python
+rem 5) let uv download a suitable Python (into .python -- see the env var above)
 where uv >nul 2>&1
 if not errorlevel 1 (
     echo       No suitable Python found, asking uv for %PYVER% ...
-    uv python install %PYVER% >nul 2>&1
-    for /f "delims=" %%P in ('uv python find %PYVER% 2^>nul') do set "PY=%%P"
+    uv python install %PYVER% --install-dir "%~dp0.python" >nul 2>&1
+    for /d %%D in ("%~dp0.python\cpython-%PYVER%*") do (
+        if exist "%%~fD\python.exe" set "PY=%%~fD\python.exe"
+    )
     if defined PY (
-        echo       uv provided Python %PYVER%
+        echo       uv provided Python %PYVER% inside the project
         goto :eof
     )
 )
