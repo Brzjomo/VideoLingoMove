@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -130,6 +131,9 @@ class SplitConsumerContractTest(unittest.TestCase):
             "find_split_positions": lambda original, modified: [],
             "console": _Console(),
             "Table": _Table,
+            # split_sentence 入口会调 eu.check_cancel()（暂停/停止钩子）。
+            # 桩掉它：本测试只关心 choice 契约，不关心取消语义。
+            "eu": types.SimpleNamespace(check_cancel=lambda: None),
         }
         module = ast.Module(body=[fn], type_ignores=[])
         exec(compile(module, "<split_sentence>", "exec"), namespace)

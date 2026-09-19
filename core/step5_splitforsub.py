@@ -8,6 +8,7 @@ from core.step3_2_splitbymeaning import split_sentence, split_by_punctuation
 from core.ask_gpt import ask_gpt
 from core.prompts_storage import get_align_prompt
 from core.config_utils import load_key, get_joiner, get_source_language, use_llm_sentence_split
+import easy_util as eu
 from rich.panel import Panel
 from rich.console import Console
 from rich.table import Table
@@ -119,6 +120,9 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str]) -> Tuple[List[st
             console.print(table)
 
     def process(i):
+        # 每行的入口：暂停时在此阻塞、停止时抛 StopTask。
+        # 没有这个钩子的话，"停止"在 step5 期间点了没有任何反应。
+        eu.check_cancel()
         try:
             if not use_llm:
                 # 纯本地切分：源文按标点就近断开，译文同步等分（保持行数一致以便对齐）

@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 import math
 from core.spacy_utils.load_nlp_model import init_nlp
 from core.config_utils import load_key, get_joiner, get_source_language, use_llm_sentence_split
+import easy_util as eu
 from rich.console import Console
 from rich.table import Table
 
@@ -54,6 +55,7 @@ def split_sentence(sentence, num_parts, word_limit=18, index=-1, retry_attempt=0
     retry_attempt > 0 表示这是同一句的第 N 轮重试：用 bypass_cache 真正重新请求，
     而不是靠 `prompt + ' ' * retry_attempt` 改变 prompt 字符串去绕过缓存（见 devdocs R14）。
     """
+    eu.check_cancel()
     split_prompt = get_split_prompt(sentence, num_parts, word_limit)
 
     def valid_split(response_data):
@@ -101,6 +103,8 @@ def parallel_split_sentences(sentences, max_length, max_workers, nlp, retry_atte
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
         for index, sentence in enumerate(sentences):
+            # 长视频这里可能有上千句，逐个提交时也要能响应暂停/停止
+            eu.check_cancel()
             # Use tokenizer to split the sentence
             tokens = tokenize_sentence(sentence, nlp)
             # print("Tokenization result:", tokens)
@@ -111,13 +115,21 @@ def parallel_split_sentences(sentences, max_length, max_workers, nlp, retry_atte
             else:
                 new_sentences[index] = [sentence]
 
-        for future, index, num_parts, sentence in futures:
-            split_result = future.result()
-            if split_result:
-                split_lines = split_result.strip().split('\n')
-                new_sentences[index] = [line.strip() for line in split_lines]
-            else:
-                new_sentences[index] = [sentence]
+        try:
+            for future, index, num_parts, sentence in futures:
+                eu.check_cancel()
+                split_result = future.result()
+                if split_result:
+                    split_lines = split_result.strip().split('\n')
+                    new_sentences[index] = [line.strip() for line in split_lines]
+                else:
+                    new_sentences[index] = [sentence]
+        except BaseException:
+            # 与 step4_2 同理：with 退出时 shutdown(wait=True) 会等排队任务跑完，
+            # 不撤销的话"停止"要等很久
+            for pending, *_ in futures:
+                pending.cancel()
+            raise
 
     return [sentence for sublist in new_sentences for sentence in sublist]
 
