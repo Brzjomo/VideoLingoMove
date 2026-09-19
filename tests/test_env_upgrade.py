@@ -9,6 +9,7 @@
 """
 
 import os
+import pathlib
 import sys
 import unittest
 
@@ -61,25 +62,28 @@ class TestPickFfmpegAsset(unittest.TestCase):
         return {"assets": [{"name": n, "browser_download_url": f"https://x/{n}"}
                            for n in names]}
 
-    def test_prefers_newest_branch(self):
-        # "默认装新版"：8.1 在优先序列最前
+    def test_prefers_seven_shared_over_eight(self):
+        """7.x 排在 8.x 前面：torchcodec 0.7 只带 core4..7，没有 core8。
+
+        实测：装了 8.1 的 shared 包后 python 能认出 8.1，但 torchcodec 会去找
+        libtorchcodec_core8.dll 而失败；换成 7.1 shared 立刻可用。
+        """
         releases = [self._release([
-            "ffmpeg-n9.0-latest-win64-gpl-9.0.zip",
-            "ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
-            "ffmpeg-n7.1-latest-win64-gpl-7.1.zip",
+            "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+            "ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip",
         ])]
         picked = installer._pick_ffmpeg_asset(releases)
         self.assertIsNotNone(picked)
-        self.assertIn("n8.1", picked[0])
+        self.assertIn("n7.1", picked[0])
 
     def test_prefers_shared_within_branch(self):
         # shared 才含 torchcodec 需要的 avcodec 等动态库
         releases = [self._release([
-            "ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
-            "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+            "ffmpeg-n7.1-latest-win64-gpl-7.1.zip",
+            "ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip",
         ])]
         self.assertEqual(installer._pick_ffmpeg_asset(releases)[0],
-                         "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip")
+                         "ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip")
 
     def test_falls_back_to_non_shared(self):
         # 7.x 的非 shared 构建同时含 exe 与 DLL，是可接受的退路
@@ -191,6 +195,59 @@ class TestDownloadDirAndLocalWheels(unittest.TestCase):
                          f"cp{sys.version_info[0]}{sys.version_info[1]}")
 
 
+class TestFfmpegSharedLibs(unittest.TestCase):
+    """torchcodec 需要 FFmpeg **共享库**，静态构建不算可用。
+
+    实测：系统装的是 gyan.dev 的 full_build 7.0.2（静态，bin 目录里一个 .dll
+    都没有），大版本完全合规，但 `import torchcodec.decoders` 仍然失败，报
+    "Could not find module '...libtorchcodec_core7.dll' (or one of its
+    dependencies)"。换成 BtbN 的 7.1 **shared** 包后立即可用。
+    """
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = pathlib.Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_detects_windows_shared_dlls(self):
+        (self.dir / "avcodec-61.dll").write_bytes(b"x")
+        self.assertTrue(installer.has_shared_av_libs(self.dir))
+
+    def test_detects_linux_shared_objects(self):
+        (self.dir / "libavcodec.so.61").write_bytes(b"x")
+        self.assertTrue(installer.has_shared_av_libs(self.dir))
+
+    def test_static_build_has_no_shared_libs(self):
+        # 静态构建：只有 exe，没有 avcodec DLL
+        (self.dir / "ffmpeg.exe").write_bytes(b"x")
+        (self.dir / "ffprobe.exe").write_bytes(b"x")
+        self.assertFalse(installer.has_shared_av_libs(self.dir))
+
+    def test_missing_dir(self):
+        self.assertFalse(installer.has_shared_av_libs(self.dir / "nope"))
+
+    def test_usable_ffmpeg_requires_shared_on_windows(self):
+        """本机若只有静态 ffmpeg，usable_ffmpeg(require_shared=True) 必须判为不可用。"""
+        bin_dir, _source, _version = installer.usable_ffmpeg(require_shared=True)
+        if bin_dir is None:
+            self.skipTest("本机没有可用的共享版 FFmpeg")
+        self.assertTrue(installer.has_shared_av_libs(bin_dir))
+
+    def test_usable_ffmpeg_without_shared_requirement_is_lenient(self):
+        """require_shared=False 时只看大版本（Linux/macOS 的默认行为）。"""
+        bin_dir, source, version = installer.usable_ffmpeg(require_shared=False)
+        if bin_dir is None:
+            self.skipTest("本机没有大版本合规的 FFmpeg")
+        self.assertTrue(installer.ffmpeg_major_ok(version[0]))
+        self.assertIn(source, ("项目内", "系统 PATH"))
+
+    def test_absent_reason_is_a_string(self):
+        self.assertIsInstance(installer.ffmpeg_absent_reason(), str)
+
+
 class TestFfmpegSkipWhenUsable(unittest.TestCase):
     """需求：环境里已有可用的 FFmpeg 就跳过下载。"""
 
@@ -244,10 +301,31 @@ class TestPipBackend(unittest.TestCase):
     真正的错误被盖掉。所以三层都要有测试：后端选择、ensurepip 兜底、纯文本输出。
     """
 
-    def test_pip_command_when_pip_present(self):
-        if not installer.python_has_pip():
-            self.skipTest("当前解释器没有 pip，跳过")
+    def test_pip_command_prefers_uv(self):
+        """有 uv 时必须选 uv —— 这就是「uv 替代 pip」的落点。"""
+        if installer.uv_exe() is None:
+            self.skipTest("本机没有 uv，跳过")
         base, kind = installer.pip_command()
+        self.assertEqual(kind, "uv")
+        self.assertEqual(base, [installer.uv_exe(), "pip"])
+
+    def test_pip_command_falls_back_to_real_pip_without_uv(self):
+        saved = installer.uv_exe
+        installer.uv_exe = lambda: None
+        try:
+            if not installer.python_has_pip():
+                self.skipTest("本机没有 pip，跳过")
+            base, kind = installer.pip_command()
+            self.assertEqual(kind, "pip")
+            self.assertEqual(base, [sys.executable, "-m", "pip"])
+        finally:
+            installer.uv_exe = saved
+
+    def test_require_real_pip_ignores_uv(self):
+        """pip download 只能用真 pip：uv 没有 download 子命令。"""
+        base, kind = installer.require_real_pip()
+        if base is None:
+            self.skipTest("本机既无 pip 也无法 ensurepip")
         self.assertEqual(kind, "pip")
         self.assertEqual(base, [sys.executable, "-m", "pip"])
 
@@ -275,6 +353,9 @@ class TestPipBackend(unittest.TestCase):
                 self.assertIsNone(kind)
                 # check=False 时应返回非零码而不是抛异常
                 result = installer.pip(["nonexistent-package"], check=False)
+                # pip download 路径同样要安全降级
+                self.assertIsNone(installer.pip_download("requirements.txt",
+                                                         self._tmp_dir()))
             self.assertNotEqual(result.returncode, 0)
         finally:
             installer.python_has_pip = saved_pip
@@ -327,6 +408,137 @@ class TestPipBackend(unittest.TestCase):
     def _tmp_dir(self):
         import tempfile
         return tempfile.mkdtemp()
+
+
+class TestUvLockParsing(unittest.TestCase):
+    """`uv pip compile --generate-hashes` 的输出解析。
+
+    实测踩到的坑：带 hash 的锁定文件里**每一行** pin 都以 `\\` 续行，
+    早期实现"看到续行符就跳过"，于是 192 个 pin 解析出 0 个。
+    """
+
+    LOCK = """\
+# This file was autogenerated by uv via the following command:
+#    uv pip compile requirements.txt --generate-hashes
+aiohappyeyeballs==2.7.1 \\
+    --hash=sha256:aaaa \\
+    --hash=sha256:bbbb
+whisperx==3.8.6 \\
+    --hash=sha256:cccc
+torch==2.8.0+cu126 \\
+    --hash=sha256:dddd
+numpy==2.4.6 \\
+    --hash=sha256:eeee
+tomli==2.0.1 ; python_version < "3.11" \\
+    --hash=sha256:ffff
+"""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.path = os.path.join(self._tmp.name, "requirements.lock.txt")
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write(self.LOCK)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_parses_all_pins_despite_continuations(self):
+        pins = installer._parse_locked_requirements(self.path)
+        names = [n for n, _ in pins]
+        self.assertEqual(names, ["aiohappyeyeballs", "whisperx", "torch",
+                                 "numpy", "tomli"])
+
+    def test_versions_have_no_continuation_or_marker(self):
+        pins = dict(installer._parse_locked_requirements(self.path))
+        self.assertEqual(pins["whisperx"], "3.8.6")
+        self.assertEqual(pins["torch"], "2.8.0+cu126")   # 本地版本号要保留
+        for version in pins.values():
+            self.assertNotIn("\\", version)
+            self.assertNotIn(";", version)
+            self.assertNotIn("--hash", version)
+
+    def test_comments_and_blank_lines_ignored(self):
+        pins = installer._parse_locked_requirements(self.path)
+        self.assertFalse(any("autogenerated" in n for n, _ in pins))
+
+    def test_empty_file(self):
+        empty = os.path.join(self._tmp.name, "empty.txt")
+        with open(empty, "w", encoding="utf-8"):
+            pass
+        self.assertEqual(installer._parse_locked_requirements(empty), [])
+
+
+class TestUvNativePath(unittest.TestCase):
+    """uv 原生安装路径：compile 生成锁定文件 → install -r 安装。
+
+    关键取舍：用 `install -r` 而**不是** `sync` —— 实测 `sync` 会把锁定文件
+    之外的包全部卸掉（最小 lock 试跑时连 pip/setuptools 都被删了）。
+    """
+
+    def test_uv_detected(self):
+        self.assertTrue(installer.uv_exe() is None or
+                        os.path.isfile(installer.uv_exe()))
+
+    def test_lock_file_path_is_project_local(self):
+        self.assertEqual(installer.UV_LOCK_FILE,
+                         os.path.join(installer.DEFAULT_DOWNLOAD_DIR,
+                                      "requirements.lock.txt"))
+
+    def test_compile_returns_none_without_uv(self):
+        saved = installer.uv_exe
+        installer.uv_exe = lambda: None
+        try:
+            self.assertIsNone(installer.uv_lock_requirements())
+        finally:
+            installer.uv_exe = saved
+
+    def test_install_locked_uses_install_not_sync(self):
+        """必须走 `install -r`；sync 会卸掉 pip 等锁定文件之外的包。"""
+        calls = []
+
+        class _Result:
+            returncode = 0
+
+        def fake_uv_pip(args, **kwargs):
+            calls.append(list(args))
+            return _Result()
+
+        saved = installer.uv_pip, installer.uv_exe
+        installer.uv_exe = lambda: "uv"
+        installer.uv_pip = fake_uv_pip
+        try:
+            installer.uv_install_locked("some.lock")
+        finally:
+            installer.uv_pip, installer.uv_exe = saved
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][0], "install")
+        self.assertIn("-r", calls[0])
+        self.assertNotIn("sync", calls[0])
+
+    def test_torch_install_passes_torch_backend(self):
+        """uv 必须收到 --torch-backend，否则会装成 PyPI 的 CPU 版 torch。"""
+        calls = []
+
+        class _Result:
+            returncode = 0
+
+        def fake_uv_pip(args, **kwargs):
+            calls.append(list(args))
+            return _Result()
+
+        saved = installer.uv_pip, installer.uv_exe
+        installer.uv_exe = lambda: "uv"
+        installer.uv_pip = fake_uv_pip
+        try:
+            installer.uv_install_torch("cu126", download_dir=None)
+        finally:
+            installer.uv_pip, installer.uv_exe = saved
+        joined = " ".join(calls[0])
+        self.assertIn("--torch-backend", calls[0])
+        self.assertIn("cu126", calls[0])
+        self.assertIn("torch==2.8.0", joined)
+        self.assertIn("--no-deps", calls[0])
 
 
 class TestTorchBackend(unittest.TestCase):

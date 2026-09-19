@@ -77,6 +77,8 @@ TORCHVISION_VERSION = "0.23.0"
 DEFAULT_DOWNLOAD_DIR = "_downloads"
 # pip 下载缓存也指到这里，便于统一清理/搬移
 PIP_DL_CACHE_DIR = os.path.join(DEFAULT_DOWNLOAD_DIR, ".pip-cache")
+# uv 生成的锁定文件（带平台信息，不进版本库，每次安装重新生成）
+UV_LOCK_FILE = os.path.join(DEFAULT_DOWNLOAD_DIR, "requirements.lock.txt")
 
 # Python 闸门：whisperx 3.8.6 的 requires_python 是 >=3.10,<3.14。
 # 默认 3.11（与方案一致）。3.12/3.13 也完全可用：Windows 上 av 17/18 的
@@ -109,16 +111,19 @@ FFMPEG_MIN_MAJOR, FFMPEG_MAX_MAJOR = 4, 7
 # 下载时优先选的 BtbN 分支。
 #
 # 策略（对应"默认装新版，但环境里已有可用版本就跳过下载"）：
-#   * 安装前先看项目内 ffmpeg/、再看系统 PATH：只要有一份 **大版本 4–7**
-#     的 ffmpeg+ffprobe，就**完全跳过下载**；
-#   * 确实需要下载时，按这个优先序列挑资产 ——
-#       [n8.1, n8.0, n7.1, n7.0, N(master)]
-#     即"尽量给最新版"，但 8.x 只有带 -shared 的构建才含 torchcodec 需要的
-#     FFmpeg 动态库，所以 8.x 挑不到 shared 时会退回 7.1（7.x 的非 shared
-#     构建本身就同时含 exe 与 DLL）。
-FFMPEG_WIN_BRANCHES = ("8.1", "8.0", "7.1", "7.0")
+#   * 安装前先看项目内 ffmpeg/、再看系统 PATH：只要有一份 **大版本 4–7** 的
+#     ffmpeg+ffprobe，就**完全跳过下载**；
+#   * 确实需要下载时按这个序列挑资产：[7.1, 7.0, 8.1, 8.0]，
+#     每个分支内**优先 `-shared`**。
+#
+# 为什么 7.x 排在 8.x 前面：`torchcodec 0.7` 只附带了 `libtorchcodec_core4..7.dll`，
+# **没有 core8**。装了 8.x 的共享库之后，python 侧能通过 `--version` 认出 8.1，
+# 但 torchcodec 会去找 `libtorchcodec_core8.dll` 而失败（实测：报
+# "Could not find module '...core7.dll'"，因为版本探测只覆盖 4–7）。
+# 所以"能用"比"最新"重要：7.x 的**共享版**才是 torchcodec 真正需要的。
+FFMPEG_WIN_BRANCHES = ("7.1", "7.0", "8.1", "8.0")
 # 兼容旧名（文档/测试引用）
-FFMPEG_WIN_BRANCH = FFMPEG_WIN_BRANCHES[2]
+FFMPEG_WIN_BRANCH = FFMPEG_WIN_BRANCHES[0]
 FFMPEG_DIR_NAME = "ffmpeg"
 FFMPEG_ZIP_NAME = "ffmpeg-win64.zip"
 FFMPEG_API_LATEST = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest"
@@ -242,30 +247,45 @@ def python_has_pip():
 
 
 def pip_command():
-    """决定用哪个 pip 实现。
+    """决定用哪个安装后端，返回 `(命令前缀, 类型)` 或 `(None, None)`。
 
-    为什么需要这一层：**uv 建出来的虚拟环境默认没有 pip**（uv 的设计如此），
-    而本脚本大量依赖 `python -m pip`。实测 `uv venv` + 立刻安装会直接死在
-    `No module named pip` 上。处理顺序：
+    **优先 uv**：`uv pip` 是 pip 的兼容层，而且 uv 能直接装进一个**没有 pip**
+    的环境（它自己解析 wheel、自己写 site-packages），所以「装上 uv 之后就没必要
+    再用 pip」在这里落实。只有在没有 uv 时才轮到真正的 pip。
 
-      1. 解释器自带 pip      → `[python, -m, pip]`（功能最全，首选）
-      2. 能 ensurepip 引导   → 引导后仍用 `[python, -m, pip]`
-      3. 有 uv               → `[uv, pip]`（uv 自带的 pip 兼容层）
-      4. 都没有              → 报错并给出修复命令
+    顺序：
+      1. 有 uv               → `[uv, pip]`
+      2. 解释器自带 pip      → `[python, -m, pip]`
+      3. 能 ensurepip 引导   → 引导后仍用 `[python, -m, pip]`
+      4. 都没有              → `(None, None)`，由调用方给出修复指引
+
+    需要**真正的 pip** 的只有一处：`pip download`（uv 没有这个子命令），
+    见 `require_real_pip()`。
     """
+    uv = uv_exe()
+    if uv:
+        return [uv, "pip"], "uv"
+
     if python_has_pip():
         return [sys.executable, "-m", "pip"], "pip"
 
     if _try_ensurepip():
-        info("🔧 该环境没有 pip，已用 ensurepip 引导安装", style="yellow")
+        info("🔧 没有 uv 且该环境没有 pip，已用 ensurepip 引导安装", style="yellow")
         return [sys.executable, "-m", "pip"], "pip"
 
-    uv = uv_exe()
-    if uv:
-        info("🔧 该环境没有 pip 且无法引导，改用 uv 的 pip 兼容层（uv pip）",
-             style="yellow")
-        return [uv, "pip"], "uv"
+    return None, None
 
+
+def require_real_pip():
+    """要「真正的 pip」（`pip download` 用），没有就返回 `(None, None)`。
+
+    不能用 `uv pip` 顶替：uv 没有 download 子命令，会直接报
+    `unrecognized subcommand`（实测）。
+    """
+    if python_has_pip():
+        return [sys.executable, "-m", "pip"], "pip"
+    if _try_ensurepip():
+        return [sys.executable, "-m", "pip"], "pip"
     return None, None
 
 
@@ -303,29 +323,232 @@ def explain_missing_pip():
         style="red")
 
 
-def pip(args, retries=2, check=True, cache_dir=None):
-    """统一的 pip 调用（自动适配 pip / uv pip），带上更友好的网络参数。
+def uv_pip(args, retries=1, check=True, cache_dir=None):
+    """直接用 uv 的 pip 兼容层装包（`uv pip ...`）。没有 uv 时返回 None。
 
-    `cache_dir` 用来把下载缓存收进项目内（默认 requirements 走项目内
-    `.pip-cache`），避免动辄几个 GB 的轮子落到 C 盘用户目录。
+    为什么优先走 uv：uv 是**替代 pip** 的包管理器，装上 uv 之后就没有理由再让
+    每个包先经过 `python -m pip`。uv 自带这几样我们正好需要的能力：
+      * `uv pip install --torch-backend cu126` —— 自动从 PyTorch 官方索引取
+        带本地版本号的轮子（实测解析出 `torch==2.8.0+cu126`，与手工拼
+        `--index-url https://download.pytorch.org/whl/cu126` 等价）；
+      * `uv pip compile --generate-hashes` —— 生成带 sha256 的锁定文件，
+        整个依赖图一次算清（实测 192 个包 / 4008 条 hash）；
+      * 全局内容寻址缓存（`UV_CACHE_DIR`），同一个轮子不会下第二次。
+    """
+    uv = uv_exe()
+    if uv is None:
+        return None
+    cmd = [uv, "pip", *args]
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    if cache_dir:
+        env["UV_CACHE_DIR"] = str(cache_dir)
+    return run(cmd, retries=retries, check=check, env=env)
+
+
+def uv_lock_requirements(requirements="requirements.txt", lock_path=None,
+                         python_version=None, cache_dir=None, torch_backend=None):
+    """用 `uv pip compile --generate-hashes` 生成锁定文件。返回 Path 或 None。
+
+    锁定文件把"到底会装哪 192 个包、每个的 sha256 是多少"提前固定下来。这比
+    "把 requirements 交给 pip 让它自己解析"可控得多。生成的文件**带平台与
+    Python 版本信息**（Windows / cp311），所以不进版本库，每次安装重新生成。
+
+    `torch_backend` 必须传：requirements.txt 里没有 torch，但 whisperx /
+    pyannote 会把它拖进来，而**默认解析拿到的是 PyPI 上的 CPU 版**
+    （实测 `torch==2.8.0`，没有 `+cu126` 后缀）。带上 `--torch-backend cu126`
+    才会解析出 `torch==2.8.0+cu126`。
+    """
+    uv = uv_exe()
+    if uv is None:
+        return None
+    lock_path = Path(lock_path or UV_LOCK_FILE)
+    version = python_version or f"{sys.version_info[0]}.{sys.version_info[1]}"
+    cmd = [uv, "pip", "compile", str(requirements),
+           "--python-version", version,
+           "--generate-hashes",
+           "--output-file", str(lock_path),
+           "--quiet"]
+    if torch_backend:
+        cmd += ["--torch-backend", torch_backend]
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    if cache_dir:
+        env["UV_CACHE_DIR"] = str(cache_dir)
+    result = run(cmd, retries=1, check=False, env=env)
+    if result.returncode != 0 or not lock_path.is_file():
+        info("⚠️ uv 生成锁定文件失败，改走常规安装", style="yellow")
+        return None
+    count = sum(1 for line in lock_path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and not line.startswith((" ", "#")))
+    info(f"🔒 已生成锁定文件 {lock_path}（{count} 个包，带 sha256 校验）", style="green")
+    return lock_path
+
+
+def uv_install_locked(lock_path, cache_dir=None):
+    """按锁定文件安装依赖。
+
+    用 `uv pip install -r` 而**不是** `uv pip sync`：sync 会把锁定文件之外的
+    包全部卸掉（实测它顺手卸掉了 `packaging`，用最小 lock 试的时候连 pip 和
+    setuptools 都会被删），而这正是我们要保留 pip 兜底能力的地方。
+    """
+    return uv_pip(["install", "--python", sys.executable, "-r", str(lock_path)],
+                  retries=2, check=True, cache_dir=cache_dir)
+
+
+def uv_download_requirements(lock_path, target_dir, cache_dir=None):
+    """把锁定文件里的轮子落成真实的 .whl 到 `target_dir`（供离线/搬机器）。
+
+      * `uv pip install --target` **不是** `pip download` 的等价物：它写的是
+        解包后的文件（`pkg/` + `*.dist-info/`），不能当 wheelhouse 用。
+      * uv 也没有 `download` 子命令（实测 `unrecognized subcommand`）。
+    所以：有能力时直接 `pip download`（会把 uv 已缓存的轮子从缓存取出，不重新
+    联网）；没有 pip 就退回一个纯标准库的 PyPI 下载器（按 wheel 优先挑选，
+    把文件写进目标目录）。torch 那三个大文件由 `--download-only` 单独负责。
+    """
+    try:
+        target = ensure_download_dir(target_dir)
+    except OSError:
+        target = Path(target_dir)
+        target.mkdir(parents=True, exist_ok=True)
+
+    base, kind = pip_command()
+    if base is not None and kind == "pip":
+        result = run([*base, "download", "-r", str(lock_path), "-d", str(target)],
+                     retries=1, check=False,
+                     env={**os.environ, "PIP_NO_INPUT": "1",
+                          "PYTHONIOENCODING": "utf-8"})
+        if result.returncode == 0:
+            return result
+        info("⚠️ pip download 未完全成功，改用标准库下载器补齐", style="yellow")
+
+    return _stdlib_wheel_download(lock_path, target)
+
+
+def _parse_locked_requirements(lock_path):
+    """从锁定文件里取 (包名, 版本) 列表。
+
+    ⚠️ `--generate-hashes` 的输出里，**每一行** pin 都以 `\\` 续行（后面跟着
+    `--hash=sha256:...`），所以不能"看到 `\\` 就跳过"，否则一个包都读不出来
+    （这是实测踩到的：192 个 pin 解析出 0 个）。正确做法是先去掉行尾的续行符，
+    再判断是不是一个 `name==version` 形式的 pin。
+    """
+    pins = []
+    for raw in Path(lock_path).read_text(encoding="utf-8").splitlines():
+        line = raw.split("#")[0].strip()
+        if line.endswith("\\"):
+            line = line[:-1].strip()
+        if not line or line.startswith("-") or "==" not in line:
+            continue
+        name, _, version = line.partition("==")
+        name, version = name.strip(), version.strip()
+        # 只接受纯 pin（排除 "name==ver ; marker" 这类带环境标记的行）
+        if not name or not version or " " in name:
+            continue
+        pins.append((name, version.split(";")[0].strip()))
+    return pins
+
+
+def _stdlib_wheel_download(lock_path, target_dir):
+    """纯标准库的 PyPI 下载器：按 wheel 优先，把文件写进 target_dir。
+
+    只用于"环境里没有 pip"的兜底场景。返回最后一次请求的结果或 None。
+    """
+    import json as _json
+    from urllib.request import Request, urlopen
+
+    tag = current_python_tag()
+    plat = platform_wheel_tag()
+    downloaded, skipped = 0, 0
+    for name, version in _parse_locked_requirements(lock_path):
+        candidate = Path(target_dir) / f"{name.replace('-', '_')}-{version}"
+        try:
+            with urlopen(Request(f"https://pypi.org/pypi/{name}/{version}/json",
+                                 headers={"User-Agent": "VideoLingo-installer"}),
+                         timeout=60) as response:
+                meta = _json.loads(response.read().decode("utf-8", "replace"))
+            urls = meta.get("urls") or []
+            wheels = [u for u in urls if u.get("filename", "").endswith(".whl")
+                      and "py3-none-any" in u["filename"] or
+                      (tag in u.get("filename", "") and plat.split("_")[0] in u.get("filename", ""))]
+            if not wheels:
+                skipped += 1
+                continue
+            chosen = wheels[0]
+            dest = Path(target_dir) / chosen["filename"]
+            if dest.is_file() and dest.stat().st_size > 0:
+                continue
+            with urlopen(Request(chosen["url"],
+                                 headers={"User-Agent": "VideoLingo-installer"}),
+                         timeout=600) as response:
+                dest.write_bytes(response.read())
+            downloaded += 1
+        except Exception:
+            skipped += 1
+    info(f"📥 标准库下载器：新增 {downloaded} 个文件，跳过 {skipped} 个"
+         f"（torch 三件套请用 --download-only 单独下）", style="bright_black")
+    return None
+
+
+def uv_install_torch(backend, download_dir=None, dry_run=False):
+    """用 uv 装 torch 三件套（本地已有轮子时优先用本地文件）。返回退出码。"""
+    uv = uv_exe()
+    if uv is None:
+        return None
+
+    local = local_wheels_for(backend, download_dir)
+    targets, from_index = [], []
+    for pkg, ver, _filename in wheel_names_for(backend):
+        hit = local.get(pkg)
+        if hit is not None:
+            targets.append(str(hit))
+        else:
+            targets.append(f"{pkg}=={ver}")
+            from_index.append(pkg)
+
+    if dry_run:
+        info(f"   [dry-run] uv pip install --torch-backend {backend} {' '.join(targets)}")
+        return 0
+
+    args = ["install", "--python", sys.executable, *targets]
+    # --no-deps 只能出现**一次**：uv 会直接报
+    # "the argument '--no-deps' cannot be used multiple times"（实测踩到）。
+    # torch 三件套的依赖（sympy / numpy / …）已由锁定文件那一步装好。
+    args.append("--no-deps")
+    # --torch-backend 让 uv 自己处理 PyTorch 索引；全是本地文件时不需要联网，
+    # 但带上它也无害（uv 只在真正解析索引时才用）
+    args += ["--torch-backend", backend]
+    if not from_index:
+        # 全部来自本地文件：不需要 uv 再缓存一份几 GB 的轮子
+        args.append("--no-cache-dir")
+    return uv_pip(args, retries=2, check=True,
+                  cache_dir=PIP_DL_CACHE_DIR).returncode
+
+
+def pip(args, retries=2, check=True, cache_dir=None):
+    """统一的"装包"调用：默认走 uv，没有 uv 才用真正的 pip。
+
+    `cache_dir` 用来把下载缓存收进项目内（uv 走 `UV_CACHE_DIR`、pip 走
+    `PIP_CACHE_DIR`），避免动辄几个 GB 的轮子落到 C 盘用户目录。
     """
     base, kind = pip_command()
     if base is None:
         explain_missing_pip()
         if check:
-            raise SystemExit("没有可用的 pip 实现")
+            raise SystemExit("没有可用的安装后端（既无 uv 也无 pip）")
         return subprocess.CompletedProcess(args=[], returncode=1)
 
-    if kind == "pip":
+    env = {**os.environ, "PIP_NO_INPUT": "1", "PYTHONIOENCODING": "utf-8"}
+    if kind == "uv":
+        # uv 的 pip 兼容层：不认 --disable-pip-version-check / --prefer-binary，
+        # 但需要显式告诉它目标解释器（本脚本可能是被别的解释器 re-exec 起来的）
+        cmd = [*base, "install", "--python", sys.executable, "--timeout", "120", *args]
+        if cache_dir:
+            env["UV_CACHE_DIR"] = str(cache_dir)
+    else:
         cmd = [*base, "install",
                "--disable-pip-version-check", "--prefer-binary",
                "--retries", "5", "--timeout", "120", *args]
-    else:
-        # uv pip 的兼容层：没有 --disable-pip-version-check / --prefer-binary
-        cmd = [*base, "install", "--python", sys.executable, "--timeout", "120", *args]
-    env = {**os.environ, "PIP_NO_INPUT": "1", "PYTHONIOENCODING": "utf-8"}
-    if cache_dir:
-        env["PIP_CACHE_DIR"] = str(cache_dir)
+        if cache_dir:
+            env["PIP_CACHE_DIR"] = str(cache_dir)
     return run(cmd, retries=retries, check=check, env=env)
 
 
@@ -336,13 +559,14 @@ def pip_download(requirements, target_dir, retries=2, check=False, cache_dir=Non
     已经装好的部分；用户可以拿这个目录里的文件做离线安装，或者在中途断网时
     用外部工具补齐缺的那几个。
 
-    注意：`pip download` 是 pip 独有的子命令，uv **没有**对应实现
-    （`uv pip download` 不存在）。所以这里强制要求 pip 可用；拿不到 pip 时
-    跳过下载阶段，让后面的安装直接走网络 —— 不影响正确性，只是少了缓存。
+    ⚠️ 这是全脚本**唯一**必须用真正 pip 的地方：`pip download` 是 pip 独有的
+    子命令，`uv pip` 没有对应实现（实测 `uv pip download` 报
+    `unrecognized subcommand`）。拿不到 pip 时返回 None 并跳过预下载，
+    后面照常在线安装 —— 不影响正确性，只是少了本地 wheelhouse。
     """
-    base, kind = pip_command()
-    if base is None or kind != "pip":
-        info("ℹ️ 跳过依赖预下载（当前后端不是 pip，uv 没有 download 子命令）",
+    base, _kind = require_real_pip()
+    if base is None:
+        info("ℹ️ 跳过依赖预下载（本机既无 pip 也无 uv，无法导出 wheel 文件）",
              style="bright_black")
         return None
 
@@ -749,6 +973,17 @@ def install_torch(backend="auto", dry_run=False, download_dir=None):
 
     missing = report_torch_download_plan(resolved, download_dir)
 
+    if dry_run:
+        uv_install_torch(resolved, download_dir, dry_run=True)
+        return resolved
+
+    # 优先让 uv 自己处理 PyTorch 索引（`--torch-backend` 就是为这件事设计的，
+    # 实测解析出 torch==2.8.0+cu126，与手工拼 --index-url 等价）。
+    # 没有 uv 时才继续往下走 pip 回退路径。
+    if uv_exe() is not None:
+        uv_install_torch(resolved, download_dir)
+        return resolved
+
     # 组装安装命令：已存在的本地文件直接用文件路径，其余交给索引
     local = local_wheels_for(resolved, download_dir)
     targets, from_index = [], []
@@ -887,25 +1122,80 @@ def project_ffmpeg_bin():
         return None
 
 
-def usable_ffmpeg():
+def has_shared_av_libs(bin_dir):
+    """该 FFmpeg 目录是否带**共享库**（avcodec-*.dll / libavcodec.so）。
+
+    为什么必须区分：`torchcodec` 通过 FFmpeg **共享库**解码，它自带
+    `libtorchcodec_core4..7.dll`，但这些 DLL 依赖 `avcodec-*.dll` 等同级动态库。
+    而 gyan.dev 的 `full_build` 与 BtbN 的非 shared 包都是**静态**构建 ——
+    里面有 `ffmpeg.exe` 却没有那些 `.dll`。实测后果：装了系统 FFmpeg 7.0.2
+    （静态）仍然 `import torchcodec.decoders` 失败，报
+    "Could not find module '...libtorchcodec_core7.dll' (or one of its dependencies)"。
+
+    所以"有大版本合规的 ffmpeg.exe"**不等于**"torchcodec 可用"，
+    这里要单独看共享库在不在。
+    """
+    bin_dir = Path(bin_dir)
+    if not bin_dir.is_dir():
+        return False
+    patterns = ("avcodec-*.dll", "avcodec.dll",          # Windows
+                "libavcodec.so*", "libavcodec.dylib")    # Linux / macOS
+    for pattern in patterns:
+        try:
+            if next(bin_dir.glob(pattern), None) is not None:
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def usable_ffmpeg(require_shared=None):
     """返回 (bin 目录, 来源, ffmpeg 版本) —— 找得到**大版本合规**的一份就返回。
 
     顺序与"跳过下载"的判断一致：项目内优先，其次系统 PATH。
     找不到时返回 (None, None, None)。
+
+    `require_shared`（默认 Windows 上为 True）：是否要求带共享库。因为本项目
+    真正需要 FFmpeg 的地方（torchcodec）走的是共享库，只有静态 exe 的系统
+    安装不算"可用"，否则会跳过下载、然后在运行期炸掉。
     """
+    if require_shared is None:
+        require_shared = (os.name == "nt")
     local = project_ffmpeg_bin()
     if local is not None:
         version = ffmpeg_version_of(str(local / _ffmpeg_exe_name()))
-        if ffmpeg_major_ok(version[0] if version else None):
+        if ffmpeg_major_ok(version[0] if version else None) and \
+                (not require_shared or has_shared_av_libs(local)):
             return local, "项目内", version
 
     system = shutil.which("ffmpeg")
     if system:
         version = ffmpeg_version_of(system)
-        if ffmpeg_major_ok(version[0] if version else None):
-            return Path(system).resolve().parent, "系统 PATH", version
+        bin_dir = Path(system).resolve().parent
+        if ffmpeg_major_ok(version[0] if version else None) and \
+                (not require_shared or has_shared_av_libs(bin_dir)):
+            return bin_dir, "系统 PATH", version
 
     return None, None, None
+
+
+def ffmpeg_absent_reason():
+    """诊断"为什么没有可用的 FFmpeg"，用于给用户一条可行动的提示。"""
+    local = project_ffmpeg_bin()
+    if local is not None:
+        version = ffmpeg_version_of(str(local / _ffmpeg_exe_name()))
+        if not ffmpeg_major_ok(version[0] if version else None):
+            return f"项目内 ffmpeg 大版本不合规（{_fmt_version(version)}）"
+        if not has_shared_av_libs(local):
+            return "项目内 ffmpeg 是静态构建，缺少 avcodec 等共享库"
+    system = shutil.which("ffmpeg")
+    if system:
+        version = ffmpeg_version_of(system)
+        if not ffmpeg_major_ok(version[0] if version else None):
+            return f"系统 ffmpeg 大版本不合规（{_fmt_version(version)}）"
+        if not has_shared_av_libs(Path(system).resolve().parent):
+            return "系统 ffmpeg 是静态构建（如 gyan.dev full_build），缺少共享库"
+    return "未找到 ffmpeg"
 
 
 def _pick_ffmpeg_asset(releases, branches=None):
@@ -1063,28 +1353,33 @@ def ensure_ffmpeg(dry_run=False, download_dir=None):
     策略（对应"默认装新版，但已有可用版本就跳过下载"）：
       1. 项目内 `./ffmpeg/` 里已有合规版本 → **直接跳过下载**；
       2. 系统 PATH 上有合规版本 → **同样跳过下载**（不重复占磁盘）；
-      3. 都没有才去下载（Windows 优先 8.x shared，退而 7.1），
-         压缩包先落在 `_downloads/`，解压到 `./ffmpeg/`。
+      3. 都没有才去下载（**优先 7.x 的 shared 包**，压缩包落在 `_downloads/`，
+         解压到 `./ffmpeg/`）。
+
+    ⚠️ 「合规」不只是大版本 4–7，还要**带共享库**：torchcodec 依赖 avcodec 等
+    动态库，而 gyan.dev 的 full_build 是静态构建 —— 实测装了系统 FFmpeg 7.0.2
+    仍然无法 import torchcodec。所以静态版会被判为「不可用」并触发下载。
     """
     # 1) / 2) 已有的可用版本
     bin_dir, source, version = usable_ffmpeg()
     if bin_dir is not None:
-        info(f"✅ 已找到可用的 FFmpeg {_fmt_version(version)}（{source}）：{bin_dir}",
-             style="green")
+        info(f"✅ 已找到可用的 FFmpeg {_fmt_version(version)}"
+             f"（{source}，含共享库）：{bin_dir}", style="green")
         info("   ⏭️ 跳过 FFmpeg 下载", style="bright_black")
         return True, False
 
-    # 有大版本不合规的，要说清楚为什么不能用
-    local = project_ffmpeg_bin()
-    if local is not None:
-        info(f"⚠️ 项目内 FFmpeg 大版本不合规（{_fmt_version(ffmpeg_version_of(str(local / _ffmpeg_exe_name())))}），"
-             f"需要 {FFMPEG_MIN_MAJOR}–{FFMPEG_MAX_MAJOR}", style="yellow")
-    system_ffmpeg = shutil.which("ffmpeg")
-    if system_ffmpeg:
-        panel(f"⚠️ 系统 FFmpeg 大版本不合规"
-              f"（{_fmt_version(ffmpeg_version_of(system_ffmpeg))}）。\n"
-              f"torchcodec 0.7 只支持 FFmpeg {FFMPEG_MIN_MAJOR}–{FFMPEG_MAX_MAJOR}，"
-              f"8/9 会在解码时失败。", style="yellow")
+    # 说清楚为什么不能用（大版本不合规 / 静态构建 / 干脆没有）
+    existing = [p for p in ([str(project_ffmpeg_bin() / _ffmpeg_exe_name())]
+                            if project_ffmpeg_bin() else []) +
+                ([shutil.which("ffmpeg")] if shutil.which("ffmpeg") else [])]
+    if existing:
+        panel(f"⚠️ 现有 FFmpeg 不可用：{ffmpeg_absent_reason()}\n\n"
+              f"torchcodec 0.7 需要 **大版本 "
+              f"{FFMPEG_MIN_MAJOR}–{FFMPEG_MAX_MAJOR}** 且**带共享库"
+              f"（avcodec-*.dll）** 的构建。\n"
+              f"gyan.dev 的 full_build 与 BtbN 的非 shared 包都是静态构建："
+              f"有 ffmpeg.exe 但没有那些 DLL，torchcodec 会加载失败。",
+              style="yellow")
 
     # 3) 下载
     system = platform.system()
@@ -1382,10 +1677,15 @@ def main(argv=None):
               f"Python：{sys.version.split()[0]}（{sys.executable}）\n"
               f"torch 后端：{backend} —— {label}\n依据：{reason}", style="cyan")
         install_torch(args.torch_backend, dry_run=True, download_dir=args.download_dir)
-        info(f"   [dry-run] pip download -r requirements.txt -d "
-             f"{ensure_download_dir(args.download_dir) / 'python'}")
-        info(f"   [dry-run] pip install -r requirements.txt "
-             f"--no-index --find-links {ensure_download_dir(args.download_dir) / 'python'}")
+        if uv_exe() is not None:
+            info(f"   [dry-run] uv pip compile requirements.txt --generate-hashes "
+                 f"--torch-backend {backend} -o {UV_LOCK_FILE}")
+            info(f"   [dry-run] uv pip install --python <解释器> -r {UV_LOCK_FILE}")
+        else:
+            info(f"   [dry-run] pip download -r requirements.txt -d "
+                 f"{ensure_download_dir(args.download_dir) / 'python'}")
+            info(f"   [dry-run] pip install -r requirements.txt "
+                 f"--no-index --find-links {ensure_download_dir(args.download_dir) / 'python'}")
         ensure_ffmpeg(dry_run=True)
         return 0
 
@@ -1444,11 +1744,22 @@ __     ___     _            _     _
     else:
         backend = install_torch(args.torch_backend, download_dir=args.download_dir)
         info("📦 安装 requirements.txt ...")
-        # 先下载到项目内目录，再优先用这些文件安装 —— 下载与安装分离，
-        # 断了可以重来，也能把目录拷到别的机器上离线装。
-        pkg_dir = ensure_download_dir(args.download_dir) / "python"
-        pip_download("requirements.txt", pkg_dir, cache_dir=PIP_DL_CACHE_DIR)
-        pip_install_local_dir(pkg_dir, "requirements.txt", cache_dir=PIP_DL_CACHE_DIR)
+        uv_cache = os.path.join(args.download_dir or DEFAULT_DOWNLOAD_DIR, ".uv-cache")
+        installed = False
+        if uv_exe() is not None:
+            # uv 原生路径：先用 --generate-hashes 把整个依赖图锁死，再按锁定文件
+            # 安装。带 --torch-backend 是必须的 —— 否则 uv 会解析出 PyPI 上的
+            # CPU 版 torch（实测 torch==2.8.0，没有 +cu126 后缀）。
+            lock = uv_lock_requirements(cache_dir=uv_cache,
+                                        torch_backend=backend)
+            if lock is not None:
+                uv_install_locked(lock, cache_dir=uv_cache)
+                installed = True
+        if not installed:
+            # 没有 uv 时的 pip 回退：先下载到项目内目录，再优先用这些文件安装
+            pkg_dir = ensure_download_dir(args.download_dir) / "python"
+            pip_download("requirements.txt", pkg_dir, cache_dir=PIP_DL_CACHE_DIR)
+            pip_install_local_dir(pkg_dir, "requirements.txt", cache_dir=PIP_DL_CACHE_DIR)
         write_state(backend)
 
     if platform.system() == "Linux":

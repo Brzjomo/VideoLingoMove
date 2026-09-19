@@ -127,9 +127,11 @@ python installer.py --check --smoke    # 体检：逐个 import whisperx/torchco
 
 ### FFmpeg
 
-需要 **FFmpeg 4–7**（`torchcodec` 不支持 8/9）。**如果环境里已经有合规版本，安装
-脚本会直接跳过下载**；没有才去取一份放进项目内 `ffmpeg\` 目录，运行期由
-`runtime_libraries.py` 自动接入（不需要你改 PATH，也不需要重启终端）：
+需要 **FFmpeg 4–7**，而且必须是**带共享库的构建**（bin 目录里有 `avcodec-*.dll`）。
+⚠️ gyan.dev 的 `full_build` 是**静态**构建，虽然版本号合规，但 `torchcodec` 会加载失败；
+BtbN 的 **shared** 包才行。**如果环境里已经有满足这两条的版本，安装脚本会直接跳过下载**；
+没有才去取一份放进项目内 `ffmpeg\` 目录，运行期由 `runtime_libraries.py` 自动接入
+（不需要你改 PATH，也不需要重启终端）：
 
 ```shell
 ffmpeg -version    # 确认大版本在 4–7 之间
