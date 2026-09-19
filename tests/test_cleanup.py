@@ -1,5 +1,7 @@
 """cleanup.py 的删除机制单元测试（在临时目录里做，不碰真实缓存）。"""
 
+import contextlib
+import io
 import os
 import pathlib
 import shutil
@@ -250,7 +252,18 @@ class TestMainCleanActuallyDeletes(unittest.TestCase):
     断言 `main(['--clean', ...])` 最终传给 `clean()` 的目标**非空**。
 
     用不存在的临时目录做目标，`Target.remove()` 不会删到任何真实文件。
+
+    ⚠️ 这些用例会走到真正的 `clean()`，于是会打印「将要删除 / 已删除 / 释放约
+    32 B」—— 2026-09-19 实测：这些行混进了 `Install.bat` 的输出，让用户以为
+    "安装完自动跑了清理脚本"。所以这里**必须把 stdout 收走**（`_quiet()`）。
     """
+
+    @contextlib.contextmanager
+    def _quiet(self):
+        """把被测代码的 stdout 收进缓冲区，别喷到安装日志里。"""
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            yield buf
 
     def _fake_target(self, key):
         tmp = tempfile.TemporaryDirectory()
@@ -270,7 +283,8 @@ class TestMainCleanActuallyDeletes(unittest.TestCase):
     def test_clean_reaches_deletion(self):
         """--clean --only <存在的目标> 必须走到删除，而不是"没有匹配的目标"。"""
         t = self._fake_target("pip")
-        rc = self._run_main(["--clean", "--only", "pip", "--yes"], [t])
+        with self._quiet():
+            rc = self._run_main(["--clean", "--only", "pip", "--yes"], [t])
         self.assertEqual(rc, 0, "clean() 返回非 0，说明没走到删除")
         self.assertFalse(t.path.exists(),
                          "目标目录还在 —— main() 没把选中的目标交给 clean()")
@@ -278,7 +292,8 @@ class TestMainCleanActuallyDeletes(unittest.TestCase):
     def test_clean_temp_preset_deletes_safe_targets(self):
         """不带 --only 的默认档位（--clean）也要真的删安全档。"""
         t = self._fake_target("pip")
-        rc = self._run_main(["--clean", "--yes"], [t])
+        with self._quiet():
+            rc = self._run_main(["--clean", "--yes"], [t])
         self.assertEqual(rc, 0)
         self.assertFalse(t.path.exists(), "默认档位没删安全缓存")
 
@@ -298,7 +313,8 @@ class TestMainCleanActuallyDeletes(unittest.TestCase):
              mock.patch.object(cleanup, "report", return_value=None), \
              mock.patch.object(cleanup, "warn_if_shared", return_value=None), \
              mock.patch.object(cleanup, "clean", side_effect=capture):
-            cleanup.main(["--clean", "--temp", "--no-temp", "--yes"])
+            with self._quiet():
+                cleanup.main(["--clean", "--temp", "--no-temp", "--yes"])
         self.assertIn("pip", seen.get("keys", []))
         self.assertNotIn("temp", seen.get("keys", []),
                          "--no-temp 没能排除系统临时目录")
@@ -327,7 +343,8 @@ class TestMainCleanActuallyDeletes(unittest.TestCase):
              mock.patch.object(cleanup, "report", return_value=None), \
              mock.patch.object(cleanup, "warn_if_shared", return_value=None), \
              mock.patch.object(cleanup, "clean", side_effect=capture):
-            cleanup.main(["--clean", "--all", "--no-project", "--yes"])
+            with self._quiet():
+                cleanup.main(["--clean", "--all", "--no-project", "--yes"])
         keys = seen.get("keys", [])
         self.assertIn("pip", keys)
         self.assertNotIn("downloads", keys, "--no-project 没能排除 _downloads")

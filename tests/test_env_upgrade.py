@@ -8,6 +8,8 @@
      否则 sm_61 上会拿到不含该架构的 cu128/cu129 构建）。
 """
 
+import contextlib
+import io
 import os
 import pathlib
 import sys
@@ -307,6 +309,10 @@ class TestSmokeConnectsDllDirs(unittest.TestCase):
 
         直接打桩 `installer._ensure_runtime_libraries` 来观察是否被调用，
         这样不依赖真实 import 顺序，也不受本机是否装了包的影响。
+
+        ⚠️ 必须把 stdout 收走：`smoke_imports()` 会真的 import 一遍六个模块，
+        其中一个失败就会打印诊断（2026-09-19 实测：这些行混进 `Install.bat`
+        的输出，让用户以为"没接入 FFmpeg 目录"）。
         """
         import unittest.mock as mock
         calls = []
@@ -319,7 +325,8 @@ class TestSmokeConnectsDllDirs(unittest.TestCase):
 
         with mock.patch.object(installer, "_ensure_runtime_libraries",
                                side_effect=_spy):
-            installer.smoke_imports(quiet=True)
+            with contextlib.redirect_stdout(io.StringIO()):
+                installer.smoke_imports(quiet=True)
         self.assertTrue(calls, "smoke_imports() 没有接入运行期库（DLL 目录）")
 
     def test_ensure_runtime_libraries_returns_report(self):
@@ -338,9 +345,13 @@ class TestSmokeConnectsDllDirs(unittest.TestCase):
                 "接入的 DLL 目录里没有一份含 avcodec-*.dll 的 FFmpeg")
 
     def test_explain_helper_tolerates_missing_report(self):
-        """诊断辅助函数不能因为在没有项目内 FFmpeg 时报错。"""
-        installer._explain_torchcodec_failure(None)
-        installer._explain_torchcodec_failure({})
+        """诊断辅助函数不能因为在没有项目内 FFmpeg 时报错。
+
+        同样要收走 stdout —— 它本来就是给人看的中文提示。
+        """
+        with contextlib.redirect_stdout(io.StringIO()):
+            installer._explain_torchcodec_failure(None)
+            installer._explain_torchcodec_failure({})
 
 
 class TestFfmpegSkipWhenUsable(unittest.TestCase):
