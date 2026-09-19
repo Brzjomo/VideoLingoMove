@@ -403,11 +403,19 @@ def conda_env_paths(fast: bool = False):
 def build_targets(extra_models=True):
     """枚举可清理的目标。
 
-    ``VIDEOLINGO_CLEANUP_FAST_SCAN=1`` 时改用 ``_test_dir_size()`` 并且跳过
-    "扫描各盘根目录找别的 VideoLingo 项目" —— 前者避免去量几 GB 的 pip/uv/Temp
-    缓存，后者避免遍历 `C:/ D:/ E:/ F:/` 的根目录。两者都只影响**大小数字**与
-    "历史遗留项目"这一类目标，不改变正常档位下"哪些缓存被选中"的判定。
-    ``tests/test_cleanup.py`` 依赖它把回归测试从"几分钟以上"压到 20 秒内。
+    关于 ``VIDEOLINGO_CLEANUP_FAST_SCAN=1``（**只由 ``tests/test_cleanup.py`` 设置**，
+    普通 CLI 运行与 ``Cleanup.bat`` 都不设它，所以日常行为不受影响）：
+
+    - **大小数字**：改用 ``_test_dir_size()``，不去量几 GB 的 pip/uv/Temp/HF 缓存，
+      这些目标的大小显示为 0；
+    - **会少枚举一类目标**：跳过 ``project_roots()``（要遍历 `C:/ D:/ E:/ F:/`
+      的根目录找别的 VideoLingo 项目），因此 **``project_cache:*`` 这类
+      "旧项目残留的 `_model_cache`" 不会出现在目标列表里**。
+
+    也就是说 FAST_SCAN **不是**"只影响大小"，它确实会少一类目标 —— 这是为了
+    让回归测试能跑完（本机实测：不跳过时单次 ``build_targets()`` 要 100 秒以上）。
+    默认位置的大模型（``~/.cache/huggingface/hub`` 下的 `models--*` 与
+    ``~/.cache/torch/hub/checkpoints`` 下的权重）**不受影响**，普通运行照常发现。
     """
     fast = _fast_scan()
     size_of = _test_dir_size if fast else dir_size
@@ -760,18 +768,38 @@ def build_parser():
     return parser
 
 
+def only_key_known(key: str) -> bool:
+    """`--only` 的 key 是否合法（**纯常量判断，不扫盘**）。
+
+    动态 key（`hf_own:<模型名>` / `torch_ckpt:<权重名>`）按前缀放行：它们来自
+    ``build_targets()`` 的逐模型分支，只有在机器上**真的存在**时才能被点名删掉，
+    所以拿不到目标列表时无法逐个核对。放行后由 ``select_targets()`` 精确匹配，
+    key 不存在就选不到东西（``clean()`` 会打印"没有匹配的清理目标"）。
+
+    放在扫盘之前判断是有意的：``report()`` 会对旧 conda 环境与整个模型缓存做
+    全量求和（本机 110 秒以上），而 `--only` 写错时必须立刻报错返回。
+    """
+    if key in ({"models", "conda_env"} | set(SAFE_KEYS) | set(CACHE_KEYS)
+               | set(PROJECT_KEYS) | {"temp"}):
+        return True
+    prefix, sep, name = key.partition(":")
+    return bool(sep and name) and prefix in ("hf_own", "torch_ckpt")
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
 
-    # `--only` 的合法性只依赖 key 常量，不需要先扫盘：把校验提到 build_targets()
-    # 之前，既少走一遍几 GB 的目录统计，也让这一分支可以被单元测试快速覆盖。
+    # 先校验 `--only`：写错 key 要立刻返回，不要先花两分钟扫盘再报错。
     if args.clean and args.only:
-        known_static = {"models", "conda_env"} | set(SAFE_KEYS) | set(CACHE_KEYS) \
-            | set(PROJECT_KEYS) | {"temp"}
-        unknown = {k.strip() for k in args.only.split(",") if k.strip()} - known_static
+        keys = [k.strip() for k in args.only.split(",") if k.strip()]
+        unknown = [k for k in keys if not only_key_known(k)]
         if unknown:
-            print(f"❌ 未知清理项：{', '.join(sorted(unknown))}")
-            print(f"   可用项：{', '.join(sorted(known_static))}")
+            provided = {"models", "conda_env"} | set(SAFE_KEYS) | set(CACHE_KEYS) \
+                | set(PROJECT_KEYS) | {"temp"}
+            print(f"❌ 未知清理项：{', '.join(sorted(set(unknown)))}")
+            print(f"   可用项：{', '.join(sorted(provided))}")
+            print("   另外可以点名单个模型/权重：hf_own:<模型名>、torch_ckpt:<权重名>"
+                  "（名字见不带 --clean 时的报告）")
             return 1
 
     targets = build_targets()
@@ -786,16 +814,14 @@ def main(argv=None):
         print("      再加项目内 _downloads 与 ffmpeg：python cleanup.py --clean --models --all")
         print("      整个 HF/torch 缓存（⚠️ 会牵连别的项目，需点名）：")
         print("                                      python cleanup.py --clean --only hf,torch")
+        print("      只删某一个具体模型（key 见上方报告）：")
+        print("                                      python cleanup.py --clean --only hf_own:<模型名>")
         return 0
 
     if args.only:
         keys = {k.strip() for k in args.only.split(",") if k.strip()}
-        known = {t.key for t in targets} | {"models"} | set(CACHE_KEYS)
-        unknown = keys - known
-        if unknown:
-            print(f"❌ 未知清理项：{', '.join(sorted(unknown))}")
-            print(f"   可用项：{', '.join(sorted(known))}")
-            return 1
+        # 这里不再判"未知项"（已在 main() 开头用常量判断过）；此处的 targets
+        # 只用于 select_targets 的精确匹配。
     else:
         keys = set(SAFE_KEYS)
         if args.models:
