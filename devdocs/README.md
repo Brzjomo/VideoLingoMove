@@ -225,9 +225,10 @@ devdocs/
  该日期之后的改动可能尚未同步，以源码为准并顺手更新。
 2. 文档由多轮「读源码 → 写文档 → 交叉核验」产出。发现不一致时以源码为准。
 3. **跑验证脚本请用项目环境**：`Install.bat` 会建出 `<项目>\.venv`，用它跑：
- `.venv\Scripts\python.exe <script>`。若还没装环境，旧的 conda 环境 `videolingo` 是**升级前的老栈**
- （torch 2.1.2 / streamlit 1.38 / spacy 3.7），**不能**用来跑本分支的 `st.py`；
- 它只在"想跑不依赖新栈的单元测试"时还有用。
+ `.venv\Scripts\python.exe <script>`。本项目当前可能**既没有 `.venv` 也没有 conda 环境**
+ （旧的 conda 环境 `videolingo` 是升级前的老栈，可能已被 `Cleanup.bat` 清掉）——
+ 这时多数单元测试仍能跑，但依赖 pandas 的 `tests/test_audio_extraction.py` 会因缺依赖
+ 报错/跳过，属正常。
 4. `config.yaml` 是本机文件，处于**调优状态**而非通用默认值，且行号会随编辑漂移 ——
  所以文档里一律引用键名（并用 `grep -n '键名' config.yaml` 定位），不引用行号。
 5. **Windows 控制台编码**：直接 `python -m core.step2_whisperX` 需要 UTF-8 输出，否则打印 emoji 会崩。

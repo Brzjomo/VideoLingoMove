@@ -699,8 +699,15 @@ def select_targets(targets, keys):
     return chosen
 
 
-def clean(targets, keys, assume_yes=False):
-    chosen = select_targets(targets, keys)
+def clean(chosen, assume_yes=False):
+    """删除**已经选好**的目标。
+
+    ⚠️ 参数是目标列表，不是 key 集合 —— 这里**不要**再调 ``select_targets()``。
+    曾经 ``main()`` 先选好 ``chosen`` 叫 ``clean(chosen, set())``，而 ``clean()``
+    内部又拿那个空集合重新筛了一遍，于是必然筛空、打印「没有匹配的清理目标」
+    并返回 1：**任何 ``--clean`` 都删不掉东西**（报告里却照常列出可清理项）。
+    筛选只在调用方做一次（``select_targets()``），``clean()`` 只负责删。
+    """
     if not chosen:
         print("没有匹配的清理目标。")
         return 1
@@ -760,10 +767,16 @@ def build_parser():
                         help="再加项目内 _downloads 与 ffmpeg")
     parser.add_argument("--temp", action="store_true",
                         help="清理系统临时目录（全系统共用，谨慎）")
+    parser.add_argument("--no-temp", action="store_true",
+                        help="**排除系统临时目录**：即使同时写了 --temp 也不清它")
+    parser.add_argument("--no-project", action="store_true",
+                        help="**排除项目目录内的产物**（_downloads、ffmpeg）："
+                             "即使同时写了 --all 也不清它们")
     parser.add_argument("--only", default=None,
                         help="只清理指定项，逗号分隔："
                              "pip,uv,pip_project,uv_project,models,hf,torch,temp,"
-                             "downloads,ffmpeg,conda_env")
+                             "downloads,ffmpeg,conda_env；也可点名单个模型："
+                             "hf_own:<模型名>、torch_ckpt:<权重名>")
     parser.add_argument("--yes", action="store_true", help="跳过确认提示")
     return parser
 
@@ -816,6 +829,7 @@ def main(argv=None):
         print("                                      python cleanup.py --clean --only hf,torch")
         print("      只删某一个具体模型（key 见上方报告）：")
         print("                                      python cleanup.py --clean --only hf_own:<模型名>")
+        print("      不想动系统临时目录 / 项目内产物，加 --no-temp / --no-project")
         return 0
 
     if args.only:
@@ -832,9 +846,17 @@ def main(argv=None):
         if args.temp:
             keys.add("temp")
 
+    # 两个"排除"开关：只做减法，优先级高于对应的"加入"开关。
+    # 用途：不希望清理工具碰系统临时目录 / 项目目录内的产物时，即便手滑写了
+    # --temp / --all 也不会动它们。
+    if args.no_temp:
+        keys.discard("temp")
+    if args.no_project:
+        keys -= set(PROJECT_KEYS)
+
     chosen = select_targets(targets, keys)
     warn_if_shared(chosen)
-    return clean(chosen, set(), assume_yes=args.yes)
+    return clean(chosen, assume_yes=args.yes)
 
 
 def warn_if_shared(chosen):

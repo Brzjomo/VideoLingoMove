@@ -236,6 +236,104 @@ class TestTargetSelection(unittest.TestCase):
         self.assertEqual(cleanup.select_targets(self._targets(), {"nope"}), [])
 
 
+class TestMainCleanActuallyDeletes(unittest.TestCase):
+    """回归：`main() --clean` 必须真的把选中的目标交给 clean()。
+
+    背景（2026-09-19 实测发现）：`main()` 先 `chosen = select_targets(...)`，
+    却调用 `clean(chosen, set())`，而 `clean()` 内部**又**拿那个空集合筛了一遍
+    —— 于是任何 `--clean` 都必然打印「没有匹配的清理目标」并返回 1：
+    报告里明明列着 12 GB 可清理的模型，用户跑 `Cleanup.bat --clean --models`
+    却什么都没删。
+
+    原测试只单独测 `select_targets()`，从没测过 `select_targets → clean` 这条
+    链路，所以这个 bug 一直躲过了测试。这里用 mock 锁住这条链路：
+    断言 `main(['--clean', ...])` 最终传给 `clean()` 的目标**非空**。
+
+    用不存在的临时目录做目标，`Target.remove()` 不会删到任何真实文件。
+    """
+
+    def _fake_target(self, key):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        p = pathlib.Path(tmp.name) / key
+        p.mkdir()
+        (p / "f.bin").write_bytes(b"x" * 32)
+        return cleanup.Target(key, f"测试目标 {key}", p, "safe", "test")
+
+    def _run_main(self, argv, targets):
+        import unittest.mock as mock
+        with mock.patch.object(cleanup, "build_targets", return_value=targets), \
+             mock.patch.object(cleanup, "report", return_value=None), \
+             mock.patch.object(cleanup, "warn_if_shared", return_value=None):
+            return cleanup.main(argv)
+
+    def test_clean_reaches_deletion(self):
+        """--clean --only <存在的目标> 必须走到删除，而不是"没有匹配的目标"。"""
+        t = self._fake_target("pip")
+        rc = self._run_main(["--clean", "--only", "pip", "--yes"], [t])
+        self.assertEqual(rc, 0, "clean() 返回非 0，说明没走到删除")
+        self.assertFalse(t.path.exists(),
+                         "目标目录还在 —— main() 没把选中的目标交给 clean()")
+
+    def test_clean_temp_preset_deletes_safe_targets(self):
+        """不带 --only 的默认档位（--clean）也要真的删安全档。"""
+        t = self._fake_target("pip")
+        rc = self._run_main(["--clean", "--yes"], [t])
+        self.assertEqual(rc, 0)
+        self.assertFalse(t.path.exists(), "默认档位没删安全缓存")
+
+    def test_no_temp_excludes_temp(self):
+        """--no-temp 即使和 --temp 同时给，也不该选中 temp。"""
+        seen = {}
+
+        def capture(chosen, assume_yes=False):
+            seen["keys"] = [t.key for t in chosen]
+            return 0
+
+        tmp_t = self._fake_target("temp")
+        pipe_t = self._fake_target("pip")
+        import unittest.mock as mock
+        with mock.patch.object(cleanup, "build_targets",
+                               return_value=[tmp_t, pipe_t]), \
+             mock.patch.object(cleanup, "report", return_value=None), \
+             mock.patch.object(cleanup, "warn_if_shared", return_value=None), \
+             mock.patch.object(cleanup, "clean", side_effect=capture):
+            cleanup.main(["--clean", "--temp", "--no-temp", "--yes"])
+        self.assertIn("pip", seen.get("keys", []))
+        self.assertNotIn("temp", seen.get("keys", []),
+                         "--no-temp 没能排除系统临时目录")
+
+    def test_no_project_excludes_project_artifacts(self):
+        """--no-project 即使和 --all 同时给，也不该选中 _downloads/ffmpeg。"""
+        seen = {}
+
+        def capture(chosen, assume_yes=False):
+            seen["keys"] = [t.key for t in chosen]
+            return 0
+
+        inner = tempfile.TemporaryDirectory()
+        self.addCleanup(inner.cleanup)
+        root = pathlib.Path(inner.name)
+        dl = root / "_downloads"
+        dl.mkdir()
+        ff = root / "ffmpeg"
+        ff.mkdir()
+        d_t = cleanup.Target("downloads", "dl", dl, "confirm", "t")
+        f_t = cleanup.Target("ffmpeg", "ff", ff, "confirm", "t")
+        p_t = self._fake_target("pip")
+        import unittest.mock as mock
+        with mock.patch.object(cleanup, "build_targets",
+                               return_value=[d_t, f_t, p_t]), \
+             mock.patch.object(cleanup, "report", return_value=None), \
+             mock.patch.object(cleanup, "warn_if_shared", return_value=None), \
+             mock.patch.object(cleanup, "clean", side_effect=capture):
+            cleanup.main(["--clean", "--all", "--no-project", "--yes"])
+        keys = seen.get("keys", [])
+        self.assertIn("pip", keys)
+        self.assertNotIn("downloads", keys, "--no-project 没能排除 _downloads")
+        self.assertNotIn("ffmpeg", keys, "--no-project 没能排除 ffmpeg")
+
+
 class TestNoSharedDataInModelsSelection(unittest.TestCase):
     """端到端安全断言：用真实的 build_targets()，
     `--clean --models` 选中的任何目标都不得"包含"别的项目的模型。"""
@@ -407,6 +505,7 @@ class TestCondaDetection(unittest.TestCase):
                   if name not in ("base", cleanup.TARGET_ENV)}
         exe = cleanup.conda_exe()
         base = pathlib.Path(exe).parent.parent if exe is not None else None
+        envs_dir = (base / "envs") if base is not None else None
         legacy = [pathlib.Path(p) for p in cleanup.conda_env_paths()]
 
         # 允许出现的目标路径：旧环境自己的目录，以及它所在的 envs/ 目录
@@ -426,18 +525,29 @@ class TestCondaDetection(unittest.TestCase):
                     guarded == target.path or guarded in target.path.parents,
                     f"清理目标 {target.label} 落在别人的 conda 环境里：{target.path}",
                 )
-
-            # 3) conda base：只允许"旧环境报告目标"位于其下
-            if base is not None and target.path in allowed:
-                continue
-            if base is not None:
+            # 3) conda base：只禁止"把 anaconda3\envs\ 或其中**别的**环境当目标"。
+            #    ⚠️ 不能用 `base in target.path.parents`（要求不得位于 anaconda3 之下）：
+            #    旧环境 videolingo 按定义就在 anaconda3\envs\ 下，那样写会把工具
+            #    自己的报告目标判成违规 —— 这一条 2026-09-19 实测踩到过。
+            if envs_dir is not None and target.path not in allowed:
                 self.assertFalse(
-                    base == target.path or base in target.path.parents,
-                    f"清理目标 {target.label} 落在 conda base 里：{target.path}",
+                    envs_dir == target.path or envs_dir in target.path.parents,
+                    f"清理目标 {target.label} 落在 conda 的 envs 目录里：{target.path}",
+                )
+                self.assertFalse(
+                    base == target.path,
+                    f"清理目标 {target.label} 就是 conda base 本身：{target.path}",
                 )
 
-        # 顺带确认环境探测本身没坏（否则上面的断言会退化成恒真）
-        self.assertTrue(legacy, "应能探测到旧环境 videolingo 的路径")
+        # 顺带一条"守卫本身没坏"的自检：**只在旧环境真的存在时才断言**。
+        # 旧环境是可以被用户删掉的（本机 2026-09-19 就删了），写成无条件断言
+        # 会在环境已清理的机器上误报 —— 而"没有旧环境"恰好是这套工具的目标状态。
+        if envs_dir is not None and (envs_dir / cleanup.TARGET_ENV).is_dir():
+            self.assertTrue(
+                legacy, f"{envs_dir / cleanup.TARGET_ENV} 存在，应能探测到它")
+        else:
+            print(f"  [skip] 本机没有旧 conda 环境 {cleanup.TARGET_ENV}，"
+                  "跳过探测自检")
 
     def test_conda_exe_none_is_handled(self):
         """没有 conda 时报空字典而不是抛异常。"""
@@ -471,6 +581,9 @@ class TestTestsAreQuiet(unittest.TestCase):
         import sys as _sys
         env = dict(os.environ)
         env[self.NESTED_ENV_VAR] = "1"
+        # 继承 PYTHONPATH：这两条用例断言子进程"整套测试退出码为 0"，而子进程
+        # 用的是同一个解释器。若调用方是靠 PYTHONPATH 借来项目依赖（本项目当前
+        # 没有 .venv / conda 环境时很常见），不继承就会让子进程缺依赖而误报。
         return subprocess.run(
             [_sys.executable, "-m", "unittest", *argv],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
