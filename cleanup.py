@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -68,10 +69,88 @@ def dir_size(path):
     return total
 
 
+def _fast_scan() -> bool:
+    """单元测试用的"别去量真实缓存"开关，见 ``build_targets()`` 的说明。"""
+    return os.environ.get("VIDEOLINGO_CLEANUP_FAST_SCAN") == "1"
+
+
+_TEMP_ROOTS_CACHE: list[str] | None = None
+
+
+def _temp_roots() -> list[str]:
+    """系统临时目录的候选路径（小写、缓存）。"""
+    global _TEMP_ROOTS_CACHE
+    if _TEMP_ROOTS_CACHE is None:
+        roots = [Path(tempfile.gettempdir()).resolve()]
+        for base in ("/tmp", "/var/tmp"):
+            roots.append(Path(base))
+        _TEMP_ROOTS_CACHE = [str(r).lower().rstrip("\\/") for r in roots]
+    return _TEMP_ROOTS_CACHE
+
+
+def _test_dir_size(path):
+    """FAST_SCAN 下的 ``dir_size()``：只真实统计"看起来像测试临时目录"的小目录。
+
+    真实缓存（pip / uv / 系统 Temp / HF hub）动辄几 GB，量一遍要几十秒；而
+    ``tests/`` 用 ``tempfile.TemporaryDirectory()`` 造的都是 KB 级数据。
+
+    规则：
+    - 不存在 → ``None``（与 ``dir_size`` 一致）
+    - 系统临时目录**本身**（如字面量 ``%TEMP%``）→ ``0``，不递归（本机它是 14 GB）
+    - 落在临时目录**里面**、且只有少量小文件的目录 → 真实统计
+    - 其余（真实缓存）→ ``0``
+
+    ⚠️ 这里**不做** ``Path.resolve()``：HF 缓存里的模型目录动辄上万个文件，
+    对一个几 GB 的目录调 resolve 本身就慢。改用纯字符串前缀比较，零 IO。
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    key = str(path).lower().rstrip("\\/")
+    inside_temp = False
+    for root in _temp_roots():
+        if key == root:
+            return 0                     # 临时目录本身：可能是十几 GB
+        if key.startswith(root + os.sep) or key.startswith(root + "/"):
+            inside_temp = True
+            break
+    if not inside_temp:
+        return 0
+    return dir_size(path) if _small_dir(path) else 0
+
+
+#: 判定"小目录"的上限：条目数与总字节都远低于真实缓存规模
+_SMALL_DIR_MAX_ENTRIES = 200
+_SMALL_DIR_MAX_BYTES = 8 * 1024 * 1024
+
+
+def _small_dir(path) -> bool:
+    """只扫**一层**判断是不是小目录（测试临时目录都是这样）。"""
+    total = 0
+    count = 0
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                count += 1
+                if count > _SMALL_DIR_MAX_ENTRIES:
+                    return False
+                try:
+                    if entry.is_file(follow_symlinks=False):
+                        total += entry.stat(follow_symlinks=False).st_size
+                        if total > _SMALL_DIR_MAX_BYTES:
+                            return False
+                except OSError:
+                    continue
+    except OSError:
+        return False
+    return True
+
+
 class Target:
     """一个可清理的目标。"""
 
-    def __init__(self, key, label, path, tier, note="", purge_cmd=None):
+    def __init__(self, key, label, path, tier, note="", purge_cmd=None,
+                 size_of=None):
         self.key = key
         self.label = label
         self.path = Path(path)
@@ -80,7 +159,8 @@ class Target:
         # 优先用工具自带的清理命令（pip/uv 都提供了），比自己删目录更稳妥：
         # 它们只清缓存、不会误伤配置
         self.purge_cmd = purge_cmd
-        self.size = dir_size(self.path)
+        # size_of 允许调用方替换度量方式（单元测试用它跳过几 GB 的真实缓存）
+        self.size = (size_of or dir_size)(self.path)
 
     @property
     def exists(self):
@@ -222,8 +302,12 @@ def hf_cache_hub_dirs():
     return found
 
 
-def hf_models_in(hub_dir):
-    """返回 hub 目录下的模型目录列表 [(名字, 路径, 大小, 归属)]。"""
+def hf_models_in(hub_dir, size_of=None):
+    """返回 hub 目录下的模型目录列表 [(名字, 路径, 大小, 归属)]。
+
+    ``size_of`` 默认 ``dir_size``；测试可传 ``_test_dir_size`` 以避免量真实缓存。
+    """
+    size_of = size_of or dir_size
     result = []
     if not Path(hub_dir).is_dir():
         return result
@@ -234,7 +318,7 @@ def hf_models_in(hub_dir):
     for entry in entries:
         if not entry.is_dir() or not entry.name.startswith("models--"):
             continue
-        result.append((entry.name, entry, dir_size(entry),
+        result.append((entry.name, entry, size_of(entry),
                        classify_model(entry.name)))
     return result
 
@@ -294,7 +378,7 @@ def project_roots():
 LEGACY_CONDA_ENV = "videolingo"
 
 
-def conda_env_paths():
+def conda_env_paths(fast: bool = False):
     """在所有已知 conda 安装里找**旧环境** videolingo 的路径。"""
     found = []
     for base in (HOME / "anaconda3", HOME / "miniconda3", HOME / "miniforge3",
@@ -308,7 +392,7 @@ def conda_env_paths():
         if env_dir.is_dir():
             found.append(env_dir)
     # conda 自己记录的环境列表是最可靠的来源
-    for name, path in conda_environments().items():
+    for name, path in conda_environments(fast=fast).items():
         if name == LEGACY_CONDA_ENV and Path(path).is_dir():
             if Path(path) not in found:
                 found.append(Path(path))
@@ -317,6 +401,16 @@ def conda_env_paths():
 
 # ---------------------------------------------------------------- 目标清单
 def build_targets(extra_models=True):
+    """枚举可清理的目标。
+
+    ``VIDEOLINGO_CLEANUP_FAST_SCAN=1`` 时改用 ``_test_dir_size()`` 并且跳过
+    "扫描各盘根目录找别的 VideoLingo 项目" —— 前者避免去量几 GB 的 pip/uv/Temp
+    缓存，后者避免遍历 `C:/ D:/ E:/ F:/` 的根目录。两者都只影响**大小数字**与
+    "历史遗留项目"这一类目标，不改变正常档位下"哪些缓存被选中"的判定。
+    ``tests/test_cleanup.py`` 依赖它把回归测试从"几分钟以上"压到 20 秒内。
+    """
+    fast = _fast_scan()
+    size_of = _test_dir_size if fast else dir_size
     local = Path(os.environ.get("LOCALAPPDATA", HOME / "AppData" / "Local"))
     py = sys.executable
     uv = uv_exe()
@@ -324,46 +418,57 @@ def build_targets(extra_models=True):
         # --- 安全档：纯下载缓存，删掉只影响"下次要重新下载" ---
         Target("pip", "pip 下载缓存", local / "pip" / "Cache", "safe",
                "只缓存下载过的 wheel，可随时删",
-               purge_cmd=[py, "-m", "pip", "cache", "purge"]),
+               purge_cmd=[py, "-m", "pip", "cache", "purge"],
+                                  size_of=size_of),
         Target("uv", "uv 下载缓存", local / "uv" / "cache", "safe",
                "uv 的全局 wheel 缓存",
-               purge_cmd=[uv, "cache", "clean"] if uv else None),
+               purge_cmd=[uv, "cache", "clean"] if uv else None,
+                                  size_of=size_of),
         Target("pip_project", "项目内 pip 缓存", PROJECT / ".pip-cache", "safe",
-               "setup_env.py 指向项目内的 pip 缓存"),
+               "setup_env.py 指向项目内的 pip 缓存",
+                                  size_of=size_of),
         Target("uv_project", "项目内 uv 缓存", PROJECT / ".uv-cache", "safe",
-               "setup_env.py 指向项目内的 uv 缓存"),
+               "setup_env.py 指向项目内的 uv 缓存",
+                                  size_of=size_of),
 
         # --- 需确认档：可能与别的项目共用 ---
         Target("hf", "HuggingFace 模型缓存（整个）", HOME / ".cache" / "huggingface",
                "confirm",
-               "⚠️ 全机共用；本机另有 aisummary 的模型在里面，默认不动"),
+               "⚠️ 全机共用；本机另有 aisummary 的模型在里面，默认不动",
+                                  size_of=size_of),
         Target("torch", "torch hub 模型缓存（整个）", HOME / ".cache" / "torch",
-               "confirm", "含 WhisperX 的对齐模型（wav2vec2 等）"),
+               "confirm", "含 WhisperX 的对齐模型（wav2vec2 等）",
+                                  size_of=size_of),
         Target("temp", "系统临时目录", local / "Temp", "confirm",
-               "⚠️ 全系统共用；只建议清理里面明显过期的条目，且被占用的删不掉"),
+               "⚠️ 全系统共用；只建议清理里面明显过期的条目，且被占用的删不掉",
+                                  size_of=size_of),
 
         # --- 项目内大件 ---
         Target("downloads", "项目 _downloads（大文件目录）", PROJECT / "_downloads",
-               "confirm", "torch 轮子等；若还要重装就别删，删了要重下 2.9 GB"),
+               "confirm", "torch 轮子等；若还要重装就别删，删了要重下 2.9 GB",
+                                  size_of=size_of),
         Target("ffmpeg", "项目 ffmpeg（自带 FFmpeg）", PROJECT / "ffmpeg", "confirm",
-               "删了下次安装会重新下载（约 68 MB）；系统那份静态版不能替代它"),
+               "删了下次安装会重新下载（约 68 MB）；系统那份静态版不能替代它",
+                                  size_of=size_of),
     ]
 
     # 旧 conda 环境：只报告并给命令（不在这里直接删 —— 交给 conda 自己处理）
-    for env_path in conda_env_paths():
+    for env_path in conda_env_paths(fast=fast):
         targets.append(Target(
             "conda_env", f"旧 conda 环境 {LEGACY_CONDA_ENV}", env_path, "confirm",
             "⚠️ 建议用 conda 自己删：conda env remove -n "
-            f"{LEGACY_CONDA_ENV} -y"))
+            f"{LEGACY_CONDA_ENV} -y",
+                                  size_of=size_of))
         break
 
     # 各缓存目录里**确定属于本项目**的模型（逐目录挑，不整锅端）
     for hub in hf_cache_hub_dirs():
-        for name, path, _size, owner in hf_models_in(hub):
+        for name, path, _size, owner in hf_models_in(hub, size_of=size_of):
             if owner != "own":
                 continue
             targets.append(Target(f"hf_own:{name}", f"HF 模型 {name}", path,
-                                  "confirm", "判定属于 VideoLingo"))
+                                  "confirm", "判定属于 VideoLingo",
+                                  size_of=size_of))
     for ckpt_dir in torch_hub_checkpoint_dirs():
         try:
             entries = sorted(ckpt_dir.iterdir())
@@ -376,15 +481,18 @@ def build_targets(extra_models=True):
             for entry in own:
                 targets.append(Target(f"torch_ckpt:{entry.name}",
                                       f"torch.hub 权重 {entry.name}", entry,
-                                      "confirm", "WhisperX 对齐模型"))
+                                      "confirm", "WhisperX 对齐模型",
+                                  size_of=size_of))
 
     # 其他项目目录里的 _model_cache（旧版项目可能还留着 Whisper 权重）
-    for project in project_roots():
+    # FAST_SCAN 下跳过：project_roots() 要列 C:/ D:/ E:/ F:/ 的根目录，很慢。
+    for project in ([] if fast else project_roots()):
         cache = project / "_model_cache"
         if cache.is_dir() and dir_size(cache):
             targets.append(Target(f"project_cache:{project.name}",
                                   f"{project} 的 _model_cache", cache, "confirm",
-                                  "旧项目缓存（含 Whisper 识别模型）"))
+                                  "旧项目缓存（含 Whisper 识别模型）",
+                                  size_of=size_of))
     return targets
 
 
@@ -411,8 +519,15 @@ def conda_exe():
     return Path(found) if found else None
 
 
-def conda_environments():
-    """返回 {环境名: 路径}；拿不到就返回 {}。"""
+def conda_environments(fast: bool = False):
+    """返回 {环境名: 路径}；拿不到就返回 {}。
+
+    ``fast=True``（单元测试用）时不做 ``conda env list`` 子进程调用：本机 conda
+    首次执行要 1–2 分钟，会把回归测试拖垮。此时只靠目录探测（``conda_env_paths``
+    的候选路径列表）仍能定位旧环境。
+    """
+    if fast:
+        return {}
     exe = conda_exe()
     if exe is None:
         return {}
@@ -647,6 +762,18 @@ def build_parser():
 
 def main(argv=None):
     args = build_parser().parse_args(argv)
+
+    # `--only` 的合法性只依赖 key 常量，不需要先扫盘：把校验提到 build_targets()
+    # 之前，既少走一遍几 GB 的目录统计，也让这一分支可以被单元测试快速覆盖。
+    if args.clean and args.only:
+        known_static = {"models", "conda_env"} | set(SAFE_KEYS) | set(CACHE_KEYS) \
+            | set(PROJECT_KEYS) | {"temp"}
+        unknown = {k.strip() for k in args.only.split(",") if k.strip()} - known_static
+        if unknown:
+            print(f"❌ 未知清理项：{', '.join(sorted(unknown))}")
+            print(f"   可用项：{', '.join(sorted(known_static))}")
+            return 1
+
     targets = build_targets()
 
     report(targets)

@@ -9,6 +9,14 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+#: 让 cleanup.dir_size() 跳过"明显很大"的目录的逐文件统计。本机 pip/uv 缓存与
+#: 系统 Temp 动辄几 GB，而 `TestCleanSelection.test_unknown_only_key_is_rejected`
+#: 要调 `cleanup.main()`、`TestNoSharedDataInModelsSelection` 要调 `build_targets()`
+#: —— 不关掉实扫时这几个用例会把整套回归测试拖到几分钟以上（实测单个类 >60s）。
+#: 该开关只影响"大小数字"（超限目录记 0），不影响"哪些目标被选中"的判定逻辑；
+#: 临时目录里 KB 级的测试文件仍旧精确统计。
+os.environ.setdefault("VIDEOLINGO_CLEANUP_FAST_SCAN", "1")
+
 import cleanup  # noqa: E402
 
 
@@ -379,29 +387,57 @@ class TestCondaDetection(unittest.TestCase):
         self.assertIsInstance(envs, dict)
 
     def test_paths_are_never_conda_envs(self):
-        """没有任何清理目标的路径落在 conda 的 envs 目录里。
+        """清理目标绝不落在"别人的 conda 环境"或"conda base"里。
 
         断言的是**路径**而不是标签文字：hf 目标的说明里就提到了 aisummary
         （提醒用户那里也有模型），那只是提示，不是删除目标。
-        这里只调用 build_targets() 一次，代价是统计几个缓存目录的大小。
+
+        ⚠️ 关于 `conda_env` 这个目标的例外，三条不变量：
+        1. 旧环境路径本身**允许**被列为目标 —— `clean()` 对它只打印
+           `conda env remove -n videolingo -y`，从不直接删目录；
+        2. 因此断言不能写成"目标路径不得位于 anaconda3 之下" —— 旧环境按定义
+           就在 `anaconda3\\envs\\` 下，那样写会把工具自己的报告目标判成违规；
+        3. 真正要守住的是：**别人的 conda 环境**（comfyui/danmu/…）与本项目的
+           conda **base** 目录，不得成为任何目标的路径。
+
+        这里只调用 build_targets() 一次。
         """
         envs = cleanup.conda_environments()
-        other = [pathlib.Path(p) for name, p in envs.items()
-                 if name not in ("base", cleanup.TARGET_ENV)]
-        base = None
+        others = {pathlib.Path(p) for name, p in envs.items()
+                  if name not in ("base", cleanup.TARGET_ENV)}
         exe = cleanup.conda_exe()
-        if exe is not None:
-            base = pathlib.Path(exe).parent.parent   # ...\anaconda3\Scripts\conda.exe
+        base = pathlib.Path(exe).parent.parent if exe is not None else None
+        legacy = [pathlib.Path(p) for p in cleanup.conda_env_paths()]
 
-        forbidden = other + ([base] if base else [])
-        for target in cleanup.build_targets():
+        # 允许出现的目标路径：旧环境自己的目录，以及它所在的 envs/ 目录
+        allowed = set()
+        for p in legacy:
+            allowed.add(p)
+            allowed.add(p.parent)
+
+        targets = cleanup.build_targets()
+        for target in targets:
             self.assertIn(target.tier, ("safe", "confirm"))
             self.assertTrue(target.note)
-            for guarded in forbidden:
+
+            # 3) 别人的环境：任何形式的包含关系都不允许
+            for guarded in others:
                 self.assertFalse(
                     guarded == target.path or guarded in target.path.parents,
-                    f"清理目标 {target.label} 落在受保护的 conda 路径里：{target.path}",
+                    f"清理目标 {target.label} 落在别人的 conda 环境里：{target.path}",
                 )
+
+            # 3) conda base：只允许"旧环境报告目标"位于其下
+            if base is not None and target.path in allowed:
+                continue
+            if base is not None:
+                self.assertFalse(
+                    base == target.path or base in target.path.parents,
+                    f"清理目标 {target.label} 落在 conda base 里：{target.path}",
+                )
+
+        # 顺带确认环境探测本身没坏（否则上面的断言会退化成恒真）
+        self.assertTrue(legacy, "应能探测到旧环境 videolingo 的路径")
 
     def test_conda_exe_none_is_handled(self):
         """没有 conda 时报空字典而不是抛异常。"""
@@ -415,18 +451,39 @@ class TestTestsAreQuiet(unittest.TestCase):
     `tests/test_cleanup.py` 里的用例直接调了 `cleanup.main([...])`，而 main()
     会**先打印整个扫描报告**，于是 `Install.bat` 的最后看起来像"自动跑了
     cleanup 脚本"。这个用例就是防止再犯。
+
+    ⚠️ **防重入**：这两个用例要跑子进程，而子进程跑的正是本模块/本套件，
+    子进程里的同一个用例又会再 fork 一层 —— 没有护栏时
+    `python -m unittest discover -s tests` **永远不会结束**（每层都在等子进程）。
+    因此子进程会带上 `NESTED_ENV_VAR=1`；带该变量运行时直接跳过，因为
+    "是否泄漏扫描报告"已经由最外层那一次运行检查过了。
     """
 
     #: 扫描报告里必定出现的标题片段
     REPORT_MARKERS = ("清理扫描", "【Conda】", "模型缓存发现", "缓存与项目目录")
 
-    def test_cleanup_tests_print_no_report(self):
+    #: 子进程若带此变量，说明自己就是被嵌套调用起来的，直接跳过
+    NESTED_ENV_VAR = "VIDEOLINGO_CLEANUP_QUIET_NESTED"
+
+    def _spawn(self, argv):
+        import os
         import subprocess
         import sys as _sys
-        proc = subprocess.run(
-            [_sys.executable, "-m", "unittest", "tests.test_cleanup", "-v"],
+        env = dict(os.environ)
+        env[self.NESTED_ENV_VAR] = "1"
+        return subprocess.run(
+            [_sys.executable, "-m", "unittest", *argv],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=env,
         )
+
+    def setUp(self):
+        import os
+        if os.environ.get(self.NESTED_ENV_VAR) == "1":
+            self.skipTest("嵌套运行：静默性已由最外层那次运行检查")
+
+    def test_cleanup_tests_print_no_report(self):
+        proc = self._spawn(["tests.test_cleanup", "-v"])
         self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
         leaked = [m for m in self.REPORT_MARKERS if m in (proc.stdout or "")]
         self.assertEqual(leaked, [],
@@ -434,12 +491,7 @@ class TestTestsAreQuiet(unittest.TestCase):
 
     def test_full_suite_prints_no_report(self):
         """整套测试（就是 Install.bat 跑的那条命令）同样不能泄漏报告。"""
-        import subprocess
-        import sys as _sys
-        proc = subprocess.run(
-            [_sys.executable, "-m", "unittest", "discover", "-s", "tests"],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-        )
+        proc = self._spawn(["discover", "-s", "tests"])
         self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
         leaked = [m for m in self.REPORT_MARKERS if m in (proc.stdout or "")]
         self.assertEqual(leaked, [],
