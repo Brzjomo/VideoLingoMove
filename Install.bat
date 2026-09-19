@@ -70,6 +70,8 @@ if not "%RC%"=="0" goto :failed
 
 echo.
 echo [4/5] Running unit tests ...
+echo       (these tests only check the code; they delete nothing and change
+echo        nothing -- any output below is test output, not a setup step)
 if exist "%VENV_PY%" (
     "%VENV_PY%" -m unittest discover -s tests
 ) else (

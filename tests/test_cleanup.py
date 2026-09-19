@@ -118,9 +118,20 @@ class TestCleanSelection(unittest.TestCase):
         self.assertEqual(len(keys), len(set(keys)), "清理项 key 不能重复")
 
     def test_unknown_only_key_is_rejected(self):
-        """未知项必须被拒绝，且不做任何删除（走的是报告分支之前的校验）。"""
-        rc = cleanup.main(["--clean", "--only", "definitely-not-a-key", "--yes"])
+        """未知项必须被拒绝，且不做任何删除。
+
+        ⚠️ 必须把 stdout 引开：`cleanup.main()` 会**先打印整个扫描报告**再校验
+        `--only`，直接调用会把「清理扫描 / 【Conda】/ 模型缓存发现」打进入
+        测试输出 —— 这正是 `Install.bat` 第 4 步看起来像"自动跑了 cleanup"的
+        原因（`tests/test_cleanup.py` 里唯一调用 main() 的用例）。
+        """
+        import contextlib
+        import io
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            rc = cleanup.main(["--clean", "--only", "definitely-not-a-key", "--yes"])
         self.assertEqual(rc, 1)
+        self.assertIn("未知清理项", buffer.getvalue())   # 确实走到了校验分支
 
 
 class TestModelClassification(unittest.TestCase):
@@ -395,6 +406,44 @@ class TestCondaDetection(unittest.TestCase):
     def test_conda_exe_none_is_handled(self):
         """没有 conda 时报空字典而不是抛异常。"""
         self.assertIsInstance(cleanup.conda_environments(), dict)
+
+
+class TestTestsAreQuiet(unittest.TestCase):
+    """单元测试不能把 cleanup 的扫描报告喷到调用方的控制台上。
+
+    背景：`Install.bat` 装完会跑 `python -m unittest discover -s tests`。有一次
+    `tests/test_cleanup.py` 里的用例直接调了 `cleanup.main([...])`，而 main()
+    会**先打印整个扫描报告**，于是 `Install.bat` 的最后看起来像"自动跑了
+    cleanup 脚本"。这个用例就是防止再犯。
+    """
+
+    #: 扫描报告里必定出现的标题片段
+    REPORT_MARKERS = ("清理扫描", "【Conda】", "模型缓存发现", "缓存与项目目录")
+
+    def test_cleanup_tests_print_no_report(self):
+        import subprocess
+        import sys as _sys
+        proc = subprocess.run(
+            [_sys.executable, "-m", "unittest", "tests.test_cleanup", "-v"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
+        leaked = [m for m in self.REPORT_MARKERS if m in (proc.stdout or "")]
+        self.assertEqual(leaked, [],
+                         f"测试输出里泄漏了扫描报告片段：{leaked}")
+
+    def test_full_suite_prints_no_report(self):
+        """整套测试（就是 Install.bat 跑的那条命令）同样不能泄漏报告。"""
+        import subprocess
+        import sys as _sys
+        proc = subprocess.run(
+            [_sys.executable, "-m", "unittest", "discover", "-s", "tests"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stderr[-800:])
+        leaked = [m for m in self.REPORT_MARKERS if m in (proc.stdout or "")]
+        self.assertEqual(leaked, [],
+                         f"整套测试输出泄漏了扫描报告片段：{leaked}")
 
 
 if __name__ == "__main__":
