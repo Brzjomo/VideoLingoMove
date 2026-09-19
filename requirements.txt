@@ -2,7 +2,6 @@ librosa==0.10.2.post1
 pytorch-lightning==2.3.3
 lightning==2.3.3
 transformers==4.39.3
-moviepy==1.0.3
 numpy==1.26.4
 openai==1.55.3
 opencv-python==4.10.0.84
@@ -10,9 +9,7 @@ openpyxl==3.1.5
 pandas==2.2.3
 pydub==0.25.1
 PyYAML==6.0.2
-replicate==0.33.0
 requests==2.32.3
-resampy==0.4.3
 spacy==3.7.4
 streamlit==1.38.0
 yt-dlp
@@ -31,3 +28,10 @@ pypinyin
 g2p-en
 
 tos>=2.8.7
+
+# --- 已移除的声明（均确认无任何代码引用，注释保留以便追溯）---
+# moviepy==1.0.3   : 旧配音链路遗留（上游 3.x 也已移除）
+# replicate==0.33.0: 早期用 Replicate 跑 Demucs 的遗留；dev 用本地 demucs
+# resampy==0.4.3   : 由 librosa 传递引入，无需直接 pin
+# 注意：pytorch-lightning/lightning 的 pin 保留 —— 它们由 pyannote(whisperx 依赖)
+# 传递引入，但在没有环境可验证的情况下不宜放开版本约束。

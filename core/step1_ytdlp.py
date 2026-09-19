@@ -25,6 +25,25 @@ def is_audio_placeholder(video_file: str) -> bool:
     """
     return os.path.basename(video_file).lower() == AUDIO_PLACEHOLDER_NAME
 
+def probe_duration(media_file: str) -> float:
+    """用 ffprobe 读取媒体时长（秒）。
+
+    不依赖 librosa：`librosa.get_duration(filename=...)` 在 librosa 1.x 已被
+    移除，而 ffmpeg/ffprobe 本来就是本项目的硬依赖。
+    """
+    result = subprocess.run(
+        ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+         '-of', 'default=nw=1:nk=1', media_file],
+        capture_output=True, text=True,
+    )
+    try:
+        return float((result.stdout or '').strip())
+    except ValueError:
+        raise RuntimeError(
+            f"无法用 ffprobe 读取时长：{media_file}（{result.stderr.strip()[:200]}）"
+        )
+
+
 def download_video_ytdlp(url, save_path='output', resolution='1080', cutoff_time=None):
     allowed_resolutions = ['360', '1080', 'best']
     if resolution not in allowed_resolutions:
@@ -95,9 +114,10 @@ def download_video_ytdlp(url, save_path='output', resolution='1080', cutoff_time
         print(f"Cutoff time: {cutoff_time}, Now checking video duration...")
         video_file = find_video_files(save_path)
         
-        # Use librosa to get video duration
-        import librosa
-        duration = librosa.get_duration(filename=video_file)
+        # 用 ffprobe 取时长，而不是 librosa.get_duration(filename=...)：
+        # `filename=` 参数在 librosa 1.x 已被移除，且 ffmpeg/ffprobe 本就是硬依赖，
+        # 没必要为一次时长查询引入音频解码库。
+        duration = probe_duration(video_file)
         
         if duration > cutoff_time:
             print(f"Video duration ({duration:.2f}s) is longer than cutoff time. Cutting the video...")
