@@ -292,4 +292,16 @@ def save_results(df: pd.DataFrame):
     print(f"📊 Excel file saved to {CLEANED_CHUNKS_EXCEL_PATH}")
 
 def save_language(language: str):
+    """记录本次识别实际使用的语言。
+
+    只在拿到确定值时才写入：None / 空串 / 'auto' 一律跳过。
+    伪造一个语言（例如自动检测失败时兜底 'en'）比不写更糟——
+    core.config_utils.get_source_language() 会把它当成真实源语言，
+    让提示词与 spaCy 模型全部用错语种。
+    """
+    if not isinstance(language, str):
+        return
+    language = language.strip()
+    if not language or language == 'auto':
+        return
     update_key("whisper.detected_language", language)

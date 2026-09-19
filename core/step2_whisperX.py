@@ -33,8 +33,26 @@ MODEL_DIR = load_key("model_dir")
 WHISPER_FILE = "output/audio/for_whisper.mp3"
 ENHANCED_VOCAL_PATH = "output/audio/enhanced_vocals.mp3"
 
+# 镜像探测结果缓存：同一进程只探测一次。
+# 原实现把探测放在 transcribe_audio_with_whisper() 里，而该函数是按音频分段
+# 反复调用的（长视频几十段），于是每一段都要 ping 两个域名、最坏各等 3 秒。
+_HF_ENDPOINT_CACHE = None
+
 def check_hf_mirror() -> str:
-    """Check and return the fastest HF mirror"""
+    """探测并返回最快的 HuggingFace 镜像（同进程只探测一次）。
+
+    若用户已显式设置 HF_ENDPOINT，则直接尊重该值、不做探测。
+    """
+    global _HF_ENDPOINT_CACHE
+    if _HF_ENDPOINT_CACHE is not None:
+        return _HF_ENDPOINT_CACHE
+
+    preset = os.environ.get('HF_ENDPOINT', '').strip()
+    if preset:
+        rprint(f"[cyan]🌐 Using preset HF_ENDPOINT:[/cyan] {preset}")
+        _HF_ENDPOINT_CACHE = preset
+        return _HF_ENDPOINT_CACHE
+
     mirrors = {
         'Official': 'huggingface.co',
         'Mirror': 'hf-mirror.com'
@@ -61,7 +79,8 @@ def check_hf_mirror() -> str:
     if best_time == float('inf'):
         rprint("[yellow]⚠️ All mirrors failed, using default[/yellow]")
     rprint(f"[cyan]🚀 Selected mirror:[/cyan] {fastest_url} ({best_time:.2f}s)")
-    return fastest_url
+    _HF_ENDPOINT_CACHE = fastest_url
+    return _HF_ENDPOINT_CACHE
 
 def transcribe_audio_with_whisper(audio_file: str, start: float, end: float) -> Dict:
     """
@@ -236,6 +255,12 @@ def transcribe_audio_with_volcano(audio_file: str, start: float, end: float) -> 
 
         # 转录音频
         result = asr.transcribe_audio(audio_file, start, end)
+
+        # 记录本次识别语言。火山分支此前从不写 whisper.detected_language，
+        # 于是自动检测模式下下游只能读到上一个视频的旧值（经 config_utils
+        # .get_source_language() 放大成"提示词与 spaCy 模型用错语种"）。
+        # save_language() 已对 None/空串/'auto' 做过滤，拿不到就保持原值。
+        save_language(result.get('language'))
 
         rprint(f"[green]✅ Volcano Engine ASR transcription completed[/green]")
         return result

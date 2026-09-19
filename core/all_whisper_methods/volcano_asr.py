@@ -588,8 +588,9 @@ class VolcanoASR:
                 if 'converted_result' in data:
                     return data['converted_result']
                 elif 'segments' in data:
-                    # 简化版文件
-                    return {'segments': data['segments'], 'language': metadata.get('language', 'en')}
+                    # 简化版文件。语言缺失时保持 None，不要兜底成 'en'：
+                    # 伪造的语言会被 get_source_language() 当成真实源语言。
+                    return {'segments': data['segments'], 'language': metadata.get('language')}
 
             except (json.JSONDecodeError, KeyError, IOError) as e:
                 rprint(f"[yellow]⚠️ 读取缓存文件失败 {json_file}: {str(e)}[/yellow]")
@@ -682,36 +683,57 @@ class VolcanoASR:
             rprint(f"[yellow]⚠️ 清理TOS文件时出错: {str(e)}[/yellow]")
             # 在批量处理中，不要因为TOS清理失败而影响整体流程
 
-    def _detect_language_from_result(self, result_data: Dict) -> str:
-        """
-        从结果中检测语言
+    def _detect_language_from_result(self, result_data: Dict) -> Optional[str]:
+        """解析本次识别实际使用的语言（ISO-639-1）。
 
-        Args:
-            result_data: 结果数据
+        注意这里**不是**在猜语言，而是尽量如实回报；拿不到就返回 None。
 
-        Returns:
-            str: 语言代码
+        旧实现在自动检测模式下无条件返回 "en"，这不是检测结果而是伪造值。
+        它一旦被写进 whisper.detected_language，就会被
+        core.config_utils.get_source_language() 当成真实源语言，
+        让提示词与 spaCy 模型全部按英语处理，比"未知"更糟。
         """
-        # 如果有语言检测信息，使用检测到的语言
-        # 否则使用配置的语言或默认英语
+        volcano_lang_map = {
+            "en-US": "en", "zh-CN": "zh", "ja-JP": "ja", "ko-KR": "ko",
+            "fr-FR": "fr", "de-DE": "de", "es-MX": "es", "pt-BR": "pt",
+            "id-ID": "id", "th-TH": "th", "ar-SA": "ar",
+        }
+        # 已经是 ISO-639-1 的值直接放行
+        iso1 = set(volcano_lang_map.values())
+
+        def normalize(value) -> Optional[str]:
+            if not isinstance(value, str):
+                return None
+            value = value.strip()
+            if not value:
+                return None
+            if value in volcano_lang_map:
+                return volcano_lang_map[value]
+            if value.lower() in iso1:
+                return value.lower()
+            # 形如 "zh-CN" / "zh_CN" 的其它写法，取主语言子标签
+            head = value.replace('_', '-').split('-')[0].lower()
+            return head if head in iso1 else None
+
+        # 1) 优先取响应里真实返回的语言字段（不同接口版本字段名不一致）
+        candidates = []
+        if isinstance(result_data, dict):
+            candidates.append(result_data)
+            audio_info = result_data.get("audio_info")
+            if isinstance(audio_info, dict):
+                candidates.append(audio_info)
+        for container in candidates:
+            for key in ("language", "lang", "detected_language"):
+                found = normalize(container.get(key))
+                if found:
+                    return found
+
+        # 2) 其次：配置里显式指定的识别语言 —— 它确实就是本次所用语言
         if self.language:
-            # 将火山引擎语言代码转换为Whisper格式
-            lang_map = {
-                "en-US": "en",
-                "zh-CN": "zh",
-                "ja-JP": "ja",
-                "ko-KR": "ko",
-                "fr-FR": "fr",
-                "de-DE": "de",
-                "es-MX": "es",
-                "pt-BR": "pt",
-                "id-ID": "id",
-                "th-TH": "th",
-                "ar-SA": "ar"
-            }
-            return lang_map.get(self.language, "en")
+            return normalize(self.language)
 
-        return "en"  # 默认英语
+        # 3) 自动检测且响应未回报语言：返回 None（未知），交给调用方决定是否写入
+        return None
 
     def cleanup(self):
         """清理临时文件"""
