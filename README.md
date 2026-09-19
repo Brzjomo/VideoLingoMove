@@ -67,38 +67,67 @@ VideoLingo 是一站式视频翻译本地化配音工具，能够一键生成 Ne
 
 ## 安装
 
-1.安装CUDA（没有N卡也要装）。
+> 本节已按 **torch 2.8 / whisperx 3.8** 新栈更新（分支 `upgrade/env-torch28`）。
+> 与旧版最大的不同：**不再需要手工安装 CUDA Toolkit 与 cuDNN**，也不需要 conda ——
+> CUDA 版 PyTorch 的 wheel 自带所需的 CUDA 运行库。
 
-- [CUDA ToolKit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe)
-- [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
+1. 更新 NVIDIA 显卡驱动（有 N 卡时）。只需要**驱动**足够新即可；本项目不要求你另外
+   安装 CUDA Toolkit。想确认驱动版本，运行：
 
-2.添加 `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` 到系统环境变量。
+   ```shell
+   nvidia-smi --query-gpu=name,driver_version,compute_cap --format=csv
+   ```
 
-3.安装[Anaconda](https://www.anaconda.com/download)。
+2. 安装 [uv](https://docs.astral.sh/uv/)（用于在项目内建虚拟环境，不占系统盘）：
 
-4.创建环境：
+   ```shell
+   winget install --id=astral-sh.uv
+   ```
+
+3. 建项目内环境并安装依赖（取决于网络，可能需要重试）：
+
+   ```shell
+   python setup_env.py --python 3.11
+   ```
+
+   它会做三件事：建 `<项目>\.venv`、把模型/下载缓存都指向项目内
+   （`_model_cache\`、`.uv-cache\`、`.pip-cache\`），然后调用安装器装依赖。
+   虚拟环境与缓存全在项目目录里，**整个项目可直接搬移**，不写 C 盘。
+
+4. 安装脚本会自动识别显卡算力并选择对应的 CUDA 轮子，无需你指定：
+
+   | 显卡 | 算力 | 选用的 torch 后端 |
+   | --- | --- | --- |
+   | RTX 50 系（Blackwell） | 12.x | cu129 |
+   | RTX 20/30/40 系、A100、T4、V100 | 7.0–11.x | cu128 |
+   | Quadro P2200、GTX 10 系等 Pascal/更老 | < 7.0 | cu126 |
+   | 无 N 卡 / macOS | — | CPU 版（转录非常慢） |
+
+   > 老卡必须走 cu126：CUDA 12.8/12.9 的 PyTorch 构建已移除 Pascal 及更老架构。
+   > 想强制指定或先干跑确认，用 `python installer.py --dry-run --torch-backend auto`。
+
+5. 装完随时体检（会逐个 import whisperx / torchcodec / pyannote 等关键包）：
+
+   ```shell
+   python installer.py --check --smoke   # 有错误时退出码为 1；加 --quiet 只看问题
+   ```
+
+6. 运行 `OneKeyStart.bat` 启动服务（它会先体检再通过 `launch.py` 启动，并把运行日志写到
+   `logs/`）。或者运行 `batch\StartBatch.bat` 启动批量模式。
+
+   三个 `.bat` 都会**优先使用项目内 `.venv`**，检测不到才回退到 conda 环境 `videolingo`
+   —— 所以旧的 conda 流程仍然可用：`conda create -n videolingo python=3.11` 后直接
+   `python installer.py`。
+
+### FFmpeg
+
+需要 **FFmpeg 4–7**（`torchcodec` 不支持 8/9）。如果系统 PATH 里没有合规版本，
+安装脚本会在 Windows 上下载一个 7.x 到项目内 `ffmpeg\` 目录，运行期由
+`runtime_libraries.py` 自动接入（不需要你改 PATH，也不需要重启终端）：
 
 ```shell
-conda create -n videolingo python=3.10.0 -y
-conda activate videolingo
-conda install git -y
+ffmpeg -version    # 确认大版本在 4–7 之间
 ```
-
-5.运行安装脚本（取决于网络，可能需要重试很久）：
-
-```shell
-python install.py
-```
-
-`torch-2.1.2+cu118-cp310-cp310-win_amd64.whl`文件（根据设备架构而定）可自行下载放于项目根目录，安装脚本会优先使用本地文件。注意 wheel 文件名里的解释器标签要与当前 Python 一致（例如 Python 3.10 对应 `cp310`）；本项目支持 **Python 3.10–3.11**（`torch==2.1.2` 没有 cp312 的 wheel）。
-
-安装脚本会自动识别 NVIDIA GPU 并选择 CUDA 版 PyTorch；没有 GPU 时安装 CPU 版（转录会非常慢）。装完想确认环境是否可用，可以随时体检：
-
-```shell
-python installer.py --check     # 有错误时退出码为 1；加 --quiet 只看问题
-```
-
-6.完毕后，运行`OneKeyStart.bat`启动服务（它会先体检再通过 `launch.py` 启动，并把运行日志写到 `logs/`）。或者运行`StartBatch.bat`启动批量模式。
 
 ## 📄 许可证
 
