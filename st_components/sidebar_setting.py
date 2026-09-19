@@ -181,7 +181,7 @@ def page_setting():
                 st.toast("API密钥有效" if is_valid else "API密钥无效",
                         icon="✅" if is_valid else "❌")
 
-        if st.button("🔄 获取模型列表", key="fetch_model_list", use_container_width=True,
+        if st.button("🔄 获取模型列表", key="fetch_model_list", width="stretch",
                      help="从 api.base_url 的 /v1/models 拉取可用模型，供上方搜索框使用"):
             try:
                 with st.spinner("正在获取模型列表..."):

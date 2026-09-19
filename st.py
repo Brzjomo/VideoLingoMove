@@ -128,11 +128,11 @@ def task_control_panel():
     if runner.state == "running":
         c1, c2, _ = st.columns([1, 1, 4])
         with c1:
-            if st.button("⏸️ 暂停", key="task_pause", use_container_width=True):
+            if st.button("⏸️ 暂停", key="task_pause", width="stretch"):
                 runner.pause()
                 st.rerun(scope="app")
         with c2:
-            if st.button("⏹️ 停止", key="task_stop", use_container_width=True):
+            if st.button("⏹️ 停止", key="task_stop", width="stretch"):
                 runner.stop()
                 st.rerun(scope="app")
 
@@ -143,12 +143,12 @@ def task_control_panel():
             c1, c2, _ = st.columns([1, 1, 4])
             with c1:
                 if st.button("✅ 术语已确认，继续", key="task_resume_review",
-                             type="primary", use_container_width=True):
+                             type="primary", width="stretch"):
                     runner.resume()
                     st.rerun(scope="app")
             with c2:
                 if st.button("⏹️ 放弃本次任务", key="task_stop_review",
-                             use_container_width=True):
+                             width="stretch"):
                     runner.stop()
                     st.rerun(scope="app")
         else:
@@ -156,11 +156,11 @@ def task_control_panel():
             c1, c2, _ = st.columns([1, 1, 4])
             with c1:
                 if st.button("▶️ 继续", key="task_resume", type="primary",
-                             use_container_width=True):
+                             width="stretch"):
                     runner.resume()
                     st.rerun(scope="app")
             with c2:
-                if st.button("⏹️ 停止", key="task_stop2", use_container_width=True):
+                if st.button("⏹️ 停止", key="task_stop2", width="stretch"):
                     runner.stop()
                     st.rerun(scope="app")
 
@@ -297,8 +297,10 @@ def subtitle_length_controls():
     """字幕长度调节面板。
 
     这两个键是最常被调的质量旋钮，此前只能手改 config.yaml。
-    ⚠️ 不要给 number_input 传 width=：dev 固定的 streamlit（1.38）不支持该参数
-    （上游 3.x 用 width=220，需要 streamlit>=1.49）。用 use_container_width。
+    ⚠️ 控件宽度一律用新写法 `width="stretch"` / `width="content"`：
+    `use_container_width` 自 streamlit 1.49 起弃用、2025-12-31 后移除（实测
+    1.64 会往控制台打弃用警告）。本分支钉的是 `streamlit>=1.49.1`，所以
+    `number_input` 也已经支持 `width=`，不必再为"1.38 不认 width"写兼容代码。
     """
     with st.expander("✂️ 字幕长度调节", expanded=False):
         st.caption("影响断行粒度与单行字数。改完立即写入 config.yaml。")
@@ -323,7 +325,7 @@ def subtitle_length_controls():
         c3, c4 = st.columns([1, 1])
         with c3:
             if st.button("保存", key="save_subtitle_length", type="primary",
-                         use_container_width=True):
+                         width="stretch"):
                 from core.config_utils import update_key
                 changed = []
                 if int(max_split_length) != int(load_key_or("max_split_length", 20)):
@@ -340,7 +342,7 @@ def subtitle_length_controls():
                     st.info("没有变化。")
         with c4:
             if st.button("恢复默认 (20 / 75)", key="reset_subtitle_length",
-                         use_container_width=True):
+                         width="stretch"):
                 from core.config_utils import update_key
                 update_key("max_split_length", 20)
                 update_key("subtitle.max_length", 75)

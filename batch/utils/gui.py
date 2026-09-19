@@ -152,7 +152,7 @@ def display_task_status(tasks_setting_path, status_placeholder, progress_placeho
             # 显示带样式的表格，但不设置背景色
             styled_df = df.style.apply(lambda x: ['' for v in x], axis=1)
             
-            table_placeholder.dataframe(styled_df, use_container_width=True)
+            table_placeholder.dataframe(styled_df, width="stretch")
             
             # 显示完成信息
             if st.session_state.process_complete_info and not st.session_state.processing:
@@ -385,7 +385,7 @@ def main():
         with col1:
             st.metric("📊 视频文件数量", len(video_files))
         with col2:
-            if st.button("🗂️ 在资源管理器中打开", use_container_width=True):
+            if st.button("🗂️ 在资源管理器中打开", width="stretch"):
                 import subprocess
                 if os.name == 'nt':  # Windows
                     os.startfile(folder_path)
@@ -431,7 +431,7 @@ def main():
     
     with col1:
         if st.button("📝 创建/更新任务配置", 
-                    use_container_width=True,
+                    width="stretch",
                     disabled=st.session_state.processing):
             with st.spinner("正在更新任务配置文件..."):
                 try:
@@ -444,10 +444,17 @@ def main():
                     st.error(f"❌ {str(e)}")
                 
     with col2:
+        # ⚠️ 这里**不能**写 `on_click=start_processing`（2026-09-20 实测报障）。
+        # Streamlit 的 widget 回调在**脚本重跑之前**执行：回调先把 processing 置 True，
+        # 于是本次渲染出来的按钮是 `disabled=True` —— 而**禁用按钮的返回值恒为 False**，
+        # 下面这个 `if st.button(...)` 分支（唯一调用 process_batch() 的地方）永远进不来。
+        # 结果：界面每 0.5 秒 rerun 一次（"一直闪烁 / 反复开始结束"），
+        # process_batch() 从未执行，控制台一行输出都没有。
+        # 状态改在点击分支内部设置，语义等价且不会自锁。
         if st.button("▶️ 开始批量处理", 
                     disabled=st.session_state.processing, 
-                    use_container_width=True,
-                    on_click=start_processing):
+                    width="stretch"):
+            start_processing()
             try:
                 # 把上一批的产物归档而不是直接删除（此前每次点击都会 rmtree，
                 # 导致历史结果丢失，见 devdocs 已知问题 P3-34）

@@ -103,14 +103,14 @@ def main():
             st.metric("📊 视频文件数量", len(video_files))
         
         with col2:
-            if st.button("📂 打开输入目录", use_container_width=True):
+            if st.button("📂 打开输入目录", width="stretch"):
                 if os.name == 'nt':  # Windows
                     os.startfile(input_dir)
                 else:  # Linux/Mac
                     subprocess.run(['xdg-open', input_dir])
         
         with col3:
-            if st.button("📂 打开输出目录", use_container_width=True):
+            if st.button("📂 打开输出目录", width="stretch"):
                 os.makedirs(output_dir, exist_ok=True)
                 if os.name == 'nt':  # Windows
                     os.startfile(output_dir)
@@ -129,7 +129,7 @@ def main():
     # 开始处理按钮
     if st.button("▶️ 开始提取", 
                 disabled=st.session_state.processing,
-                use_container_width=True):
+                width="stretch"):
         st.session_state.processing = True
         
         try:

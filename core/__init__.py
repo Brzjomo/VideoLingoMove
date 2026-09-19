@@ -13,6 +13,25 @@
 
 from __future__ import annotations
 
+# 先把控制台切成 UTF-8，再让任何 core 子模块有机会打印。
+#
+# 为什么必须在这里做（2026-09-20 实测）：`core/step2_whisperX.py` 在**模块级**就
+# `rprint(f"🔧 whisperx {…}")`，而入口脚本里的 `ensure_utf8_console()` 往往排在
+# import 之后 —— 例如 `batch/utils/gui.py` 的 import 在第 16–20 行、ensure 在第 29 行。
+# 控制台不是 UTF-8 时（没走 `.bat` 的 `chcp 65001`：在 IDE 里直接跑、或手工
+# `python -m streamlit run batch\utils\gui.py`），这一行直接抛
+#
+#     UnicodeEncodeError: 'gbk' codec can't encode character '\U0001f527'
+#
+# 整个应用连首页都出不来。包入口先于一切子模块执行，这是唯一"绝对早于那句
+# print"的挂载点；`ensure_utf8_console` 本身幂等，重复调用无害。
+try:
+    from easy_util import ensure_utf8_console as _ensure_utf8_console
+
+    _ensure_utf8_console()
+except Exception:  # pragma: no cover - 极端环境下不该拖垮主流程
+    pass
+
 try:
     from runtime_libraries import setup as _setup_runtime_libraries
 
