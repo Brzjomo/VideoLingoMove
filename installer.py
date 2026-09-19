@@ -4,11 +4,15 @@
   * torch 2.1.2+cu118 → **torch 2.8.0**，CUDA 轮子按显卡算力自动选择
     （cu126 / cu128 / cu129 / cpu）；
   * Python 闸门放宽到 3.10–3.13（whisperx 3.8 的 requires_python）；
-  * FFmpeg 改为**大版本校验 + 7.x 下载**，取代原来"永远下 latest"
-    （latest 已是 8.1/9.0，而 torchcodec 0.7 只支持 4–7）；下载地址不写死，
-    改为运行时查 GitHub Releases API（可用 VIDELINGO_FFMPEG_URL 覆盖）；
+  * FFmpeg 改为**大版本闸门（4–7）+ 只下合规分支**，取代原来"永远下 latest"
+    （latest 已是 8.1/9.0，而 torchcodec 0.7 只支持 4–7 —— 依据是 torchcodec
+    自己的安装说明 "should work with FFmpeg versions in [4, 7]"）；
+    下载地址不写死，改为运行时查 GitHub Releases API（可用
+    VIDELINGO_FFMPEG_URL 覆盖）；
   * 新增 L1 import 冒烟（whisperx / torchcodec / pyannote / ctranslate2 …），
-    其中 `torchcodec.decoders` 是 Windows 上最容易失败的一个；
+    其中 `torchcodec.decoders` 是 Windows 上最容易失败的一个 —— 冒烟前会先
+    调用 `runtime_libraries.setup()` 注册 FFmpeg 的 DLL 目录，否则会把
+    "没接 DLL 目录"误报成"FFmpeg 版本不对"；
   * `--python` 可以把整套安装**重定向到另一个解释器**（setup_env.py 建的
     项目内 `.venv`），实现"不碰 conda、不写 C 盘"。
 
@@ -106,22 +110,29 @@ COMPUTE_CAP_RULES = (
     (float("inf"), "cu129"),  # ≥ 12.0：Blackwell
 )
 
-# torchcodec 0.7 只支持 FFmpeg 大版本 4–7；8/9 会在导入或解码时失败。
+# torchcodec 0.7 只支持 FFmpeg 大版本 4–7。
+#
+# 依据是 torchcodec 自己的安装说明（PyPI 元数据原文）：
+#   "TorchCodec with CUDA should work with FFmpeg versions in [4, 7]."
+#   （若需要更新版本，它建议 `conda install "ffmpeg<8"`）
+# 机制：torchcodec 为每个 FFmpeg 大版本单独编一个适配 DLL，0.7 只附带
+# `libtorchcodec_core4..7.dll`，**没有 core8**。装了 8.x 共享库后
+# `ffmpeg -version` 正常、`import torchcodec` 可能也过，但解码时会去找
+# `libtorchcodec_core8.dll` 而失败。所以 8/9 一律不可用，不做兜底。
 FFMPEG_MIN_MAJOR, FFMPEG_MAX_MAJOR = 4, 7
-# 下载时优先选的 BtbN 分支。
+# 下载时优先选的 BtbN 分支 —— **只列合规的 4–7**。
 #
 # 策略（对应"默认装新版，但环境里已有可用版本就跳过下载"）：
-#   * 安装前先看项目内 ffmpeg/、再看系统 PATH：只要有一份 **大版本 4–7** 的
-#     ffmpeg+ffprobe，就**完全跳过下载**；
-#   * 确实需要下载时按这个序列挑资产：[7.1, 7.0, 8.1, 8.0]，
-#     每个分支内**优先 `-shared`**。
+#   * 安装前先看项目内 ffmpeg/、再看系统 PATH：只要有一份 **大版本 4–7 且带
+#     共享库** 的 ffmpeg+ffprobe，就**完全跳过下载**；
+#   * 确实需要下载时按这个序列挑资产，每个分支内**优先 `-shared`**。
 #
-# 为什么 7.x 排在 8.x 前面：`torchcodec 0.7` 只附带了 `libtorchcodec_core4..7.dll`，
-# **没有 core8**。装了 8.x 的共享库之后，python 侧能通过 `--version` 认出 8.1，
-# 但 torchcodec 会去找 `libtorchcodec_core8.dll` 而失败（实测：报
-# "Could not find module '...core7.dll'"，因为版本探测只覆盖 4–7）。
-# 所以"能用"比"最新"重要：7.x 的**共享版**才是 torchcodec 真正需要的。
-FFMPEG_WIN_BRANCHES = ("7.1", "7.0", "8.1", "8.0")
+# ⚠️ 这里**不再列 8.1 / 8.0**：它们永远过不了 `ffmpeg_major_ok()`，列进来只会
+# 制造"能挑到 8.x"的假象。原实现就是因为列了 8.x 且挑资产时不校验版本，
+# 在 `latest` tag 没有 7.x 时挑到 8.1 —— 下载 85 MB、解压，**最后**才报
+# "大版本不合规"，安装必然失败（2026-09-19 实测）。`_pick_ffmpeg_asset()` 里
+# 另有一道 `_ffmpeg_branch_ok()` 过滤兜底，防止将来有人又加回不合规的分支。
+FFMPEG_WIN_BRANCHES = ("7.1", "7.0")
 # 兼容旧名（文档/测试引用）
 FFMPEG_WIN_BRANCH = FFMPEG_WIN_BRANCHES[0]
 FFMPEG_DIR_NAME = "ffmpeg"
@@ -543,8 +554,13 @@ def pip(args, retries=2, check=True, cache_dir=None):
     env = {**os.environ, "PIP_NO_INPUT": "1", "PYTHONIOENCODING": "utf-8"}
     if kind == "uv":
         # uv 的 pip 兼容层：不认 --disable-pip-version-check / --prefer-binary，
-        # 但需要显式告诉它目标解释器（本脚本可能是被别的解释器 re-exec 起来的）
-        cmd = [*base, "install", "--python", sys.executable, "--timeout", "120", *args]
+        # 也**不认 `--timeout`**（实测 uv 0.9.x 会直接报
+        # `error: unexpected argument '--timeout' found` 并退出码 2，
+        # 导致整条依赖安装失败）。超时改用 uv 自己的环境变量
+        # `UV_HTTP_TIMEOUT`（秒），语义与 pip 的 --timeout 一致。
+        # 需要显式告诉它目标解释器（本脚本可能是被别的解释器 re-exec 起来的）。
+        cmd = [*base, "install", "--python", sys.executable, *args]
+        env["UV_HTTP_TIMEOUT"] = "120"
         if cache_dir:
             env["UV_CACHE_DIR"] = str(cache_dir)
     else:
@@ -1202,15 +1218,31 @@ def ffmpeg_absent_reason():
     return "未找到 ffmpeg"
 
 
-def _pick_ffmpeg_asset(releases, branches=None):
-    """从 releases 列表里挑一个 win64-gpl 资产，返回 (name, url) 或 None。
+def _ffmpeg_branch_ok(branch):
+    """分支号（如 "7.1"）是否落在允许的大版本区间内。
 
-    按 `branches` 给的优先序列（默认 FFMPEG_WIN_BRANCHES，即"尽量新版"）逐个分支找：
-    **先找带 -shared 的**（含 torchcodec 需要的 avcodec 等动态库），找不到再退回
-    非 shared（含 exe；7.x 的非 shared 构建同时带 DLL）。
-    8.x 只有 shared 变体带动态库，所以 8.x 挑不到 shared 时会继续往 7.x 找。
+    ⚠️ 这一步**必须**有：`FFMPEG_WIN_BRANCHES` 里带了 `8.1`/`8.0` 作为兜底，
+    但 8.x 永远过不了 `ffmpeg_major_ok()`（上限是 7）。原实现挑资产时不看版本，
+    于是 latest tag 里没有 7.x 时就会挑到 8.1 —— 下载、解压，**最后才**报
+    「大版本不合规」，用户白等一次 85 MB 下载且安装必然失败（2026-09-19 实测：
+    本机 `resolve_ffmpeg_url()` 正是返回 `ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip`）。
+    """
+    try:
+        major = int(str(branch).split(".", 1)[0])
+    except (TypeError, ValueError):
+        return False
+    return FFMPEG_MIN_MAJOR <= major <= FFMPEG_MAX_MAJOR
+
+
+def _pick_ffmpeg_asset(releases, branches=None):
+    """从 releases 列表里挑一个**版本合规**的 win64-gpl 资产，返回 (name, url) 或 None。
+
+    按 `branches` 给的优先序列逐个分支找（默认 `FFMPEG_WIN_BRANCHES`，已经过
+    `_ffmpeg_branch_ok` 过滤，8.x 不会被选中）；**先找带 -shared 的**
+    （含 torchcodec 需要的 avcodec 等动态库），找不到再退回非 shared。
     """
     branches = branches or FFMPEG_WIN_BRANCHES
+    branches = [b for b in branches if _ffmpeg_branch_ok(b)]
     assets = [a for r in (releases or []) for a in (r.get("assets") or [])]
 
     def find(branch, want_shared):
@@ -1299,22 +1331,62 @@ def download_ffmpeg_windows(target_dir, download_dir=None):
         info(f"♻️ 使用已下载的 FFmpeg 压缩包：{cached_zip}"
              f"（{cached_zip.stat().st_size / 1024 ** 2:.0f} MB）", style="green")
     else:
-        url, why = resolve_ffmpeg_url()
-        if not url:
-            info(f"❌ 无法确定 FFmpeg 下载地址（{why}）", style="red")
-            _ffmpeg_manual_hint()
+        if not _download_ffmpeg_zip(cached_zip):
             return None
-        info(f"🚀 正在下载 FFmpeg（{why}）")
-        info(f"   文件名：{cached_zip}")
-        info(f"   下载地址：{url}", style="cyan")
-        try:
-            urlretrieve(url, cached_zip)
-        except Exception as e:
-            info(f"❌ 下载 FFmpeg 失败：{e}", style="red")
-            info(f"   你可以用外部工具下载上面的地址，保存为 {cached_zip}，"
-                 f"然后重新运行安装脚本。", style="yellow")
-            _ffmpeg_manual_hint()
-            return None
+
+    found = _extract_ffmpeg_zip(cached_zip, target_dir)
+    if found is not None:
+        return found
+
+    # 解压出来的版本不合规：最常见的原因是 _downloads\ffmpeg-win64.zip 是**旧的
+    # 8.x/9.x 包**（`latest` tag 现在只发 8.1/9.0，早先的安装脚本会把它下下来）。
+    # 脚本原先到此就放弃了，但那是**可以自愈**的：删掉坏包重新按 7.x 下一份。
+    # 只在"这个包不是本次刚下的"时才重试，避免把用户手工放进去的文件白白删掉
+    # 又下一遍同样的东西（若 URL 又不合规，第二次会走同样判断并正常报错）。
+    info("♻️ 该压缩包里的版本不合规 —— 删掉它并重新下载合规版本再试一次",
+         style="yellow")
+    try:
+        cached_zip.unlink()
+    except OSError as e:
+        info(f"❌ 无法删除 {cached_zip}：{e}", style="red")
+        _ffmpeg_manual_hint()
+        return None
+
+    if not _download_ffmpeg_zip(cached_zip):
+        return None
+    found = _extract_ffmpeg_zip(cached_zip, target_dir)
+    if found is None:
+        _ffmpeg_manual_hint()
+    return found
+
+
+def _download_ffmpeg_zip(cached_zip):
+    """解析地址并下载到 `cached_zip`。成功返回 True。"""
+    from urllib.request import urlretrieve
+
+    url, why = resolve_ffmpeg_url()
+    if not url:
+        info(f"❌ 无法确定 FFmpeg 下载地址（{why}）", style="red")
+        info("   提示：BtbN 的 `latest` tag 现在只发 8.1/9.0（8.x 起 torchcodec 0.7 "
+             "不支持），7.x 只在 autobuild tag 里；脚本会自动回退去查它们。",
+             style="yellow")
+        return False
+    info(f"🚀 正在下载 FFmpeg（{why}）")
+    info(f"   文件名：{cached_zip}")
+    info(f"   下载地址：{url}", style="cyan")
+    try:
+        urlretrieve(url, cached_zip)
+    except Exception as e:
+        info(f"❌ 下载 FFmpeg 失败：{e}", style="red")
+        info(f"   你可以用外部工具下载上面的地址，保存为 {cached_zip}，"
+             f"然后重新运行安装脚本。", style="yellow")
+        return False
+    return True
+
+
+def _extract_ffmpeg_zip(cached_zip, target_dir):
+    """解压并校验大版本。合规返回 bin 目录，否则返回 None。"""
+    import zipfile
 
     try:
         with zipfile.ZipFile(cached_zip, "r") as zf:
@@ -1323,19 +1395,16 @@ def download_ffmpeg_windows(target_dir, download_dir=None):
         info(f"❌ 解压 FFmpeg 失败：{e}", style="red")
         info(f"   若压缩包是外部工具下的，可能不完整；删掉 {cached_zip} 重试。",
              style="yellow")
-        _ffmpeg_manual_hint()
         return None
 
     found = project_ffmpeg_bin()
     if found is None:
         info("❌ FFmpeg 解压后未找到可执行文件", style="red")
-        _ffmpeg_manual_hint()
         return None
     version = ffmpeg_version_of(str(found / _ffmpeg_exe_name()))
     if not ffmpeg_major_ok(version[0] if version else None):
         info(f"⚠️ 解压得到的 FFmpeg 大版本不合规（{_fmt_version(version)}），"
              f"需要 {FFMPEG_MIN_MAJOR}–{FFMPEG_MAX_MAJOR}", style="yellow")
-        _ffmpeg_manual_hint()
         return None
     info(f"✅ FFmpeg {_fmt_version(version)} 已就位：{found}", style="green")
     return found
@@ -1449,12 +1518,42 @@ def install_cjk_fonts():
 
 
 # ---------------------------------------------------------------- 体检
+def _ensure_runtime_libraries():
+    """把项目内 FFmpeg 的 DLL 目录接进**本进程**，供 smoke 里的 torchcodec 导入用。
+
+    为什么体检必须做这一步（2026-09-19 实测 bug）：
+    torchcodec 通过 FFmpeg **共享库**解码，而 Python 3.8 起扩展模块（.pyd）的
+    依赖 DLL **不再从 PATH 解析**，只认 `os.add_dll_directory()` 注册的目录。
+    `runtime_libraries.setup()` 做的正是这件事，但它只在 `import core` 时被触发
+    （`core/__init__.py`），而体检是**直接** `import torchcodec.decoders` ——
+    于是即使 FFmpeg 7.1.5 shared 已经装得完全正确，torchcodec 仍会失败并报
+    「Could not find module '...libtorchcodec_core7.dll' (or one of its dependencies)」，
+    让人误以为 FFmpeg 版本不对。实测：不接 DLL 目录必失败，接了就成功。
+
+    导入失败不致命（非 Windows、或仓库不完整时），静默跳过。
+    """
+    try:
+        import runtime_libraries  # 模块级已调用 setup()，这里再显式调一次更明确
+        return runtime_libraries.setup()
+    except Exception:
+        return None
+
+
 def smoke_imports(quiet=False):
     """逐个 import 新栈的关键包，返回失败清单。
 
     torchcodec.decoders 放最后并单独报告：它依赖 FFmpeg 共享库，
-    Windows 上最容易失败，失败原因通常与 DLL 目录有关。
+    Windows 上最容易失败，失败原因通常与 DLL 目录有关 —— 所以这里**先**把
+    项目内 FFmpeg 的 DLL 目录接进本进程，否则会把"没接 DLL"误报成
+    "FFmpeg 版本不合规"（见 `_ensure_runtime_libraries()`）。
     """
+    runtime_report = _ensure_runtime_libraries()
+    if runtime_report and not quiet:
+        dll_dirs = runtime_report.get("dll_dirs") or []
+        info(f"   已接入 DLL 目录：{len(dll_dirs)} 个"
+             f"（项目内 FFmpeg：{runtime_report.get('project_ffmpeg') or '未使用'}）",
+             style="bright_black")
+
     failures = []
     for module in (*SMOKE_IMPORTS_CORE, *SMOKE_IMPORTS_OPTIONAL):
         try:
@@ -1465,7 +1564,31 @@ def smoke_imports(quiet=False):
             failures.append((module, e))
             if not quiet:
                 info(f"   ✗ import {module}：{e}", style="red")
+                # torchcodec 的失败信息很长且把"没接 DLL"和"版本不对"混在一起，
+                # 这里补一句本项目的判据，避免误判。
+                if module.startswith("torchcodec"):
+                    _explain_torchcodec_failure(runtime_report)
     return failures
+
+
+def _explain_torchcodec_failure(runtime_report=None):
+    """torchcodec 导入失败时，给出本项目的可行动判据。"""
+    bin_dir = (runtime_report or {}).get("project_ffmpeg")
+    if bin_dir:
+        av = sorted(p.name for p in Path(bin_dir).glob("avcodec-*.dll"))
+        if av:
+            info(f"   ℹ️ 项目内 FFmpeg 是共享库构建（{', '.join(av)}），"
+                 f"且已注册 DLL 目录；若上面仍报「找不到 core7.dll 或其依赖」，"
+                 f"多半是 torchcodec 与本机 torch 不匹配，而不是 FFmpeg 的问题。",
+                 style="yellow")
+        else:
+            info(f"   ℹ️ 项目内 FFmpeg（{bin_dir}）里**没有 avcodec-*.dll**，"
+                 f"说明它是静态构建，torchcodec 用不了 —— 需要 4–7 的 shared 构建。",
+                 style="yellow")
+    else:
+        info("   ℹ️ 没有接入项目内 FFmpeg 目录；先跑 Install.bat 装一份 4–7 的 "
+             "shared 构建，或把 ffmpeg.exe/ffprobe.exe 放进 ./ffmpeg/bin/。",
+             style="yellow")
 
 
 def health_check(quiet=False, smoke=False):

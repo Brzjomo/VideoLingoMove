@@ -67,6 +67,8 @@ class TestPickFfmpegAsset(unittest.TestCase):
 
         实测：装了 8.1 的 shared 包后 python 能认出 8.1，但 torchcodec 会去找
         libtorchcodec_core8.dll 而失败；换成 7.1 shared 立刻可用。
+        （`FFMPEG_WIN_BRANCHES` 现已只列 7.x；即便有人把 8.x 加回候选，
+        `_ffmpeg_branch_ok()` 也会把它滤掉 —— 这条用例两种情况下都成立。）
         """
         releases = [self._release([
             "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
@@ -93,9 +95,45 @@ class TestPickFfmpegAsset(unittest.TestCase):
         self.assertIn("n7.1.5", picked[0])
 
     def test_skips_unsupported_branches(self):
-        # 9.0 不在优先序列里（torchcodec 只支持 4-7，而 8.x 是有意放行的上限）
+        # 9.0 不可能被选中（torchcodec 0.7 只支持 4–7）
         releases = [self._release(["ffmpeg-n9.0-latest-win64-gpl-9.0.zip"])]
         self.assertIsNone(installer._pick_ffmpeg_asset(releases))
+
+    def test_never_picks_eight_x_even_when_only_eight_exists(self):
+        """回归：上游 latest 只剩 8.x/9.x 时，**绝不能**挑 8.x。
+
+        2026-09-19 实测 bug：`FFMPEG_WIN_BRANCHES` 里带着 `8.1`/`8.0` 兜底，而
+        挑资产时不校验版本，于是 latest tag 里没有 7.x 时 `resolve_ffmpeg_url()`
+        直接返回 `ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip` —— 下载 85 MB、
+        解压，**最后**才报「大版本不合规」，安装必然失败。
+
+        正确行为：显式列出的 8.x 分支被跳过，返回 None（让调用方继续去查
+        autobuild tag，那里还有 7.1 资产）。
+        """
+        releases = [self._release([
+            "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+            "ffmpeg-n8.0-latest-win64-gpl-shared-8.0.zip",
+            "ffmpeg-master-latest-win64-gpl-shared.zip",
+            "ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip",
+        ])]
+        self.assertIsNone(
+            installer._pick_ffmpeg_asset(releases),
+            "8.x 不可能通过 ffmpeg_major_ok()（上限 7），选了就是白下载")
+
+    def test_branch_gate_matches_configured_range(self):
+        """`_ffmpeg_branch_ok` 与被挑中的分支必须和 FFMPEG_MIN/MAX_MAJOR 一致。"""
+        self.assertTrue(installer._ffmpeg_branch_ok("7.1"))
+        self.assertTrue(installer._ffmpeg_branch_ok("4.4"))
+        self.assertFalse(installer._ffmpeg_branch_ok("8.1"))
+        self.assertFalse(installer._ffmpeg_branch_ok("9.0"))
+        self.assertFalse(installer._ffmpeg_branch_ok("3.4"))
+        self.assertFalse(installer._ffmpeg_branch_ok(""))
+        self.assertFalse(installer._ffmpeg_branch_ok(None))
+        # 配置里的兜底分支也不该有漏网的合规值被误杀
+        for b in installer.FFMPEG_WIN_BRANCHES:
+            if installer._ffmpeg_branch_ok(b):
+                self.assertLessEqual(int(b.split(".")[0]),
+                                     installer.FFMPEG_MAX_MAJOR)
 
     def test_walks_older_releases(self):
         # 实测场景：latest tag 只剩 8.x/9.x，7.1 资产在更早的 autobuild tag 上
@@ -246,6 +284,63 @@ class TestFfmpegSharedLibs(unittest.TestCase):
 
     def test_absent_reason_is_a_string(self):
         self.assertIsInstance(installer.ffmpeg_absent_reason(), str)
+
+
+class TestSmokeConnectsDllDirs(unittest.TestCase):
+    """回归：体检的 smoke 必须先接入项目内 FFmpeg 的 DLL 目录。
+
+    2026-09-19 实测 bug：FFmpeg 7.1.5 shared 已正确装到项目内，`import whisperx`
+    / `pyannote.audio` / `demucs.api` 全过，**只有 `torchcodec.decoders` 失败**，
+    报「Could not find module '...libtorchcodec_core7.dll' (or one of its
+    dependencies)」—— 看起来像 FFmpeg 版本不对，实际原因是：
+
+    Python 3.8 起扩展模块（.pyd）的依赖 DLL **不再从 PATH 解析**，只认
+    `os.add_dll_directory()`。`runtime_libraries.setup()` 做的就是这件事，但它
+    只在 `import core` 时被触发，而体检是**直接** import torchcodec。于是 DLL
+    目录从未注册，报错把"没接 DLL"伪装成"版本不合规"。
+
+    实测对照：不接 DLL 目录 → 必失败；接了就成功（同一份 FFmpeg、同一个 torch）。
+    """
+
+    def test_smoke_calls_runtime_libraries(self):
+        """smoke_imports() 必须接入运行期库（DLL 目录）。
+
+        直接打桩 `installer._ensure_runtime_libraries` 来观察是否被调用，
+        这样不依赖真实 import 顺序，也不受本机是否装了包的影响。
+        """
+        import unittest.mock as mock
+        calls = []
+
+        def _spy():
+            calls.append(True)
+            return {"platform": "test", "project_ffmpeg": None,
+                    "project_ffmpeg_lib": None, "system_ffmpeg": None,
+                    "dll_dirs": []}
+
+        with mock.patch.object(installer, "_ensure_runtime_libraries",
+                               side_effect=_spy):
+            installer.smoke_imports(quiet=True)
+        self.assertTrue(calls, "smoke_imports() 没有接入运行期库（DLL 目录）")
+
+    def test_ensure_runtime_libraries_returns_report(self):
+        """_ensure_runtime_libraries() 要返回可用的报告（失败也不能抛）。"""
+        report = installer._ensure_runtime_libraries()
+        self.assertIsInstance(report, dict)
+        self.assertIn("dll_dirs", report)
+        # 本机装了项目内 FFmpeg 时，必须报告出来并注册了目录
+        if installer.project_ffmpeg_bin() is not None:
+            self.assertIsNotNone(report.get("project_ffmpeg"))
+            self.assertTrue(report.get("dll_dirs"))
+            from pathlib import Path
+            registered = [Path(d) for d in report["dll_dirs"]]
+            self.assertTrue(
+                any(installer.has_shared_av_libs(d) for d in registered),
+                "接入的 DLL 目录里没有一份含 avcodec-*.dll 的 FFmpeg")
+
+    def test_explain_helper_tolerates_missing_report(self):
+        """诊断辅助函数不能因为在没有项目内 FFmpeg 时报错。"""
+        installer._explain_torchcodec_failure(None)
+        installer._explain_torchcodec_failure({})
 
 
 class TestFfmpegSkipWhenUsable(unittest.TestCase):
