@@ -6,7 +6,7 @@ eu.ensure_utf8_console()
 
 from st_components.imports_and_utils import *
 from st_components.task_runner import TaskRunner, StopTask
-from core.config_utils import load_key
+from core.config_utils import load_key, load_key_or
 from core.step7_merge_sub_to_vid import STAGE_DONE_MARKER
 
 # SET PATH
@@ -247,6 +247,13 @@ def text_processing_section():
                 st.rerun(scope="app")
             return
 
+
+def cache_maintenance_section():
+    """缓存清理入口。
+
+    刻意独立于 text_processing_section()：即使还没导入素材（或本阶段已完成），
+    用户也应该能清理缓存 —— 那正是"改了火山参数却没效果"时要做的事。
+    """
     # 火山引擎二级缓存清理入口：调过火山参数后需要同时清掉
     # output/log/asr_results/，否则会命中旧结果（见 devdocs 已知问题 R5）
     asr_cache_dir = os.path.join("output", "log", "asr_results")
@@ -286,6 +293,61 @@ def text_processing_section():
                     st.rerun(scope="app")
 
 
+def subtitle_length_controls():
+    """字幕长度调节面板。
+
+    这两个键是最常被调的质量旋钮，此前只能手改 config.yaml。
+    ⚠️ 不要给 number_input 传 width=：dev 固定的 streamlit（1.38）不支持该参数
+    （上游 3.x 用 width=220，需要 streamlit>=1.49）。用 use_container_width。
+    """
+    with st.expander("✂️ 字幕长度调节", expanded=False):
+        st.caption("影响断行粒度与单行字数。改完立即写入 config.yaml。")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            max_split_length = st.number_input(
+                "首次粗切词数上限 (max_split_length)",
+                min_value=8, max_value=60,
+                value=int(load_key_or("max_split_length", 20)),
+                help="低于 18 会切得过碎影响翻译，高于 22 会让后续字幕对齐变难。默认 20。",
+            )
+        with c2:
+            subtitle_cfg = load_key_or("subtitle", {}) or {}
+            max_length = st.number_input(
+                "单行最大字符数 (subtitle.max_length)",
+                min_value=20, max_value=200,
+                value=int(subtitle_cfg.get("max_length", 75)),
+                help="每行字幕的字符上限。默认 75。",
+            )
+
+        c3, c4 = st.columns([1, 1])
+        with c3:
+            if st.button("保存", key="save_subtitle_length", type="primary",
+                         use_container_width=True):
+                from core.config_utils import update_key
+                changed = []
+                if int(max_split_length) != int(load_key_or("max_split_length", 20)):
+                    update_key("max_split_length", int(max_split_length))
+                    changed.append("max_split_length")
+                current_max_length = (load_key_or("subtitle", {}) or {}).get("max_length", 75)
+                if int(max_length) != int(current_max_length):
+                    update_key("subtitle.max_length", int(max_length))
+                    changed.append("subtitle.max_length")
+                if changed:
+                    st.success("已更新：" + "、".join(changed))
+                    st.rerun(scope="app")
+                else:
+                    st.info("没有变化。")
+        with c4:
+            if st.button("恢复默认 (20 / 75)", key="reset_subtitle_length",
+                         use_container_width=True):
+                from core.config_utils import update_key
+                update_key("max_split_length", 20)
+                update_key("subtitle.max_length", 75)
+                st.success("已恢复默认值")
+                st.rerun(scope="app")
+
+
 def main():
     st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
     logo_col, _ = st.columns([1,1])
@@ -301,8 +363,15 @@ def main():
     with st.sidebar:
         page_setting()
         st.markdown(give_star_button, unsafe_allow_html=True)
-    download_video_section()
-    text_processing_section()
+    # 只有确实拿到素材才显示处理区块：否则"开始处理字幕"按钮会一直是可点的，
+    # 点下去只会在 step1 抛 FileNotFoundError，用户看不出该做什么。
+    if download_video_section():
+        text_processing_section()
+        subtitle_length_controls()
+    else:
+        st.info("请先在上方下载或上传一个视频/音频文件，然后再开始处理。")
+    # 缓存清理入口与是否有素材无关，始终可用
+    cache_maintenance_section()
 
 if __name__ == "__main__":
     main()

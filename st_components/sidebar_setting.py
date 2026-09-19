@@ -23,6 +23,72 @@ def config_input(label, key, help=None):
             update_key(key, val)
     return val
 
+def _fetch_model_list(base_url, api_key):
+    """从 `<base_url>/v1/models` 拉取可用模型 id 列表。
+
+    手输模型名（尤其 OpenRouter 那种 `vendor/model` 形式）是最常见的配置错误，
+    这里把服务端自己声明的清单取回来供搜索。
+    """
+    import requests
+    if not base_url:
+        raise ValueError("api.base_url 为空")
+    url = str(base_url).rstrip('/')
+    if 'v1' not in url:
+        url += '/v1'
+    url += '/models'
+    resp = requests.get(
+        url,
+        headers={'Authorization': f'Bearer {api_key}'} if api_key else {},
+        timeout=15,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return sorted({item['id'] for item in data.get('data', []) if item.get('id')})
+
+
+def _search_models(search_term, model_list):
+    """模型搜索回调。
+
+    有匹配就只返回匹配项；完全不匹配时才把用户输入原样作为候选项 ——
+    这样既能直接使用手输的模型名（有些服务不实现 /models，或在用本地模型），
+    又不会让"输入了半截名字"时把半截字符串顶到候选第一位。
+    """
+    term = (search_term or '').strip()
+    if not term:
+        return list(model_list)[:50]
+    lowered = term.lower()
+    hits = [m for m in model_list if lowered in m.lower()]
+    if hits:
+        return hits[:50]
+    return [term]
+
+
+def model_input():
+    """模型选择控件。
+
+    优先使用 `streamlit-searchbox`（带服务端模型列表的搜索框）；
+    未安装该可选依赖时回退到普通文本框，功能不缺失。
+    """
+    try:
+        from streamlit_searchbox import st_searchbox
+    except ImportError:
+        config_input("MODEL", "api.model", help="click to check API validity 👉")
+        st.caption("可选：`pip install streamlit-searchbox` 可获得模型搜索框。")
+        return
+
+    model_list = st.session_state.get('_model_list', [])
+    selected = st_searchbox(
+        lambda term: _search_models(term, st.session_state.get('_model_list', [])),
+        label="MODEL",
+        default=load_key("api.model"),
+        default_searchterm=load_key("api.model"),
+        clear_on_submit=False,
+        key="api_model_searchbox",
+    )
+    if selected and selected != load_key("api.model"):
+        update_key("api.model", selected)
+
+
 def check_api():
     """检查 API 连通性。
 
@@ -101,7 +167,7 @@ def page_setting():
         
         c1, c2 = st.columns([5, 1])
         with c1:
-            config_input("MODEL", "api.model", help="click to check API validity 👉")
+            model_input()
         with c2:
             st.markdown('<div style="margin-top: 25px; margin-right: 10px;"></div>', unsafe_allow_html=True)
             if st.button("📡", key="api", help="Check API connection"):
@@ -109,6 +175,17 @@ def page_setting():
                 is_valid = check_api()
                 st.toast("API密钥有效" if is_valid else "API密钥无效",
                         icon="✅" if is_valid else "❌")
+
+        if st.button("🔄 获取模型列表", key="fetch_model_list", use_container_width=True,
+                     help="从 api.base_url 的 /v1/models 拉取可用模型，供上方搜索框使用"):
+            try:
+                with st.spinner("正在获取模型列表..."):
+                    models = _fetch_model_list(load_key("api.base_url"), load_key("api.key"))
+                st.session_state['_model_list'] = models
+                st.toast(f"已获取 {len(models)} 个模型", icon="✅")
+                st.rerun(scope="app")
+            except Exception as e:
+                st.toast(f"获取失败：{e}", icon="❌")
     
     with st.expander("Subtitles Settings", expanded=False):
         # ASR Engine Selection
