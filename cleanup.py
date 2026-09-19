@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -123,12 +124,203 @@ class Target:
             return False, f"未能完全删除（{exc}）；仍剩余 {human(leftover)}"
 
 
+# ---------------------------------------------------------------- 模型归属判定
+# 旧版项目**从不设置 HF_HOME / TORCH_HOME**（已核对 da3a432 的 core/step2_whisperX.py，
+# 只有 `os.environ['HF_ENDPOINT']`），所以除 Whisper 主模型外的模型都落在
+# HuggingFace / torch 的**默认缓存**里，也就是 C 盘的 `%USERPROFILE%\.cache`：
+#   * Whisper 识别模型 → 项目内 `_model_cache/`（load_model(download_root=MODEL_DIR)）
+#   * pyannote VAD、wav2vec2 对齐 → `~/.cache/huggingface/hub`
+#   * torch.hub 权重 → `~/.cache/torch/hub/checkpoints`
+#
+# 默认缓存是**全机共用**的，别的项目（本机的 aisummary 等）也会往里放东西。
+# 所以不能整目录删，要按模型名把"确定属于 VideoLingo"的挑出来。
+OWN_MODEL_PATTERNS = (
+    # 中文默认识别模型（core/step2_whisperX.py: load_whisper_model_name）
+    "belle-whisper",
+    # whisper 全系列（large-v3 / medium / base / tiny / large-v2 …），
+    # 但要排除别的项目的 distil-whisper
+    "whisper-large", "whisper-medium", "whisper-small",
+    "whisper-base", "whisper-tiny",
+    # 对齐模型（whisperx.alignment 的默认表）
+    "wav2vec2",
+    # 说话人分离（智谱/火山等引擎用到时）
+    "speaker-diarization", "speakerdiarization", "pyannote",
+    "segmentation-3.0",
+    # 新版 WhisperX 用的 VAD（silero）
+    "silero-vad",
+)
+# 明确**不属于**本项目的关键词：命中就不动（避免删掉别人要用的模型）
+# 注意 distil-whisper 必须排在 whisper 之前判断
+FOREIGN_MODEL_PATTERNS = (
+    "distil-whisper",      # aisummary 等在用
+    "doclayout", "yolo",   # 文档版面分析（别的项目）
+    "sentence-transformers", "all-minilm",
+    "hy-mt", "gptq",       # 翻译类模型（别的项目）
+)
+
+
+def classify_model(name):
+    """判断一个模型目录/条目是否属于 VideoLingo。返回 'own' / 'foreign' / 'unknown'。
+
+    注意 torch.hub 的命名特点：**有名字的用可读名**（`wav2vec2_fairseq_base_ls960
+    _asr_ls960.pth`），**微调模型则用 hash 文件名**（`955717e8-8726e21a.th`）。
+    本机实测两个都属于 WhisperX 的对齐模型。所以对 `.th/.pth` 给出两种判断：
+    可读名按关键词，纯 hash 名视为"本项目的"（torch.hub 在这个项目里只被
+    WhisperX 用于对齐模型；若机器上还有别人用 torch.hub，会在报告里单独标出，
+    用户可自行决定）。
+    """
+    lowered = name.lower()
+    for pattern in FOREIGN_MODEL_PATTERNS:
+        if pattern in lowered:
+            return "foreign"
+    for pattern in OWN_MODEL_PATTERNS:
+        if pattern in lowered:
+            return "own"
+    # torch.hub 的 hash 文件名：8 位十六进制 + '-' + 8 位十六进制 + .th/.pth
+    if re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{8}\.(th|pth|pt)", lowered):
+        return "own"
+    return "unknown"
+
+
+def hf_cache_hub_dirs():
+    """列出所有可能的 HuggingFace hub 缓存目录（含环境变量与常见位置）。"""
+    seen, found = set(), []
+
+    def add(path):
+        path = Path(path)
+        key = str(path).lower()
+        if key in seen or not path.is_dir():
+            return
+        seen.add(key)
+        found.append(path)
+
+    # 1) 环境变量说了算（用户可能为了省 C 盘把缓存挪到别的盘）
+    for var in ("HF_HUB_CACHE", "HUGGINGFACE_HUB_CACHE", "TRANSFORMERS_CACHE",
+                "HF_HOME"):
+        value = os.environ.get(var)
+        if not value:
+            continue
+        base = Path(value)
+        if var == "HF_HOME":
+            add(base / "hub")
+        else:
+            add(base)
+        add(base / "hub")
+
+    # 2) 默认位置（旧版没设环境变量时就是这些）
+    add(HOME / ".cache" / "huggingface" / "hub")
+    local = Path(os.environ.get("LOCALAPPDATA", HOME / "AppData" / "Local"))
+    add(local / "huggingface" / "hub")
+    add(Path(os.environ.get("APPDATA", HOME / "AppData" / "Roaming"))
+        / "huggingface" / "hub")
+
+    # 3) 项目内（新栈的 HF_HOME 指向这里）
+    for project in project_roots():
+        add(project / "_model_cache" / "hub")
+        add(project / "_model_cache" / "huggingface" / "hub")
+
+    return found
+
+
+def hf_models_in(hub_dir):
+    """返回 hub 目录下的模型目录列表 [(名字, 路径, 大小, 归属)]。"""
+    result = []
+    if not Path(hub_dir).is_dir():
+        return result
+    try:
+        entries = sorted(Path(hub_dir).iterdir())
+    except OSError:
+        return result
+    for entry in entries:
+        if not entry.is_dir() or not entry.name.startswith("models--"):
+            continue
+        result.append((entry.name, entry, dir_size(entry),
+                       classify_model(entry.name)))
+    return result
+
+
+def torch_hub_checkpoint_dirs():
+    """列出所有可能的 torch.hub 权重目录。"""
+    seen, found = set(), []
+
+    def add(path):
+        path = Path(path)
+        key = str(path).lower()
+        if key in seen or not path.is_dir():
+            return
+        seen.add(key)
+        found.append(path)
+
+    for var in ("TORCH_HOME", "XDG_CACHE_HOME"):
+        value = os.environ.get(var)
+        if not value:
+            continue
+        base = Path(value)
+        add(base / "hub" / "checkpoints" if var == "TORCH_HOME"
+            else base / "torch" / "hub" / "checkpoints")
+    add(HOME / ".cache" / "torch" / "hub" / "checkpoints")
+    for project in project_roots():
+        add(project / "_model_cache" / "torch" / "hub" / "checkpoints")
+    return found
+
+
+def project_roots():
+    """除当前项目外，可能残留旧版运行数据的项目目录。"""
+    roots, seen = [], set()
+
+    def add(path):
+        path = Path(path)
+        key = str(path).lower()
+        if key not in seen and path.is_dir():
+            seen.add(key)
+            roots.append(path)
+
+    add(PROJECT)
+    # 同盘根目录、桌面、文档、下载里叫 VideoLingo* 的目录（旧版可能放在别处）
+    candidates = [HOME / "Desktop", HOME / "Documents", HOME / "Downloads",
+                  Path("C:/"), Path("D:/"), Path("E:/"), Path("F:/")]
+    for base in candidates:
+        if not base.is_dir():
+            continue
+        try:
+            for entry in base.iterdir():
+                if entry.is_dir() and entry.name.lower().startswith("videolingo"):
+                    add(entry)
+        except OSError:
+            continue
+    return roots
+
+
+LEGACY_CONDA_ENV = "videolingo"
+
+
+def conda_env_paths():
+    """在所有已知 conda 安装里找**旧环境** videolingo 的路径。"""
+    found = []
+    for base in (HOME / "anaconda3", HOME / "miniconda3", HOME / "miniforge3",
+                 HOME / "mambaforge", Path("C:/ProgramData/anaconda3"),
+                 Path("C:/ProgramData/miniconda3"),
+                 Path(os.environ.get("CONDA_PREFIX", "")) if
+                 os.environ.get("CONDA_PREFIX") else None):
+        if base is None:
+            continue
+        env_dir = Path(base) / "envs" / LEGACY_CONDA_ENV
+        if env_dir.is_dir():
+            found.append(env_dir)
+    # conda 自己记录的环境列表是最可靠的来源
+    for name, path in conda_environments().items():
+        if name == LEGACY_CONDA_ENV and Path(path).is_dir():
+            if Path(path) not in found:
+                found.append(Path(path))
+    return found
+
+
 # ---------------------------------------------------------------- 目标清单
-def build_targets():
+def build_targets(extra_models=True):
     local = Path(os.environ.get("LOCALAPPDATA", HOME / "AppData" / "Local"))
     py = sys.executable
     uv = uv_exe()
-    return [
+    targets = [
         # --- 安全档：纯下载缓存，删掉只影响"下次要重新下载" ---
         Target("pip", "pip 下载缓存", local / "pip" / "Cache", "safe",
                "只缓存下载过的 wheel，可随时删",
@@ -142,10 +334,11 @@ def build_targets():
                "setup_env.py 指向项目内的 uv 缓存"),
 
         # --- 需确认档：可能与别的项目共用 ---
-        Target("hf", "HuggingFace 模型缓存", HOME / ".cache" / "huggingface", "confirm",
-               "⚠️ 可能含其他项目的模型；本机另有 aisummary 在用"),
-        Target("torch", "torch hub 模型缓存", HOME / ".cache" / "torch", "confirm",
-               "含 WhisperX 的对齐模型（wav2vec2 等）"),
+        Target("hf", "HuggingFace 模型缓存（整个）", HOME / ".cache" / "huggingface",
+               "confirm",
+               "⚠️ 全机共用；本机另有 aisummary 的模型在里面，默认不动"),
+        Target("torch", "torch hub 模型缓存（整个）", HOME / ".cache" / "torch",
+               "confirm", "含 WhisperX 的对齐模型（wav2vec2 等）"),
         Target("temp", "系统临时目录", local / "Temp", "confirm",
                "⚠️ 全系统共用；只建议清理里面明显过期的条目，且被占用的删不掉"),
 
@@ -155,6 +348,44 @@ def build_targets():
         Target("ffmpeg", "项目 ffmpeg（自带 FFmpeg）", PROJECT / "ffmpeg", "confirm",
                "删了下次安装会重新下载（约 68 MB）；系统那份静态版不能替代它"),
     ]
+
+    # 旧 conda 环境：只报告并给命令（不在这里直接删 —— 交给 conda 自己处理）
+    for env_path in conda_env_paths():
+        targets.append(Target(
+            "conda_env", f"旧 conda 环境 {LEGACY_CONDA_ENV}", env_path, "confirm",
+            "⚠️ 建议用 conda 自己删：conda env remove -n "
+            f"{LEGACY_CONDA_ENV} -y"))
+        break
+
+    # 各缓存目录里**确定属于本项目**的模型（逐目录挑，不整锅端）
+    for hub in hf_cache_hub_dirs():
+        for name, path, _size, owner in hf_models_in(hub):
+            if owner != "own":
+                continue
+            targets.append(Target(f"hf_own:{name}", f"HF 模型 {name}", path,
+                                  "confirm", "判定属于 VideoLingo"))
+    for ckpt_dir in torch_hub_checkpoint_dirs():
+        try:
+            entries = sorted(ckpt_dir.iterdir())
+        except OSError:
+            continue
+        own = [e for e in entries
+               if e.is_file() and classify_model(e.name) == "own"]
+        if own:
+            # hub/checkpoints 里本项目要用的就是 wav2vec2 对齐权重；逐个列更安全
+            for entry in own:
+                targets.append(Target(f"torch_ckpt:{entry.name}",
+                                      f"torch.hub 权重 {entry.name}", entry,
+                                      "confirm", "WhisperX 对齐模型"))
+
+    # 其他项目目录里的 _model_cache（旧版项目可能还留着 Whisper 权重）
+    for project in project_roots():
+        cache = project / "_model_cache"
+        if cache.is_dir() and dir_size(cache):
+            targets.append(Target(f"project_cache:{project.name}",
+                                  f"{project} 的 _model_cache", cache, "confirm",
+                                  "旧项目缓存（含 Whisper 识别模型）"))
+    return targets
 
 
 def uv_exe():
@@ -202,6 +433,70 @@ def conda_environments():
 
 
 # ---------------------------------------------------------------- 报告
+def report_models():
+    """列出发现的所有模型缓存，并标明归属（本项目 / 别的项目 / 未知）。
+
+    这是"模型到底下到哪了"的答案所在。旧版项目从不设置 HF_HOME，所以除
+    Whisper 识别模型（在项目内 `_model_cache/`）之外，其余都落在默认缓存
+    `%USERPROFILE%\\.cache\\huggingface\\hub` 与 `...\\.cache\\torch\\hub\\checkpoints`。
+    """
+    print("\n【模型缓存发现】")
+    hubs = hf_cache_hub_dirs()
+    if not hubs:
+        print("  未发现任何 HuggingFace hub 缓存目录")
+    for hub in hubs:
+        models = hf_models_in(hub)
+        print(f"\n  📁 {hub}")
+        if not models:
+            print("     （无模型）")
+            continue
+        own = [m for m in models if m[3] == "own"]
+        foreign = [m for m in models if m[3] == "foreign"]
+        unknown = [m for m in models if m[3] == "unknown"]
+        for name, _path, size, owner in models:
+            tag = {"own": "① 本项目", "foreign": "② 别的项目",
+                   "unknown": "③ 未知"}[owner]
+            print(f"     [{tag}] {name}  {human(size)}")
+        print(f"     → 本项目 {len(own)} 个 / 别的项目 {len(foreign)} 个 / "
+              f"未知 {len(unknown)} 个")
+        if not own:
+            print("     ℹ️ 这里没有本项目的模型 —— 说明本机还没跑过转录，"
+                  "或模型在项目内 _model_cache/")
+
+    for ckpt in torch_hub_checkpoint_dirs():
+        try:
+            entries = sorted(ckpt.iterdir())
+        except OSError:
+            continue
+        if not entries:
+            continue
+        print(f"\n  📁 {ckpt}")
+        for entry in entries:
+            if not entry.is_file():
+                continue
+            owner = classify_model(entry.name)
+            tag = {"own": "① 本项目", "foreign": "② 别的项目",
+                   "unknown": "③ 未知"}[owner]
+            print(f"     [{tag}] {entry.name}  {human(dir_size(entry))}")
+
+    # 项目内的 _model_cache（旧版的 Whisper 识别模型就在这里）
+    for project in project_roots():
+        cache = project / "_model_cache"
+        if not cache.is_dir():
+            continue
+        size = dir_size(cache)
+        print(f"\n  📁 {cache}  {human(size)}")
+        try:
+            for entry in sorted(cache.iterdir()):
+                if entry.is_dir():
+                    print(f"     [项目内] {entry.name}  {human(dir_size(entry))}")
+        except OSError:
+            pass
+
+    print("\n  说明：① 是判定属于 VideoLingo 的，可用 --clean --models 清理；")
+    print("        ② ③ 默认**不动**（可能别的项目在用）。")
+
+
 def report(targets, show_all=True):
     print("=" * 72)
     print("  VideoLingo 清理扫描（C 盘占用盘点）")
@@ -228,6 +523,8 @@ def report(targets, show_all=True):
                   f"{'、'.join(others)}")
         print("  ⚠️ anaconda3 本体（base）也不在本脚本范围内："
               f"总计约 {human(dir_size(HOME / 'anaconda3'))}")
+
+    report_models()
 
     print("\n【缓存与项目目录】")
     print(f"  {'项目':<34} {'大小':>10}  {'档位':<6} 说明")
@@ -256,8 +553,31 @@ def confirm(prompt):
     return answer in ("y", "yes")
 
 
+def select_targets(targets, keys):
+    """按 key 选目标。支持三类匹配：
+
+      * 精确 key（`pip`、`uv`、`downloads`、`hf`、`torch` …）
+      * 组 key **`models`**：只选逐模型挑出来的 `hf_own:*` / `torch_ckpt:*`
+        —— 即**判定属于本项目**的那几个模型；
+      * 注意 `models` **不会**选整个缓存目录（`hf` / `torch`），因为那里面
+        混着别的项目的模型。要删整个缓存必须显式写 `--only hf,torch`。
+        这个区分是整个脚本最关键的安全边界，有测试守着。
+
+    定义在 clean() 之前，纯粹为了阅读顺序（模块级函数定义顺序其实无关）。
+    """
+    chosen = []
+    for target in targets:
+        if target.key in keys:
+            chosen.append(target)
+            continue
+        if "models" in keys and target.key.split(":", 1)[0] in (
+                "hf_own", "torch_ckpt"):
+            chosen.append(target)
+    return chosen
+
+
 def clean(targets, keys, assume_yes=False):
-    chosen = [t for t in targets if t.key in keys]
+    chosen = select_targets(targets, keys)
     if not chosen:
         print("没有匹配的清理目标。")
         return 1
@@ -298,7 +618,11 @@ def clean(targets, keys, assume_yes=False):
 
 
 SAFE_KEYS = ("pip", "uv", "pip_project", "uv_project")
-MODEL_KEYS = ("hf", "torch")
+# "本项目的模型"= 逐模型挑出来的那些（hf_own:* / torch_ckpt:*），
+# 见 select_targets() 的组 key 处理。**不含**整个缓存目录。
+MODEL_GROUPS = ("models",)
+# 整个缓存目录：里面混着别的项目的模型，必须由用户点名才动
+CACHE_KEYS = ("hf", "torch")
 PROJECT_KEYS = ("downloads", "ffmpeg")
 
 
@@ -314,7 +638,9 @@ def build_parser():
     parser.add_argument("--temp", action="store_true",
                         help="清理系统临时目录（全系统共用，谨慎）")
     parser.add_argument("--only", default=None,
-                        help="只清理指定项，逗号分隔：pip,uv,hf,torch,temp,downloads,ffmpeg")
+                        help="只清理指定项，逗号分隔："
+                             "pip,uv,pip_project,uv_project,models,hf,torch,temp,"
+                             "downloads,ffmpeg,conda_env")
     parser.add_argument("--yes", action="store_true", help="跳过确认提示")
     return parser
 
@@ -327,14 +653,17 @@ def main(argv=None):
 
     if not args.clean:
         print("\n提示：以上只是报告，**没有删除任何东西**。")
-        print("      要清理安全档（pip / uv 缓存）：python cleanup.py --clean")
-        print("      还要清理模型缓存：              python cleanup.py --clean --models")
-        print("      全部（含项目 _downloads）：      python cleanup.py --clean --models --all")
+        print("      清理安全档（pip / uv 缓存）：  python cleanup.py --clean")
+        print("      再清本项目的模型（只删判定属于本项目的）：")
+        print("                                      python cleanup.py --clean --models")
+        print("      再加项目内 _downloads 与 ffmpeg：python cleanup.py --clean --models --all")
+        print("      整个 HF/torch 缓存（⚠️ 会牵连别的项目，需点名）：")
+        print("                                      python cleanup.py --clean --only hf,torch")
         return 0
 
     if args.only:
         keys = {k.strip() for k in args.only.split(",") if k.strip()}
-        known = {t.key for t in targets}
+        known = {t.key for t in targets} | {"models"} | set(CACHE_KEYS)
         unknown = keys - known
         if unknown:
             print(f"❌ 未知清理项：{', '.join(sorted(unknown))}")
@@ -343,13 +672,34 @@ def main(argv=None):
     else:
         keys = set(SAFE_KEYS)
         if args.models:
-            keys |= set(MODEL_KEYS)
+            # 只加"本项目的模型"这一组；**不加** hf/torch 整个缓存
+            keys |= set(MODEL_GROUPS)
         if args.all:
             keys |= set(PROJECT_KEYS)
         if args.temp:
             keys.add("temp")
 
-    return clean(targets, keys, assume_yes=args.yes)
+    chosen = select_targets(targets, keys)
+    warn_if_shared(chosen)
+    return clean(chosen, set(), assume_yes=args.yes)
+
+
+def warn_if_shared(chosen):
+    """如果选中的目标里含别的项目的模型，明确警告（不阻止，但要说清后果）。"""
+    risky = []
+    for target in chosen:
+        if target.key in CACHE_KEYS:
+            foreign = [m[0] for m in hf_models_in(target.path)
+                       if m[3] == "foreign"] if target.key == "hf" else []
+            risky.append((target, foreign))
+    if not risky:
+        return
+    print("\n⚠️ 注意：以下目标包含**别的项目**可能正在使用的模型：")
+    for target, foreign in risky:
+        print(f"   - {target.label}（{target.path}）")
+        for name in foreign:
+            print(f"       会一并删除：{name}")
+    print("   若只想删本项目的模型，请改用：--clean --models")
 
 
 if __name__ == "__main__":

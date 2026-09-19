@@ -137,16 +137,33 @@ Cleanup.bat --clean --models         # 额外清理 HuggingFace / torch 模型�
 Cleanup.bat --clean --models --all   # 再加项目内 _downloads\ 与 ffmpeg\
 ```
 
+**它会告诉你"模型到底下到哪了"**。旧版项目从不设置 `HF_HOME`，所以除 Whisper
+识别模型（在项目内 `_model_cache/`）之外，其余模型都落在 HuggingFace / torch 的
+**默认缓存**里：
+
+| 内容 | 旧版位置 |
+| --- | --- |
+| Whisper 识别模型（large-v3 / Belle 中文模型） | `<项目>\_model_cache\`（`load_model(download_root=...)`） |
+| pyannote VAD、wav2vec2 对齐 | `%USERPROFILE%\.cache\huggingface\hub\` |
+| torch.hub 对齐权重 | `%USERPROFILE%\.cache\torch\hub\checkpoints\` |
+
+脚本会把每个缓存目录里的模型逐条列出来，并标出归属：**① 本项目** /
+**② 别的项目** / **③ 未知**。只有 ① 会被 `--clean --models` 删掉。
+
+> ⚠️ 默认缓存是全机共用的。本机 `%USERPROFILE%\.cache\huggingface\hub` 里
+> 4 个模型全是别的项目的（`aisummary` 的 distil-whisper、sentence-transformers、
+> DocLayout-YOLO 等），所以脚本**不会**整目录删 —— 要删整个缓存必须点名
+> `--only hf,torch`，而且会先警告会牵连哪些模型。
+
 它会清的东西：
 
-| 目标 | 典型大小 | 说明 |
+| 目标 | 说明 | 怎么触发 |
 | --- | --- | --- |
-| pip 下载缓存 | 可达 10 GB+ | 纯缓存，用 `pip cache purge` 清空，删了只是下次重下 |
-| uv 下载缓存 | 数 GB | `uv cache clean` |
-| HuggingFace 模型缓存 | 视模型而定 | ⚠️ **可能与别的项目共用**，所以要显式加 `--models` |
-| torch hub 模型缓存 | 约 0.5 GB | WhisperX 的对齐模型（wav2vec2 等） |
-| `_downloads\` | 约 7 GB | torch 轮子等；**还要重装就别删** |
-| 旧 conda 环境 `videolingo` | — | 只报告并给出 `conda env remove` 命令 |
+| pip / uv 下载缓存 | 纯缓存（`pip cache purge` / `uv cache clean`），删了只是下次重下 | `--clean`（默认档） |
+| **本项目**的模型 | 逐条判定归属后只删 ① 那些（如 wav2vec2 对齐权重） | `--clean --models` |
+| `_downloads\`、`ffmpeg\` | 项目内大件；还要重装就别删 | `--clean --models --all` |
+| 整个 HF / torch 缓存 | ⚠️ 会牵连别的项目，需点名且会先警告 | `--clean --only hf,torch` |
+| 旧 conda 环境 `videolingo` | 只报告，并给出 `conda env remove -n videolingo -y` | 报告里列出 |
 
 它**绝不会**做两件事：卸载 Anaconda/Miniconda 本体（那里面还有别的项目），
 以及删除其他 conda 环境（本机就有 `aisummary`、`novelmanager`）。
