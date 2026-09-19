@@ -125,6 +125,32 @@ python installer.py --check --smoke    # 体检：逐个 import whisperx/torchco
 —— 旧的 conda 流程仍然可用：`conda create -n videolingo python=3.11` 后直接
 `python installer.py`。
 
+### 清理 / 释放 C 盘空间
+
+项目从 conda 换成项目内 `.venv` 之后，旧环境与运行期自动下载的模型可能还留在
+C 盘。用 `Cleanup.bat`（或 `python cleanup.py`）盘点并清理：
+
+```shell
+Cleanup.bat                          # 只扫描报告，**不删任何东西**
+Cleanup.bat --clean                  # 清理安全档：pip / uv 下载缓存
+Cleanup.bat --clean --models         # 额外清理 HuggingFace / torch 模型缓存
+Cleanup.bat --clean --models --all   # 再加项目内 _downloads\ 与 ffmpeg\
+```
+
+它会清的东西：
+
+| 目标 | 典型大小 | 说明 |
+| --- | --- | --- |
+| pip 下载缓存 | 可达 10 GB+ | 纯缓存，用 `pip cache purge` 清空，删了只是下次重下 |
+| uv 下载缓存 | 数 GB | `uv cache clean` |
+| HuggingFace 模型缓存 | 视模型而定 | ⚠️ **可能与别的项目共用**，所以要显式加 `--models` |
+| torch hub 模型缓存 | 约 0.5 GB | WhisperX 的对齐模型（wav2vec2 等） |
+| `_downloads\` | 约 7 GB | torch 轮子等；**还要重装就别删** |
+| 旧 conda 环境 `videolingo` | — | 只报告并给出 `conda env remove` 命令 |
+
+它**绝不会**做两件事：卸载 Anaconda/Miniconda 本体（那里面还有别的项目），
+以及删除其他 conda 环境（本机就有 `aisummary`、`novelmanager`）。
+
 ### FFmpeg
 
 需要 **FFmpeg 4–7**，而且必须是**带共享库的构建**（bin 目录里有 `avcodec-*.dll`）。
