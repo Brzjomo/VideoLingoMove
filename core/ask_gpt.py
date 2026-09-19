@@ -11,9 +11,30 @@ from core.config_utils import load_key
 LOG_FOLDER = 'output/gpt_log'
 LOCK = Lock()
 
+# 单次请求超时（秒）。长提示词的"两段式翻译"在慢模型上可能超过 openai SDK
+# 默认的 600s 之外的中间件超时；这里显式给足，避免被网关/代理提前掐断。
+REQUEST_TIMEOUT = 300
+
 # 不写日志的哨兵值。历史上这里只判断字符串 'None'，导致 log_title=None
 # 写出 None.json、而字符串 'None' 反而会去读它（见 devdocs 已知问题 P1-8）。
 NO_LOG_TITLES = (None, 'None')
+
+
+def fix_base_url(base_url: str) -> str:
+    """把配置里的 base_url 归一化成 OpenAI SDK 可用的地址。
+
+    - 火山方舟（Volcengine Ark，base_url 里含 `ark`）：其 OpenAI 兼容端点固定在
+      `/api/v3`，既不接受 `/v1` 后缀，也不能靠"缺 v1 就补 /v1"的通用规则拼出来
+      （`https://ark.cn-beijing.volces.com/api/v3` 里本来就含 "v3" 不含 "v1"）。
+    - 其余服务：缺 `/v1` 时补上。
+    """
+    if not isinstance(base_url, str):
+        raise ValueError("api.base_url must be a string")
+    if 'ark' in base_url:
+        return "https://ark.cn-beijing.volces.com/api/v3"
+    if 'v1' not in base_url:
+        return base_url.strip('/') + '/v1'
+    return base_url
 
 
 def _is_no_log(log_title):
@@ -114,7 +135,7 @@ def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default', use
 
     messages = [{"role": "user", "content": prompt}]
 
-    base_url = api_set["base_url"].strip('/') + '/v1' if 'v1' not in api_set["base_url"] else api_set["base_url"]
+    base_url = fix_base_url(api_set["base_url"])
     client = OpenAI(api_key=api_set["key"], base_url=base_url)
     response_format = {"type": "json_object"} if response_json and model in llm_support_json else None
 
@@ -130,7 +151,7 @@ def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default', use
                 {"role": "user", "content": f"上一次输出不合规：{last_error}\n请严格按要求重新输出，只返回合法 JSON。"},
             ]
         try:
-            completion_args = {"model": model, "messages": messages}
+            completion_args = {"model": model, "messages": messages, "timeout": REQUEST_TIMEOUT}
             if response_format is not None:
                 completion_args["response_format"] = response_format
             response = client.chat.completions.create(**completion_args)
