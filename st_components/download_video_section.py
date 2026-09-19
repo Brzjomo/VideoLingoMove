@@ -2,10 +2,10 @@ import streamlit as st
 import os, sys, shutil
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config_utils import load_key
-from core.step1_ytdlp import download_video_ytdlp, find_video_files
+from core.step1_ytdlp import (download_video_ytdlp, find_media_file,
+                              write_input_manifest)
 from time import sleep
 import re
-import subprocess
 import easy_util as eu
 
 # 已处理过的上传标识（文件名:大小），用于避免重复导入同一个文件
@@ -19,9 +19,9 @@ def download_video_section():
         # 旧实现用裸 except 吞掉一切：目录里有多个视频、权限不足、output 不可写
         # 等情况都会静默显示成"还没上传"，用户完全看不出真正的原因。
         try:
-            video_file = find_video_files()
+            media_file, media_type = find_media_file()
         except FileNotFoundError:
-            video_file = None
+            media_file, media_type = None, None
         except Exception as e:
             st.error(f"检测已有素材时出错：{type(e).__name__}: {e}")
             if st.button("清空 output 并重新选择", key="clear_output_on_error"):
@@ -31,11 +31,15 @@ def download_video_section():
                 st.rerun()
             return False
 
-        if video_file:
-            st.video(video_file)
-            eu.original_name = eu.record_file_name(video_file)
+        if media_file:
+            if media_type == "video":
+                st.video(media_file)
+            else:
+                st.audio(media_file)
+                st.caption("输入为音频：只产出字幕文件（含原语言与译文），不做压制。")
+            eu.original_name = eu.record_file_name(media_file)
             if st.button("删除并重新选择", key="delete_video_button"):
-                os.remove(video_file)
+                os.remove(media_file)
                 st.session_state.pop(UPLOAD_ID_KEY, None)
                 if os.path.exists("output"):
                     shutil.rmtree("output")
@@ -86,22 +90,15 @@ def download_video_section():
             with open(target_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
 
-            # 如果是音频文件则转换为视频
-            if clean_name.split('.')[-1] in load_key("allowed_audio_formats"):
-                convert_audio_to_video(target_path)
+            # 音频**直接按音频处理**：不再用 ffmpeg 包成黑底视频 black_screen.mp4。
+            # 旧做法要多一次转码、多一份磁盘，还要靠文件名在下游特判（见
+            # core/step1_ytdlp.is_audio_placeholder 与 step7 里的兼容分支）。
+            # 现在只需在清单里记下"这是音频"，后续步骤据此跳过压制。
+            media_type = "audio" if clean_name.split('.')[-1] in load_key("allowed_audio_formats") else "video"
+            write_input_manifest(target_path, media_type)
+
             # 只有真正落盘成功才记录标识
             st.session_state[UPLOAD_ID_KEY] = upload_id
             st.rerun()
         else:
             return False
-
-def convert_audio_to_video(audio_file: str) -> str:
-    output_video = 'output/black_screen.mp4'
-    if not os.path.exists(output_video):
-        print(f"🎵➡️🎬 正在使用FFmpeg将音频转换为视频......")
-        ffmpeg_cmd = ['ffmpeg', '-y', '-f', 'lavfi', '-i', 'color=c=black:s=640x360', '-i', audio_file, '-shortest', '-c:v', 'libx264', '-c:a', 'aac', '-pix_fmt', 'yuv420p', output_video]
-        subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True, encoding='utf-8')
-        print(f"🎵➡️🎬 已将 <{audio_file}> 转换为 <{output_video}>\n")
-        # delete audio file
-        os.remove(audio_file)
-    return output_video

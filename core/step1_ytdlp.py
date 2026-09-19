@@ -1,6 +1,7 @@
 import os,sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import glob
+import json
 import re
 import subprocess
 from core.config_utils import load_key, load_key_or
@@ -109,6 +110,9 @@ def download_video_ytdlp(url, save_path='output', resolution='1080', cutoff_time
             if new_filename != filename:
                 os.rename(os.path.join(save_path, file), os.path.join(save_path, new_filename + ext))
 
+    # 记录输入清单：后续步骤据此区分音频/视频输入，不必再靠文件名特判
+    write_input_manifest(find_video_files(save_path), "video", save_path)
+
     # cut the video to make demo
     if cutoff_time:
         print(f"Cutoff time: {cutoff_time}, Now checking video duration...")
@@ -176,6 +180,88 @@ def find_video_files(save_path='output'):
         print(f"⚠️ {save_path}/ 下检测到 {len(video_files)} 个视频文件，将使用最新的一个：{video_files[0]}")
         print(f"   其余文件：{video_files[1:]}（如需处理它们，请先归档或移走）")
     return video_files[0]
+
+
+# ================================================================
+# 输入清单（input_manifest.json）
+# ================================================================
+# 旧做法：上传音频时用 ffmpeg 把它包成一个黑底视频 black_screen.mp4，再走与
+# 视频完全相同的流程。代价是多一次转码、多一份磁盘，还要靠文件名特判。
+# 现在下载/上传时写一份清单记录"哪个文件是输入、它是音频还是视频"，
+# 音频直接按音频处理（见上游 a479d07 / 3b0fbab 的 audio-only flow）。
+INPUT_MANIFEST = "input_manifest.json"
+GENERATED_AUDIO_NAMES = {"dub.mp3", "normalized_dub.wav"}
+
+def write_input_manifest(media_file: str, media_type: str, save_path='output'):
+    """记录本次要处理的输入媒体。"""
+    os.makedirs(save_path, exist_ok=True)
+    media_path = media_file.replace("\\", "/") if sys.platform.startswith('win') else media_file
+    with open(os.path.join(save_path, INPUT_MANIFEST), "w", encoding="utf-8") as f:
+        json.dump({"path": media_path, "type": media_type}, f, ensure_ascii=False, indent=2)
+
+
+def read_input_manifest(save_path='output'):
+    """读取输入清单，返回 (路径, 类型)；不可用/已失效时返回 None。"""
+    manifest_path = os.path.join(save_path, INPUT_MANIFEST)
+    if not os.path.exists(manifest_path):
+        return None
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    media_file = data.get("path")
+    media_type = data.get("type")
+    if media_type not in ("video", "audio") or not media_file or not os.path.exists(media_file):
+        return None
+    if sys.platform.startswith('win'):
+        media_file = media_file.replace("\\", "/")
+    return media_file, media_type
+
+
+def find_audio_files(save_path='output'):
+    """定位 output/ 下的源音频（与 find_video_files 同规则）。"""
+    audio_files = [
+        file for file in glob.glob(save_path + "/*")
+        if os.path.isfile(file)
+        and os.path.splitext(file)[1][1:].lower() in load_key("allowed_audio_formats")
+        and os.path.basename(file).lower() not in GENERATED_AUDIO_NAMES
+    ]
+    if sys.platform.startswith('win'):
+        audio_files = [file.replace("\\", "/") for file in audio_files]
+    if not audio_files:
+        raise FileNotFoundError(f"在 {save_path}/ 下没有找到任何支持的音频文件。")
+    if len(audio_files) > 1:
+        audio_files = sorted(audio_files, key=os.path.getmtime, reverse=True)
+        print(f"⚠️ {save_path}/ 下检测到 {len(audio_files)} 个音频文件，将使用最新的一个：{audio_files[0]}")
+    return audio_files[0]
+
+
+def find_media_file(save_path='output'):
+    """定位待处理的源媒体，返回 (路径, 'video'|'audio')。
+
+    优先用 input_manifest.json（下载/上传时写入，能可靠区分音频与视频）；
+    没有清单时按扩展名回退，先找视频再找音频。
+    """
+    manifest = read_input_manifest(save_path)
+    if manifest:
+        return manifest
+    try:
+        return find_video_files(save_path), "video"
+    except FileNotFoundError:
+        return find_audio_files(save_path), "audio"
+
+
+def is_audio_only_input(save_path='output') -> bool:
+    """输入是否是独立音频文件（没有视频轨）。
+
+    这种情况下只产出字幕文件，不做压制。
+    """
+    try:
+        _, media_type = find_media_file(save_path)
+        return media_type == "audio"
+    except Exception:
+        return False
 
 if __name__ == '__main__':
     # Example usage

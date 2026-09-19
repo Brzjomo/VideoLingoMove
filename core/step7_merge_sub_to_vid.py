@@ -1,7 +1,7 @@
 import os, subprocess, time, sys, shutil
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from core.config_utils import load_key
-from core.step1_ytdlp import find_video_files, is_audio_placeholder
+from core.step1_ytdlp import find_media_file, is_audio_placeholder
 from rich import print as rprint
 import platform
 
@@ -56,15 +56,25 @@ def _mark_stage_done():
 def merge_subtitles_to_video():
     RESOLUTION = load_key("resolution")
     TARGET_WIDTH, TARGET_HEIGHT = RESOLUTION.split('x')
-    video_file = find_video_files()
+    media_file, media_type = find_media_file()
     os.makedirs(os.path.dirname(OUTPUT_VIDEO), exist_ok=True)
+
+    # 输入是纯音频：没有任何视频轨可以压制，直接只交字幕文件。
+    # 这是上传音频的新路径（input_manifest 记为 audio）；旧路径留下的
+    # black_screen.mp4 也仍然按音频对待（见 is_audio_placeholder）。
+    if media_type == "audio":
+        rprint("[bold green]🎵 输入为音频：跳过视频压制，字幕文件已就绪。[/bold green]")
+        _mark_stage_done()
+        return
+
+    video_file = media_file
 
     # resolution 为 0x0 等价于侧边栏的 "Burn-in Subtitles" 开关处于关闭状态：
     # 只出字幕、不做压制，静默跳过（不打印提示）。侧边栏那个 toggle 就是通过
     # 把 resolution 写成 '0x0' / 具体值来表达开关的，见 st_components/sidebar_setting.py。
     if RESOLUTION == '0x0':
         if is_audio_placeholder(video_file):
-            # 输入是纯音频：convert_audio_to_video() 已把它包成 black_screen.mp4
+            # 兼容旧产物：早期"上传音频"会把它包成 black_screen.mp4
             # （黑底 + 完整音频）。它本身就是一份可播放的成片，**必须原样保留**：
             # 若用 1 秒黑帧覆盖 output_sub.mp4，用户就无法播放、也就无法校对字幕与音频的对齐。
             shutil.copy2(video_file, OUTPUT_VIDEO)

@@ -20,7 +20,7 @@ import easy_util as eu
 from core.all_whisper_methods import transcription_cache
 from core.all_whisper_methods.demucs_vl import demucs_main, RAW_AUDIO_FILE, VOCAL_AUDIO_FILE
 from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, compute_normalization_gain, CLEANED_CHUNKS_EXCEL_PATH, RAW_AUDIO_WAV_FILE
-from core.step1_ytdlp import find_video_files
+from core.step1_ytdlp import find_video_files, find_media_file
 
 # 尝试导入火山引擎ASR
 try:
@@ -436,8 +436,10 @@ def transcribe():
         rprint("[yellow]⚠️ Transcription results already exist, skipping transcription step.[/yellow]")
         return
 
-    # step0 Convert video to audio
-    video_file = find_video_files()
+    # step0 准备音频。find_media_file() 同时接受视频与音频输入：
+    # 上传音频时不再包成 black_screen.mp4，convert_video_to_audio() 对音频文件
+    # 同样适用（ffmpeg 的 -vn 只是丢弃不存在的视频轨）。
+    video_file, _media_type = find_media_file()
 
     # 内容寻址缓存：命中"完整结果"时连 Demucs 人声分离都一起跳过。
     # 这是 dev 相对上游能多省一步的地方 —— dev 没有配音链路消费 vocal.mp3，

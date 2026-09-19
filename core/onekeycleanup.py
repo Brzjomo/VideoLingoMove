@@ -1,13 +1,13 @@
 import os, sys
 import glob
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.step1_ytdlp import find_video_files
+from core.step1_ytdlp import find_media_file
 import shutil
 
 def cleanup(history_dir="history"):
-    # Get video file name
-    video_file = find_video_files()
-    # 用 basename 而不是 split("/")[1]：后者依赖 find_video_files 返回的分隔符形式
+    # Get source media file name（用 find_media_file 以同时支持音频输入）
+    video_file, _media_type = find_media_file()
+    # 用 basename 而不是 split("/")[1]：后者依赖 find_media_file 返回的分隔符形式
     # 与路径深度，在非 Windows 平台会 IndexError（见 devdocs 已知问题 P3-11）
     video_name = os.path.basename(video_file.replace("\\", "/"))
     video_name = os.path.splitext(video_name)[0]
