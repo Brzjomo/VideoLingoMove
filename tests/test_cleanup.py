@@ -497,6 +497,19 @@ class TestPathDiscovery(unittest.TestCase):
 
 
 class TestCondaDetection(unittest.TestCase):
+    """conda 环境探测与"绝不代删 conda 目录"的守卫。
+
+    本类会打印诊断行（如"本机没有旧环境，跳过自检"）。安装日志里不该出现
+    测试的碎碎念，所以统一写进 `self._out`，由 `setUp` 把本类的 stdout 收走。
+    """
+
+    def setUp(self):
+        self._buf = io.StringIO()
+        self._redirect = contextlib.redirect_stdout(self._buf)
+        self._redirect.__enter__()
+        self.addCleanup(self._redirect.__exit__, None, None, None)
+        self._out = self._buf
+
     def test_returns_dict(self):
         envs = cleanup.conda_environments()
         self.assertIsInstance(envs, dict)
@@ -559,12 +572,13 @@ class TestCondaDetection(unittest.TestCase):
         # 顺带一条"守卫本身没坏"的自检：**只在旧环境真的存在时才断言**。
         # 旧环境是可以被用户删掉的（本机 2026-09-19 就删了），写成无条件断言
         # 会在环境已清理的机器上误报 —— 而"没有旧环境"恰好是这套工具的目标状态。
+        # 用 self._out（setUp 里建）而不是 print：这行会混进 Install.bat 日志。
         if envs_dir is not None and (envs_dir / cleanup.TARGET_ENV).is_dir():
             self.assertTrue(
                 legacy, f"{envs_dir / cleanup.TARGET_ENV} 存在，应能探测到它")
         else:
-            print(f"  [skip] 本机没有旧 conda 环境 {cleanup.TARGET_ENV}，"
-                  "跳过探测自检")
+            self._out.write(f"[skip] 本机没有旧 conda 环境 {cleanup.TARGET_ENV}，"
+                            "跳过探测自检\n")
 
     def test_conda_exe_none_is_handled(self):
         """没有 conda 时报空字典而不是抛异常。"""

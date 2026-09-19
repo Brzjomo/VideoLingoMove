@@ -71,12 +71,22 @@ if not "%RC%"=="0" goto :failed
 echo.
 echo [4/5] Running unit tests ...
 echo       (these tests only check the code; they delete nothing and change
-echo        nothing -- any output below is test output, not a setup step)
+echo        nothing. Output goes to logs\unittest.log, shown only on failure)
+if not exist "%~dp0logs" mkdir "%~dp0logs"
 if exist "%VENV_PY%" (
-    "%VENV_PY%" -m unittest discover -s tests
+    "%VENV_PY%" -m unittest discover -s tests > "%~dp0logs\unittest.log" 2>&1
 ) else (
-    %PY% -m unittest discover -s tests
+    %PY% -m unittest discover -s tests > "%~dp0logs\unittest.log" 2>&1
 )
+set "RC=%ERRORLEVEL%"
+if not "%RC%"=="0" (
+    echo.
+    echo [ERROR] Unit tests failed ^(exit code %RC%^). Full output:
+    echo.
+    type "%~dp0logs\unittest.log"
+    goto :failed
+)
+echo       ok - all tests passed ^(log: logs\unittest.log^)
 
 echo.
 echo [5/5] Done.

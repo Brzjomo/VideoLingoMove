@@ -669,11 +669,19 @@ class TestSearchboxDependency(unittest.TestCase):
                          "streamlit-searchbox")
 
     def test_importable_when_installed(self):
-        """在装好依赖的环境里必须能 import（没装则跳过，便于纯静态检查环境）。"""
+        """在装好依赖的环境里必须能 import（没装则跳过，便于纯静态检查环境）。
+
+        ⚠️ 必须收走 stdout/stderr：`streamlit_searchbox` 会连带 import streamlit，
+        后者在首次 import 时打一行
+        `Thread 'MainThread': missing ScriptRunContext! ...`
+        —— 2026-09-19 实测：这行混进了 `Install.bat` 的安装日志，看起来像出错了。
+        """
         import importlib.util
         if importlib.util.find_spec("streamlit_searchbox") is None:
             self.skipTest("当前解释器未安装 streamlit-searchbox")
-        module = importlib.import_module("streamlit_searchbox")
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            module = importlib.import_module("streamlit_searchbox")
         self.assertTrue(hasattr(module, "st_searchbox"))
 
     def test_sidebar_has_fallback(self):
