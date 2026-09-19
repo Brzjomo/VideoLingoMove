@@ -192,7 +192,7 @@ def config_input(label, key, help=None):
 | `config_input(label, key, help=None)` | `sidebar_setting.py:6-24` | 通用文本配置输入 | 见 §4.1；每次调用读 2 次 `config.yaml`；环境变量覆盖时只警告不写盘 |
 | `_fetch_model_list(base_url, api_key)` | `:26-46` | `GET <base_url>/v1/models` 拉取模型 id | 缺 `/v1` 会自动补；`timeout=15`；`raise_for_status()`；返回 `sorted({item['id'] …})`。**合并新增** |
 | `_search_models(search_term, model_list)` | `:49-63` | `model_input()` 的搜索回调 | 空串返回前 50 条；有命中返回命中；**完全无命中时返回 `[term]` 本身**（允许手输未在清单里的模型名） |
-| `model_input()` | `:66-89` | 模型选择控件 | `try: from streamlit_searchbox import st_searchbox`，`ImportError` 时回退 `config_input("MODEL", "api.model")` 并提示可安装可选依赖；搜索框 `key="api_model_searchbox"`，选中即 `update_key("api.model", selected)` |
+| `model_input()` | `:66-89` | 模型选择控件 | `try: from streamlit_searchbox import st_searchbox`，`ImportError` 时回退 `config_input("MODEL", "api.model")` 并提示重跑安装脚本即可（该包已进主依赖）；搜索框 `key="api_model_searchbox"`，选中即 `update_key("api.model", selected)` |
 | `check_api()` | `:92-104` | 用 `ask_gpt("This is a test, …", response_json=True, log_title=None, use_cache=False)` 探测连通性 | 返回 `resp.get('message') == 'success'`；任何异常 → `False`；**刻意绕过缓存**（`use_cache=False`），`log_title=None` 使结果不落 `output/gpt_log/`；**真实的 API 请求**，调用方只调一次（`:175`） |
 | `apply_config(config_name)` | `:106-127` | 切换 API 预设 | 见 §4.2 |
 | `page_setting()` | `:129-447` | 渲染整个侧边栏 | 无返回值；到 TOS 的「测试TOS连接」按钮结束 |
@@ -295,8 +295,8 @@ def config_input(label, key, help=None):
 
 | 条件 | 形态 | 数据来源 |
 | --- | --- | --- |
-| 装了可选依赖 `streamlit-searchbox` | `st_searchbox` 搜索框（`key="api_model_searchbox"`，`default=load_key("api.model")`） | 候选来自 `st.session_state['_model_list']`，由「🔄 获取模型列表」按钮经 `_fetch_model_list(api.base_url, api.key)` 拉 `GET <base_url>/v1/models` 填充（`:179-188`）；搜索无命中时把输入本身作为候选（`_search_models()`，`:49-63`） |
-| 未装该依赖 | 回退 `config_input("MODEL", "api.model")` 自由文本输入框（`:75`），并提示 `可选：pip install streamlit-searchbox`（`:76`） | 手输 |
+| 装了 `streamlit-searchbox`（**已在主依赖里**） | `st_searchbox` 搜索框（`key="api_model_searchbox"`，`default=load_key("api.model")`） | 候选来自 `st.session_state['_model_list']`，由「🔄 获取模型列表」按钮经 `_fetch_model_list(api.base_url, api.key)` 拉 `GET <base_url>/v1/models` 填充（`:179-188`）；搜索无命中时把输入本身作为候选（`_search_models()`，`:49-63`） |
+| 未装该依赖 | 回退 `config_input("MODEL", "api.model")` 自由文本输入框，并提示「重跑 `python installer.py`（或 `Install.bat`）即可获得带搜索的下拉框」。**正常安装不会再走到这个分支** —— `streamlit-searchbox>=0.1.24,<0.2.0` 已在 `requirements.txt` 里，只有旧环境没重装时才会命中 | 手输 |
 
 无论哪种形态，写入的都是 `api.model`。`llm_support_json`（`config.example.yaml:139-149`，10 项）**与界面无关**，只被 `core/ask_gpt.py:124,140` 使用：仅当 `api.model in llm_support_json` 时才给请求加 `response_format={"type": "json_object"}`。也就是说，模型名必须与模板里的字符串**逐字一致**（如 `deepseek-flash`、`qwen-plus`、`qwen3:30b-a3b`），否则模型仍能用，但会退化为「提示词里要求 JSON + `json_repair` 兜底解析」的路径。
 
@@ -448,7 +448,7 @@ python launch.py
 | 验证目标 | 操作 | 期望 |
 | --- | --- | --- |
 | 控件 → config 写回 | 在侧边栏改 `MODEL`（搜索框或文本框）后回车，然后 `Select-String -Path config.yaml -Pattern 'model:'` | `api.model` 变成新值，注释与引号保留 |
-| 模型搜索框 | 点「🔄 获取模型列表」，再在 MODEL 里输入片段（如 `qwen`） | 未装 `streamlit-searchbox` 时该按钮只弹「获取失败/已获取」toast 且 MODEL 保持文本框；装了则候选来自服务端列表 |
+| 模型搜索框 | 点「🔄 获取模型列表」，再在 MODEL 里输入片段（如 `qwen`） | `streamlit-searchbox` 已在 `requirements.txt` 里，装完环境即生效；候选来自服务端列表 |
 | 预设切换 | 选「千问」→ 点「应用配置」，再看 `api.key` / `api.base_url` / `api.model` 三行 | 三个值都等于 `qwen_api.*`；`qwen_api.*` 原块不变 |
 | 只读确认（不写文件） | `python -c "from core.config_utils import load_key; print(load_key('api.model'), load_key('asr_engine'), load_key('whisper.language'), load_key('transcription_only'), load_key('resolution'))"` | 打印当前配置值（该命令不修改文件） |
 | 写回确认（⚠️ 会真实改写 config.yaml） | 先备份 `copy config.yaml config.yaml.bak`，再跑 `python -c "from core.config_utils import assign_key; assign_key('api.model','deepseek_api.model')"`，之后 `move /y config.yaml.bak config.yaml` 还原 | 验证 `assign_key` 的语义 |

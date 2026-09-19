@@ -56,6 +56,12 @@ soundfile>=0.13.0,<0.14.0
 
 # --- Web / 交互 ---
 streamlit>=1.49.1,<2.0.0
+# 侧边栏 MODEL 栏的搜索框（st_components/sidebar_setting.py 的 model_input()）。
+# 装了它 MODEL 就是带搜索的下拉框（候选来自「🔄 获取模型列表」拉到 /v1/models），
+# 没装则回退成普通文本框 —— 所以它是纯体验增强，不是硬依赖。
+# 唯一依赖是 streamlit>=1.0，requires_python >=3.10，没有额外传递依赖，
+# 因此直接进主依赖清单，用户不需要自己 pip install。
+streamlit-searchbox>=0.1.24,<0.2.0
 openai==1.55.3
 plyer
 requests==2.32.3

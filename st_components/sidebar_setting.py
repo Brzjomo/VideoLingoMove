@@ -66,14 +66,19 @@ def _search_models(search_term, model_list):
 def model_input():
     """模型选择控件。
 
-    优先使用 `streamlit-searchbox`（带服务端模型列表的搜索框）；
-    未安装该可选依赖时回退到普通文本框，功能不缺失。
+    优先使用 `streamlit-searchbox`（带服务端模型列表的搜索框）；未安装该依赖时
+    回退到普通文本框，功能不缺失。
+
+    `streamlit-searchbox` 已在 `requirements.txt` 里，正常装完环境就会有；这里的
+    回退分支只会在「旧环境没重装」或「手工装了别的依赖集合」时命中，所以提示语
+    指向重跑安装脚本，而不是让用户自己 pip install。
     """
     try:
         from streamlit_searchbox import st_searchbox
     except ImportError:
         config_input("MODEL", "api.model", help="click to check API validity 👉")
-        st.caption("可选：`pip install streamlit-searchbox` 可获得模型搜索框。")
+        st.caption("ℹ️ 未安装 `streamlit-searchbox`，这里先用普通输入框。"
+                   "重跑 `python installer.py`（或 `Install.bat`）即可获得带搜索的下拉框。")
         return
 
     model_list = st.session_state.get('_model_list', [])

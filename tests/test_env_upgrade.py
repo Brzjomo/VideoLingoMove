@@ -541,6 +541,43 @@ class TestUvNativePath(unittest.TestCase):
         self.assertIn("--no-deps", calls[0])
 
 
+class TestSearchboxDependency(unittest.TestCase):
+    """`streamlit-searchbox` 是侧边栏 MODEL 搜索框的依赖，已进主依赖清单。
+
+    历史：它原本只是「装了更好」的可选包，侧边栏会提示 `pip install
+    streamlit-searchbox`。既然有用就别让用户自己装 —— 现在写进 requirements.txt，
+    并且纳入 installer 的体检，缺失时会被报出来而不是静默降级成文本框。
+    """
+
+    def test_declared_in_requirements(self):
+        text = pathlib.Path("requirements.txt").read_text(encoding="utf-8")
+        pins = [l for l in text.splitlines()
+                if l.strip() and not l.strip().startswith("#")]
+        self.assertTrue(any(l.strip().startswith("streamlit-searchbox")
+                            for l in pins),
+                        "requirements.txt 里必须有 streamlit-searchbox")
+
+    def test_checked_by_health_check(self):
+        self.assertIn("streamlit_searchbox", installer.REQUIRED_IMPORTS)
+        self.assertEqual(installer.REQUIRED_IMPORTS["streamlit_searchbox"],
+                         "streamlit-searchbox")
+
+    def test_importable_when_installed(self):
+        """在装好依赖的环境里必须能 import（没装则跳过，便于纯静态检查环境）。"""
+        import importlib.util
+        if importlib.util.find_spec("streamlit_searchbox") is None:
+            self.skipTest("当前解释器未安装 streamlit-searchbox")
+        module = importlib.import_module("streamlit_searchbox")
+        self.assertTrue(hasattr(module, "st_searchbox"))
+
+    def test_sidebar_has_fallback(self):
+        """即使依赖缺失也不能崩：sidebar_setting.model_input() 必须保留回退分支。"""
+        src = pathlib.Path("st_components/sidebar_setting.py").read_text(encoding="utf-8")
+        self.assertIn("from streamlit_searchbox import st_searchbox", src)
+        self.assertIn("except ImportError:", src)
+        self.assertIn("config_input(\"MODEL\", \"api.model\"", src)
+
+
 class TestTorchBackend(unittest.TestCase):
     """算力 → 后端映射。这是本次升级最关键的一条：cu128/cu129 已移除 Pascal。"""
 

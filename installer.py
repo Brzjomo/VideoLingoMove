@@ -134,6 +134,10 @@ STATE_FILE_NAME = ".videolingo-install.json"
 # 体检时要求的包（导入名 -> pip 名提示）
 REQUIRED_IMPORTS = {
     "streamlit": "streamlit",
+    # 侧边栏 MODEL 搜索框用；已在 requirements.txt 里。缺了只会回退成普通文本框
+    # （sidebar_setting.model_input()），但仍放进体检 —— 免得静默降级成
+    # 「没有搜索框、也不知道为什么」。
+    "streamlit_searchbox": "streamlit-searchbox",
     "torch": "torch",
     "torchaudio": "torchaudio",
     "whisperx": "whisperx",
