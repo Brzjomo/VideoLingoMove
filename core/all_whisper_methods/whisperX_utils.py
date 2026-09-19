@@ -1,4 +1,4 @@
-import os, sys, subprocess
+import os, sys, subprocess, math
 import pandas as pd
 from typing import Dict, List, Tuple
 from rich import print
@@ -290,6 +290,44 @@ def save_results(df: pd.DataFrame):
     df['text'] = df['text'].apply(lambda x: f'"{x}"')
     df.to_excel(CLEANED_CHUNKS_EXCEL_PATH, index=False)
     print(f"📊 Excel file saved to {CLEANED_CHUNKS_EXCEL_PATH}")
+
+def compute_normalization_gain(audio_path: str, target_db: float = -20.0,
+                              peak_ceiling_db: float = -1.0):
+    """算出把音频整体归一到 target_db 所需的增益（dB），并保证峰值不超上限。
+
+    移植上游 c5f8fe7 的思路，但**只算增益、不改编码**：dev 现有的 ffmpeg
+    命令负责容器/采样率/位深（火山侧还会用 ffprobe 校验 16k/单声道/s16），
+    这里把结果作为 `volume={gain}dB` 传给同一条命令，既替换掉原先拍脑袋的
+    固定 ×2.50，又不触碰任何已验证的编码参数。
+
+    为什么要限制增益：pydub 在整数样本上加增益，一段"语音 + 长静音"的素材
+    平均电平很低但峰值很高，直接按平均值补足会削顶。这里让峰值停在
+    peak_ceiling_db 以下；**衰减从不限制**。
+
+    Returns:
+        float: 增益（dB）。无法计算时返回 0.0（即不加增益）。
+    """
+    try:
+        from pydub import AudioSegment
+    except ImportError:
+        print("[yellow]⚠️ 未安装 pydub，跳过音量归一化[/yellow]")
+        return 0.0
+    try:
+        audio = AudioSegment.from_file(audio_path)
+        change_in_dBFS = target_db - audio.dBFS
+        headroom = peak_ceiling_db - audio.max_dBFS
+    except Exception as e:
+        print(f"[yellow]⚠️ 无法分析音频电平（{e}），跳过音量归一化[/yellow]")
+        return 0.0
+
+    if not math.isfinite(change_in_dBFS) or not math.isfinite(headroom):
+        return 0.0
+    if change_in_dBFS > headroom:
+        print(f"[yellow]⚠️ 增益受限为 {headroom:+.1f}dB（原需 {change_in_dBFS:+.1f}dB），"
+              f"以保证峰值不超过 {peak_ceiling_db:.1f}dBFS[/yellow]")
+        return headroom
+    return change_in_dBFS
+
 
 def save_language(language: str):
     """记录本次识别实际使用的语言。

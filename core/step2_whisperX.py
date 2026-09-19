@@ -19,7 +19,7 @@ from core.config_utils import load_key, load_key_or
 import easy_util as eu
 from core.all_whisper_methods import transcription_cache
 from core.all_whisper_methods.demucs_vl import demucs_main, RAW_AUDIO_FILE, VOCAL_AUDIO_FILE
-from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, CLEANED_CHUNKS_EXCEL_PATH, RAW_AUDIO_WAV_FILE
+from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, compute_normalization_gain, CLEANED_CHUNKS_EXCEL_PATH, RAW_AUDIO_WAV_FILE
 from core.step1_ytdlp import find_video_files
 
 # 尝试导入火山引擎ASR
@@ -84,6 +84,53 @@ def check_hf_mirror() -> str:
     _HF_ENDPOINT_CACHE = fastest_url
     return _HF_ENDPOINT_CACHE
 
+# 一个可用的本地 whisper 模型目录必须同时具备这三个非空文件。
+# 只判断 os.path.exists(目录) 会让"下载到一半"的目录通过检查，
+# 之后 whisperx 要么重新联网、要么抛出难以定位的错误。
+_REQUIRED_MODEL_FILES = ("config.json", "model.bin", "tokenizer.json")
+
+
+def _complete_model_directory(path: str) -> bool:
+    if not os.path.isdir(path):
+        return False
+    for name in _REQUIRED_MODEL_FILES:
+        candidate = os.path.join(path, name)
+        if not os.path.isfile(candidate) or os.path.getsize(candidate) == 0:
+            return False
+    return True
+
+
+def load_whisper_model_name(language: str) -> str:
+    """中文强制使用带标点的 Belle 模型，其余用配置里的模型名。"""
+    if language == 'zh':
+        return "Huan69/Belle-whisper-large-v3-zh-punct-fasterwhisper"
+    return load_key("whisper.model")
+
+
+def resolve_whisper_model(model_name: str, model_dir: str) -> str:
+    """决定交给 whisperx 的模型标识。
+
+    优先用本地已下载且**完整**的目录（避免重复联网 / 避免半成品目录），
+    否则返回原始名字，由 whisperx 下载到 model_dir。
+    """
+    candidates = []
+    if os.path.isdir(model_name):
+        candidates.append(model_name)  # 调用方直接给了路径
+    candidates.append(os.path.join(model_dir, model_name))  # 约定的本地缓存目录
+
+    for candidate in candidates:
+        if _complete_model_directory(candidate):
+            rprint(f"[green]📥 Loading local WHISPER model:[/green] {candidate} ...")
+            return candidate
+
+    for candidate in candidates:
+        if os.path.isdir(candidate):
+            rprint(f"[yellow]⚠️ 本地模型目录不完整（缺少 {'/'.join(_REQUIRED_MODEL_FILES)} 之一），"
+                   f"将重新获取：{candidate}[/yellow]")
+    rprint(f"[green]📥 Using WHISPER model from HuggingFace:[/green] {model_name} ...")
+    return model_name
+
+
 def transcribe_audio_with_whisper(audio_file: str, start: float, end: float) -> Dict:
     """
     使用WhisperX转录音频
@@ -113,18 +160,8 @@ def transcribe_audio_with_whisper(audio_file: str, start: float, end: float) -> 
     rprint(f"[green]▶️ Starting WhisperX for segment {start:.2f}s to {end:.2f}s...[/green]")
     
     try:
-        if WHISPER_LANGUAGE == 'zh':
-            model_name = "Huan69/Belle-whisper-large-v3-zh-punct-fasterwhisper"
-            local_model = os.path.join(MODEL_DIR, "Belle-whisper-large-v3-zh-punct-fasterwhisper")
-        else:
-            model_name = load_key("whisper.model")
-            local_model = os.path.join(MODEL_DIR, model_name)
-            
-        if os.path.exists(local_model):
-            rprint(f"[green]📥 Loading local WHISPER model:[/green] {local_model} ...")
-            model_name = local_model
-        else:
-            rprint(f"[green]📥 Using WHISPER model from HuggingFace:[/green] {model_name} ...")
+        model_name = load_whisper_model_name(WHISPER_LANGUAGE)
+        model_name = resolve_whisper_model(model_name, MODEL_DIR)
 
         vad_options = {"vad_onset": 0.500,"vad_offset": 0.363}
         asr_options = {"temperatures": [0],"initial_prompt": "",}
@@ -305,11 +342,15 @@ def transcribe_audio(audio_file: str, start: float, end: float) -> Dict:
         return transcribe_audio_with_whisper(audio_file, start, end)
 
 
-def enhance_vocals(vocals_ratio=2.50, asr_engine="whisper"):
-    """Enhance vocals audio volume
+def enhance_vocals(target_db=-20.0, asr_engine="whisper"):
+    """把人声轨归一到合适电平后再送去识别。
+
+    原先这里是固定的 `volume=2.50`：安静素材仍然偏轻、响亮素材直接削顶。
+    现在按实测电平算增益（峰值受限），但**编码参数完全不变** ——
+    火山侧会用 ffprobe 校验 16kHz/单声道/s16，不能动。
 
     Args:
-        vocals_ratio: 音量增强比例
+        target_db: 目标平均电平（dBFS）
         asr_engine: ASR引擎类型，决定输出格式
     """
     if not load_key("demucs"):
@@ -320,14 +361,15 @@ def enhance_vocals(vocals_ratio=2.50, asr_engine="whisper"):
             return RAW_AUDIO_FILE
 
     try:
-        print(f"[cyan]🎙️ Enhancing vocals with volume ratio: {vocals_ratio}[/cyan]")
+        gain = compute_normalization_gain(VOCAL_AUDIO_FILE, target_db=target_db)
+        print(f"[cyan]🎙️ Normalizing vocals by {gain:+.2f}dB (target {target_db}dBFS)[/cyan]")
 
         if asr_engine == "volcano":
             # 火山引擎需要WAV格式
             enhanced_vocal_wav = "output/audio/enhanced_vocals.wav"
             ffmpeg_cmd = (
                 f'ffmpeg -y -i "{VOCAL_AUDIO_FILE}" '
-                f'-filter:a "volume={vocals_ratio}" '
+                f'-filter:a "volume={gain}dB" '
                 f'-ar 16000 -ac 1 -acodec pcm_s16le -f wav '
                 f'"{enhanced_vocal_wav}"'
             )
@@ -336,7 +378,7 @@ def enhance_vocals(vocals_ratio=2.50, asr_engine="whisper"):
             # Whisper使用MP3格式
             ffmpeg_cmd = (
                 f'ffmpeg -y -i "{VOCAL_AUDIO_FILE}" '
-                f'-filter:a "volume={vocals_ratio}" '
+                f'-filter:a "volume={gain}dB" '
                 f'"{ENHANCED_VOCAL_PATH}"'
             )
             output_file = ENHANCED_VOCAL_PATH
