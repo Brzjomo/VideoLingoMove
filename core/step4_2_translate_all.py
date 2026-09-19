@@ -121,6 +121,10 @@ def translate_all():
                 results.append(future.result())
                 progress.update(task, advance=1)
 
+    # 按 chunk 下标还原顺序。as_completed 的返回顺序随机，而下面的回配依赖
+    # 相似度取 max：内容完全相同的重复 chunk 会因为顺序不同而选到不同的那一份。
+    results.sort(key=lambda x: x[0])
+
     # 💾 Save results to lists and Excel file
     src_text, trans_text = [], []
     for i, chunk in enumerate(chunks):
