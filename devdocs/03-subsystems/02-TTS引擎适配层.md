@@ -5,16 +5,16 @@ source_files:
   - st_components/sidebar_setting.py
   - config.yaml
 status: obsolete
-last_verified: 2026-02-06
+last_verified: 2026-09-16
 ---
 
 > # ⚠️ 整个 TTS 引擎适配层已在重构 Round 1 中删除
 >
 > **`core/all_tts_functions/` 目录已不存在**（含本文件描述的全部 7 个引擎、`tts_main.py`、`custom_tts.py`）。
-> 同时被删除的还有 `core/step10_gen_audio.py`、`core/step8_1_gen_audio_task.py`、`core/step8_2_gen_dub_chunks.py`。
+> 同时被删除的还有 `core/step10_gen_audio.py`、`core/step8_1_gen_audio_task.py`、`core/step8_2_gen_dub_chunks.py`、`core/step9_extract_refer_audio.py`、`core/step11_merge_full_audio.py`、`core/delete_retry_dubbing.py`（2026-09-16 复核：以上路径均已从工作树中消失）。
 >
-> - 本文**不是现状描述**，其代码引用与行号全部失效。
-> - **唯一被保留的部分**：`estimate_duration.py` 已迁到 `core/estimate_duration.py`，服务于 `core/subtitle_trim.py`（按朗读时长压缩译文）。
+> - 本文**不是现状描述**，其代码引用与行号全部失效（下文正文保持删除前的原样，仅作历史参考，**不要据此复原代码**）。
+> - **唯一被保留的部分**：`estimate_duration.py` 已迁到 `core/estimate_duration.py`（139 行，未改动），服务于 `core/subtitle_trim.py`（按朗读时长压缩译文，`core/subtitle_trim.py:11` 导入、`:33` 用 `speed_factor['max']` 折算）。
 > - 当前项目**没有 TTS 层**；[`../05-guides/01-如何新增一个TTS引擎.md`](../05-guides/01-如何新增一个TTS引擎.md) 同样已失效。
 > - 若未来要恢复配音，本文的**引擎对照表与 `refer_mode` 语义**仍是有价值的起点（尤其是各引擎对参考音频格式的不同要求）。
 

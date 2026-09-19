@@ -4,13 +4,22 @@ layer: 05-guides
 source_files:
   - config.yaml
 status: obsolete
-last_verified: 2026-02-06
+last_verified: 2026-09-16
 ---
 
 > # ⚠️ 本文已失效
 >
 > 重构 Round 1 已删除整个 TTS 适配层（`core/all_tts_functions/`）与配音链路（`step8~step12`）。
 > **现在没有任何 TTS 引擎插槽可以扩展**，本文的 6 步清单全部无法执行。
+>
+> 上游 3.0.4 合并（`merge/upstream-3.0.4`）**刻意不合**整条配音链路，且其移植清单里
+> 也没有恢复 TTS 的内容（见 [`06-上游3.0.4合并记录.md`](06-上游3.0.4合并记录.md) 第七节），
+> 因此本文的失效结论在本次合并后依然成立——已按代码核实 `core/all_tts_functions/`
+> 与 `core/step8_*`~`core/step12_*` 仍不存在。
+>
+> ⚠️ 正文（历史部分）里指向 `../../core/all_tts_functions/tts_main.py`、`edge_tts.py`、
+> `siliconflow_fish_tts.py` 与 `core/step9_extract_refer_audio.py` 的链接**已无处可指**
+> （这些文件已随配音链路删除，不再复原）。
 >
 > 若将来要重新引入 TTS：
 > 1. 先按本文建立 `core/all_tts_functions/` 与 `tts_main(text, save_as, number, task_df)` 契约；
@@ -54,11 +63,11 @@ real_dur += get_audio_duration(temp_file)
 
 路径：`core/all_tts_functions/my_tts.py`
 
-参考最简单的现有实现 [`edge_tts.py`](../../core/all_tts_functions/edge_tts.py)（无需 API Key），或需要声音克隆时参考 [`siliconflow_fish_tts.py`](../../core/all_tts_functions/siliconflow_fish_tts.py)。
+参考最简单的现有实现 `edge_tts.py`（无需 API Key），或需要声音克隆时参考 `siliconflow_fish_tts.py`。
 
 ### 步骤 2：在 `tts_main.py` 注册分发
 
-打开 [`core/all_tts_functions/tts_main.py`](../../core/all_tts_functions/tts_main.py)，按**现有真实的分发写法**（读文件确认是 `if/elif` 链还是字典映射）加入你的分支。
+打开 `core/all_tts_functions/tts_main.py`，按**现有真实的分发写法**（读文件确认是 `if/elif` 链还是字典映射）加入你的分支。
 
 > 📌 分发依据是 `load_key("tts_method")`，取值必须与 `config.yaml: tts_method` 的可选列表一致（该行的注释里列出了当前所有合法值）。
 
@@ -96,7 +105,7 @@ max_workers = load_key("max_workers") if load_key("tts_method") != "gpt_sovits" 
 
 ### 步骤 6：（可选）需要参考音频时
 
-如果引擎做声音克隆（fish / gpt_sovits 模式），它需要 `output/audio/refers/<number>.wav`。这个文件由 [`step9_extract_refer_audio.py`](../../core/step9_extract_refer_audio.py) 准备好，**无需你自己切**；引擎内按 `number` 参数拼路径读取即可。
+如果引擎做声音克隆（fish / gpt_sovits 模式），它需要 `output/audio/refers/<number>.wav`。这个文件由 `step9_extract_refer_audio.py` 准备好，**无需你自己切**；引擎内按 `number` 参数拼路径读取即可。
 
 ---
 
