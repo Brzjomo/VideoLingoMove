@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.table import Table
 from rich import box
 from core.config_utils import load_key
+import easy_util as eu
 
 console = Console()
 
@@ -23,6 +24,11 @@ def valid_translate_result(result: dict, required_keys: list, required_sub_keys:
     return {"status": "success", "message": "Translation completed"}
 
 def translate_lines(lines, previous_content_prompt, after_cotent_prompt, things_to_note_prompt, summary_prompt, index = 0):
+    # 每个 chunk 的翻译入口：暂停时在此阻塞，停止时抛 StopTask。
+    # 放在最前面是为了让"停止"能在 chunk 边界及时生效（一次调用内含
+    # 两轮 LLM 请求 + 最多各 3 次重试）。
+    eu.check_cancel()
+
     shared_prompt = generate_shared_prompt(previous_content_prompt, after_cotent_prompt, summary_prompt, things_to_note_prompt)
 
     # Retry translation if the length of the original text and the translated text are not the same, or if the specified key is missing

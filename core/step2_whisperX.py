@@ -16,6 +16,7 @@ import gc
 import numpy as np
 
 from core.config_utils import load_key, load_key_or
+import easy_util as eu
 from core.all_whisper_methods import transcription_cache
 from core.all_whisper_methods.demucs_vl import demucs_main, RAW_AUDIO_FILE, VOCAL_AUDIO_FILE
 from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, CLEANED_CHUNKS_EXCEL_PATH, RAW_AUDIO_WAV_FILE
@@ -450,6 +451,10 @@ def transcribe():
     # step4 Transcribe audio
     all_results = []
     for start, end in segments:
+        # 暂停时在此阻塞，停止时抛 StopTask 退出（分段结果已写入缓存，
+        # 重新开始时只需补缺失的段）
+        eu.check_cancel()
+
         # 根据ASR引擎选择正确的音频文件
         if asr_engine == "volcano" and volcano_audio:
             audio_file_for_transcription = volcano_audio

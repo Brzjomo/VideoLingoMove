@@ -5,6 +5,7 @@ import easy_util as eu
 eu.ensure_utf8_console()
 
 from st_components.imports_and_utils import *
+from st_components.task_runner import TaskRunner, StopTask
 from core.config_utils import load_key
 from core.step7_merge_sub_to_vid import STAGE_DONE_MARKER
 
@@ -17,6 +18,9 @@ if current_dir not in sys.path:
 
 SUB_VIDEO = "output/output_sub.mp4"
 
+# 任务执行器在 session_state 里的键名
+RUNNER_KEY = "_text_task_runner"
+
 
 def subtitle_stage_finished():
     """字幕阶段是否已完成。
@@ -24,9 +28,160 @@ def subtitle_stage_finished():
     不能只看 output_sub.mp4：当 resolution=0x0 且输入是真实视频时，我们
     **有意不生成**任何成片（省时间），此时若仍以成片存在为判据，界面会永远
     停在"开始处理字幕"按钮上。因此以 step7 写下的完成标记为准，
-    成片存在只是附加条件（用于决定要不要内嵌播放器）。
+    成片存在只是附加条件（用于决定要不要嵌入播放器）。
     """
     return os.path.exists(STAGE_DONE_MARKER)
+
+
+# ================================================================
+# 任务步骤
+# ================================================================
+# 每一步都是无参可调用对象，由 TaskRunner 在后台线程里顺序执行。
+# 长循环内部通过 eu.check_cancel() 响应暂停/停止（见 easy_util.check_cancel）。
+
+def step_transcribe():
+    step2_whisperX.transcribe()
+
+
+def step_split_sentences():
+    step3_1_spacy_split.split_by_spacy()
+    # step3_2 内部按 llm_sentence_split 决定是否调 LLM
+    step3_2_splitbymeaning.split_sentences_by_meaning()
+
+
+def step_summarize():
+    step4_1_summarize.get_summary()
+    if load_key("pause_before_translate"):
+        # 两段式流程：术语提取完成后停下来，等用户在页面上确认/编辑
+        # output/log/terminology.json 或 custom_terms.xlsx 再继续。
+        # 请求由 worker 线程发出（不触碰 session_state），UI 侧根据
+        # paused_for_review 标记渲染确认界面。
+        TaskRunner.request_review_pause()
+
+
+def step_translate_and_burn():
+    step4_2_translate_all.translate_all()
+    step5_splitforsub.split_for_sub_main()
+    step6_generate_final_timeline.align_timestamp_main()
+    step7_merge_sub_to_vid.merge_subtitles_to_video()
+
+
+def build_task_steps():
+    """按当前配置组装步骤列表。"""
+    transcription_only = load_key("transcription_only")
+    steps = [
+        ("转录（Whisper / 火山 ASR）", step_transcribe),
+        ("断句（spaCy + LLM）", step_split_sentences),
+    ]
+    if transcription_only:
+        # 直通模式不需要术语表，但下游会读该文件，这里保证它存在
+        ensure_terminology_file()
+    else:
+        steps.append(("术语提取", step_summarize))
+    steps.append(("翻译并压制字幕", step_translate_and_burn))
+    return steps
+
+
+def ensure_terminology_file():
+    """确保 output/log/terminology.json 存在（直通模式与暂停点都需要）。"""
+    import json
+    terminology_file = "output/log/terminology.json"
+    os.makedirs(os.path.dirname(terminology_file), exist_ok=True)
+    if not os.path.exists(terminology_file):
+        with open(terminology_file, 'w', encoding='utf-8') as f:
+            json.dump({"topic": "", "terms": []}, f, ensure_ascii=False, indent=4)
+
+
+def record_start_time():
+    eu.start_time = time.time()
+
+
+def read_time_duration():
+    return eu.convert_seconds(eu.time_duration)
+
+
+def reset_tokens():
+    eu.prompt_tokens = 0
+    eu.completion_tokens = 0
+    eu.total_tokens = 0
+
+
+# ================================================================
+# 任务控制面板
+# ================================================================
+@st.fragment(run_every=1)
+def task_control_panel():
+    """进度条 + 暂停/继续/停止按钮，每秒自动刷新。"""
+    runner = TaskRunner.get(st.session_state, RUNNER_KEY)
+
+    if runner.state == "idle":
+        return
+
+    if runner.state in ("running", "paused"):
+        if runner.total_steps:
+            label = runner.current_label or "准备中"
+            st.progress(
+                runner.progress,
+                text=f"第 {runner.current_step + 1}/{runner.total_steps} 步：{label}",
+            )
+
+    if runner.state == "running":
+        c1, c2, _ = st.columns([1, 1, 4])
+        with c1:
+            if st.button("⏸️ 暂停", key="task_pause", use_container_width=True):
+                runner.pause()
+                st.rerun(scope="app")
+        with c2:
+            if st.button("⏹️ 停止", key="task_stop", use_container_width=True):
+                runner.stop()
+                st.rerun(scope="app")
+
+    elif runner.state == "paused":
+        if runner.paused_for_review:
+            st.info("已提取术语，流程暂停中。请编辑 `output/log/terminology.json` 或 "
+                    "`custom_terms.xlsx`，确认后点击下方按钮继续翻译。")
+            c1, c2, _ = st.columns([1, 1, 4])
+            with c1:
+                if st.button("✅ 术语已确认，继续", key="task_resume_review",
+                             type="primary", use_container_width=True):
+                    runner.resume()
+                    st.rerun(scope="app")
+            with c2:
+                if st.button("⏹️ 放弃本次任务", key="task_stop_review",
+                             use_container_width=True):
+                    runner.stop()
+                    st.rerun(scope="app")
+        else:
+            st.warning(f"⏸️ 已暂停：{runner.current_label}")
+            c1, c2, _ = st.columns([1, 1, 4])
+            with c1:
+                if st.button("▶️ 继续", key="task_resume", type="primary",
+                             use_container_width=True):
+                    runner.resume()
+                    st.rerun(scope="app")
+            with c2:
+                if st.button("⏹️ 停止", key="task_stop2", use_container_width=True):
+                    runner.stop()
+                    st.rerun(scope="app")
+
+    elif runner.state == "stopped":
+        st.warning("⏹️ 任务已停止。已完成的步骤结果仍保留在 output/ 中，"
+                   "重新开始时会自动跳过已完成的步骤。")
+        if st.button("知道了", key="task_ack_stop"):
+            runner.reset()
+            st.rerun(scope="app")
+
+    elif runner.state == "error":
+        st.error(f"❌ 任务出错：{runner.error_msg}")
+        if st.button("知道了", key="task_ack_error"):
+            runner.reset()
+            st.rerun(scope="app")
+
+    elif runner.state == "completed":
+        # 交给主区域渲染完成态（成功信息、播放器、下载按钮、归档按钮）
+        runner.reset()
+        st.rerun(scope="app")
+
 
 def text_processing_section():
     # 检查是否只进行转录
@@ -63,35 +218,25 @@ def text_processing_section():
     with st.container(border=True):
         st.markdown(steps, unsafe_allow_html=True)
 
-        if not subtitle_stage_finished():
-            # 两段式流程：pause_before_translate 为真时，先只跑到术语提取，
-            # 等用户在页面上确认/编辑 output/log/terminology.json 后再点继续。
-            if st.session_state.get("awaiting_terminology_review"):
-                st.info("已提取术语，流程暂停中。请编辑 `output/log/terminology.json` 或 "
-                        "`custom_terms.xlsx`，确认后点击下方按钮继续翻译。")
-                if st.button("✅ 术语已确认，继续翻译", key="resume_translate_button"):
-                    st.session_state["awaiting_terminology_review"] = False
-                    run_translation_and_subtitles()
-                    st.rerun()
-                if st.button("↩️ 放弃并重新开始", key="abort_terminology_review"):
-                    st.session_state["awaiting_terminology_review"] = False
-                    st.rerun()
-                return False
+        runner = TaskRunner.get(st.session_state, RUNNER_KEY)
 
+        # 运行中/暂停中：只显示控制面板
+        if runner.state != "idle":
+            task_control_panel()
+            return
+
+        if not subtitle_stage_finished():
             button_text = "开始生成字幕" if transcription_only else "开始处理字幕"
             if st.button(button_text, key="text_processing_button"):
                 record_start_time()
                 reset_tokens()
-                # 返回 True 表示流程在等待人工确认，本次不再继续
-                if process_text():
-                    st.rerun()
-                    return False
-                st.rerun()
+                runner.start(build_task_steps())
+                st.rerun(scope="app")
         else:
             time_duration = read_time_duration()
             success_message = f"原语言字幕生成完成！耗时：{time_duration} " if transcription_only else f"字幕翻译完成！耗时：{time_duration} "
             st.success(success_message)
-            # 有真实成片才内嵌播放器；resolution=0x0 时（除纯音频输入外）不产出成片，
+            # 有真实成片才嵌入播放器；resolution=0x0 时（除纯音频输入外）不产出成片，
             # 这里静默跳过，不再额外提示。
             if os.path.exists(SUB_VIDEO) and load_key("resolution") != "0x0":
                 st.video(SUB_VIDEO)
@@ -99,8 +244,8 @@ def text_processing_section():
 
             if st.button("归档到'历史记录'", key="cleanup_in_text_processing"):
                 cleanup()
-                st.rerun()
-            return True
+                st.rerun(scope="app")
+            return
 
     # 火山引擎二级缓存清理入口：调过火山参数后需要同时清掉
     # output/log/asr_results/，否则会命中旧结果（见 devdocs 已知问题 R5）
@@ -121,76 +266,25 @@ def text_processing_section():
                         except OSError as e:
                             st.warning(f"删除 {f} 失败: {e}")
                     st.success(f"已清理 {len(cached)} 个缓存文件")
-                    st.rerun()
+                    st.rerun(scope="app")
 
-def record_start_time():
-    eu.start_time = time.time()
+    # 内容寻址的转录缓存（跨 output/ 清理存活，见
+    # core/all_whisper_methods/transcription_cache.py）
+    from core.all_whisper_methods import transcription_cache
+    if transcription_cache.CACHE_DIR.is_dir():
+        total = len(list(transcription_cache.CACHE_DIR.rglob("*.json")))
+        if total:
+            with st.expander(f"♻️ 转录缓存（{total} 个条目）", expanded=False):
+                st.caption(
+                    "按「源媒体内容 + ASR 设置」缓存识别结果。命中时会跳过"
+                    "音频分离与识别，因此**不会**因为重新开始而重复计费。"
+                    "换模型/换引擎/改识别语言会自动失效。"
+                )
+                if st.button("清空转录缓存", key="clear_transcription_cache_button"):
+                    removed = transcription_cache.clear_cache()
+                    st.success(f"已清理 {removed} 个缓存条目")
+                    st.rerun(scope="app")
 
-def read_time_duration():
-    return eu.convert_seconds(eu.time_duration)
-
-def reset_tokens():
-    eu.prompt_tokens = 0
-    eu.completion_tokens = 0
-    eu.total_tokens = 0
-
-def ensure_terminology_file():
-    """确保 output/log/terminology.json 存在（直通模式与暂停点都需要）。"""
-    import json
-    terminology_file = "output/log/terminology.json"
-    os.makedirs(os.path.dirname(terminology_file), exist_ok=True)
-    if not os.path.exists(terminology_file):
-        with open(terminology_file, 'w', encoding='utf-8') as f:
-            json.dump({"topic": "", "terms": []}, f, ensure_ascii=False, indent=4)
-
-
-def run_translation_and_subtitles():
-    """翻译（或直通）→ 字幕切分 → 时间轴 → 压制。"""
-    if load_key("transcription_only"):
-        with st.spinner("生成原语言字幕中..."):
-            step4_2_translate_all.translate_all()
-    else:
-        with st.spinner("翻译中..."):
-            step4_2_translate_all.translate_all()
-
-    with st.spinner("处理和对齐字幕中..."):
-        step5_splitforsub.split_for_sub_main()
-        step6_generate_final_timeline.align_timestamp_main()
-    with st.spinner("将字幕合并到视频中..."):
-        step7_merge_sub_to_vid.merge_subtitles_to_video()
-
-    st.success("字幕处理完成！🎉")
-    st.balloons()
-
-
-def process_text():
-    """转录 → NLP/LLM 切句 →（可选暂停确认术语）→ 翻译与成片。
-
-    Returns:
-        bool: True 表示因 pause_before_translate 停在人工确认点，后续步骤待用户点击继续。
-    """
-    with st.spinner("使用 Whisper 进行转录中..."):
-        step2_whisperX.transcribe()
-    with st.spinner("分割长句中..."):
-        step3_1_spacy_split.split_by_spacy()
-        # step3_2 内部按 llm_sentence_split 决定是否调 LLM
-        step3_2_splitbymeaning.split_sentences_by_meaning()
-
-    transcription_only = load_key("transcription_only")
-
-    if transcription_only:
-        # 直通模式不需要术语表，但下游会读该文件，这里保证它存在
-        ensure_terminology_file()
-    else:
-        step4_1_summarize.get_summary()
-        if load_key("pause_before_translate"):
-            # 两段式暂停点：把控制权交回 UI，而不是在脚本线程里 input() 阻塞
-            st.session_state["awaiting_terminology_review"] = True
-            st.info("术语提取完成，已暂停。请在下方确认后继续翻译。")
-            return True
-
-    run_translation_and_subtitles()
-    return False
 
 def main():
     st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")

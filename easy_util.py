@@ -226,3 +226,20 @@ def get_safe_filename(filename: str, max_length: int = 100) -> str:
         safe_name = safe_name[:max_length]
 
     return safe_name
+
+
+def check_cancel():
+    """协作式取消钩子，供 core 里的长循环调用。
+
+    用惰性导入避免 core 反过来依赖 Streamlit 侧模块；没有活跃任务时
+    （直接命令行跑脚本）是空操作。放在 easy_util 而不是新建 core/utils 包，
+    是因为 dev 已经有这个跨模块工具模块，且 core/ask_gpt.py 等已在用它。
+
+    Raises:
+        StopTask: 用户请求停止时（由 TaskRunner 定义并捕获）。
+    """
+    try:
+        from st_components.task_runner import TaskRunner
+    except Exception:
+        return
+    TaskRunner.check_cancel()

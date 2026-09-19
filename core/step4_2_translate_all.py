@@ -8,6 +8,7 @@ from core.step4_1_summarize import search_things_to_note_in_prompt
 from core.subtitle_trim import check_len_then_trim
 from core.step6_generate_final_timeline import align_timestamp
 from core.config_utils import load_key
+import easy_util as eu
 from rich.console import Console
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -118,6 +119,10 @@ def translate_all():
 
             results = []
             for future in concurrent.futures.as_completed(futures):
+                # 暂停时阻塞、停止时抛 StopTask 提前脱身：
+                # 不这样做的话，点停止后仍会把剩下所有 chunk 翻译完
+                # （max_workers 可达上千，尾巴很长）
+                eu.check_cancel()
                 results.append(future.result())
                 progress.update(task, advance=1)
 
