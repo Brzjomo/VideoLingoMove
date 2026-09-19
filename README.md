@@ -4,9 +4,7 @@
 
 # Connect the World, Frame by Frame
 
-[Website](https://videolingo.io) | [Documentation](/docs/用户文档.md) | [开发者文档](/devdocs/README.md)
-
-[**English**](/README.md)｜[**中文**](/docs/用户文档.md)
+[Website](https://videolingo.io) | [开发者文档](/devdocs/README.md)
 
 </div>
 
