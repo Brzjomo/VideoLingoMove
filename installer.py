@@ -142,6 +142,29 @@ FFMPEG_API_LIST = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_
 
 STATE_FILE_NAME = ".videolingo-install.json"
 
+# ---------------------------------------------------------------- NLTK 数据
+# whisperx 的 align() 需要 nltk 的 punkt_tab 做句子切分（不仅英语 —— 它按对齐
+# 模型的语言取 18 种 punkt 资源，缺失会回落到 english）。而**不能用
+# `nltk.download()`**：实测被运行环境的网络策略拦下：
+#
+#     [nltk_data] Error loading punkt_tab: Security Violation
+#     [nltk_data]     [pathsec.urlopen]: SSRF attempt to restricted IP 198.18.0.18
+#
+# 原因是该代理把域名解析到保留网段 198.18.0.0/15，而 nltk 的下载器（以及裸
+# urllib 的默认 UA `Python-urllib/3.x`）会被这条策略拒绝；**换成普通浏览器 UA
+# 的直接 urllib 请求就能下**（实测 4319068 字节）。所以这里自己下、自己解压，
+# 不碰 nltk 的下载器。
+NLTK_PUNKT_URL = (
+    "https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/"
+    "packages/tokenizers/punkt_tab.zip"
+)
+NLTK_DATA_DIR_NAME = os.path.join("_model_cache", "nltk_data")
+NLTK_ZIP_NAME = "nltk-punkt_tab.zip"
+#: 下载时用的 UA：默认的 `Python-urllib/3.x` 会被上述策略拦，必须伪装成浏览器
+_DOWNLOAD_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0 Safari/537.36 VideoLingo-installer")
+
 # 体检时要求的包（导入名 -> pip 名提示）
 REQUIRED_IMPORTS = {
     "streamlit": "streamlit",
@@ -1410,6 +1433,109 @@ def _extract_ffmpeg_zip(cached_zip, target_dir):
     return found
 
 
+def nltk_data_dir():
+    """返回项目内 NLTK 数据目录（`_model_cache/nltk_data`）。"""
+    return Path(NLTK_DATA_DIR_NAME)
+
+
+def punkt_tab_dir():
+    """返回 `punkt_tab` 的安装位置：`<nltk_data>/tokenizers/punkt_tab`。"""
+    return nltk_data_dir() / "tokenizers" / "punkt_tab"
+
+
+def punkt_tab_installed():
+    """punkt_tab 是否已就位（至少要有 english，whisperx 拿它兜底）。"""
+    target = punkt_tab_dir()
+    if not target.is_dir():
+        return False
+    return (target / "english").is_dir()
+
+
+def _download_bytes(url, timeout=300):
+    """带浏览器 UA 的下载 —— 默认 `Python-urllib/3.x` 会被网络策略拦（见常量注释）。"""
+    from urllib.request import Request, urlopen
+
+    req = Request(url, headers={"User-Agent": _DOWNLOAD_UA})
+    with urlopen(req, timeout=timeout) as response:
+        return response.read()
+
+
+def install_nltk_punkt_tab(download_dir=None):
+    """把 nltk 的 punkt_tab 装到项目内。返回安装目录（`nltk_data`）或 None。
+
+    为什么必须由安装期做、而且不能用 `nltk.download()`：
+      * whisperx 的 `align()` 会 `nltk_load('tokenizers/punkt_tab/<lang>.pickle')`，
+        失败才 `nltk.download('punkt_tab')` —— 而**运行期那次下载会被网络策略拦**
+        （SSRF / Security Violation），于是整个转录在对齐阶段崩掉；
+      * `nltk.download()` 用的是它自己的 urlopen，同样被拦；换浏览器 UA 直接下才行。
+
+    下载与安装分离（与 FFmpeg / torch 轮子同一套思路）：`_downloads/nltk-punkt_tab.zip`
+    已存在就直接解压，便于离线或内网环境用外部工具搬进来。
+    """
+    import io
+    import zipfile
+
+    if punkt_tab_installed():
+        info(f"✅ NLTK punkt_tab 已就位：{punkt_tab_dir()}", style="green")
+        return nltk_data_dir()
+
+    cache_dir = ensure_download_dir(download_dir)
+    cached_zip = cache_dir / NLTK_ZIP_NAME
+
+    if cached_zip.is_file() and cached_zip.stat().st_size > 0:
+        info(f"♻️ 使用已下载的 punkt_tab 压缩包：{cached_zip}", style="green")
+        payload = cached_zip.read_bytes()
+    else:
+        url = os.environ.get("VIDELINGO_NLTK_URL", "").strip() or NLTK_PUNKT_URL
+        why = "来自 VIDELINGO_NLTK_URL 环境变量" if os.environ.get(
+            "VIDELINGO_NLTK_URL", "").strip() else "NLTK 官方 gh-pages"
+        info(f"⬇️ 下载 NLTK punkt_tab（{why}）到项目内 …")
+        info(f"   地址：{url}", style="cyan")
+        try:
+            payload = _download_bytes(url)
+        except Exception as e:
+            info(f"❌ 下载 punkt_tab 失败：{e}", style="red")
+            info("   手动方案：用浏览器/下载工具取得 punkt_tab.zip，存成 "
+                 f"{download_dir_path(download_dir) / NLTK_ZIP_NAME}，重跑安装脚本。",
+                 style="yellow")
+            info(f"   也可以用 VIDELINGO_NLTK_URL 指向内网镜像。", style="yellow")
+            return None
+        try:
+            cached_zip.write_bytes(payload)
+        except OSError:
+            pass
+
+    target_root = nltk_data_dir()
+    target_root.mkdir(parents=True, exist_ok=True)
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as zf:
+            names = zf.namelist()
+            zf.extractall(target_root)
+    except Exception as e:
+        info(f"❌ 解压 punkt_tab 失败：{e}", style="red")
+        return None
+
+    # 包里顶层就是 `punkt_tab/`，但 nltk 要在 `<nltk_data>/tokenizers/` 下找它；
+    # 若解压成了 `<nltk_data>/punkt_tab`，搬一层。
+    flat = target_root / "punkt_tab"
+    nested = punkt_tab_dir()
+    if flat.is_dir() and not nested.exists():
+        nested.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            flat.rename(nested)
+        except OSError as e:
+            info(f"❌ 归整 punkt_tab 目录失败：{e}", style="red")
+            return None
+
+    if not punkt_tab_installed():
+        info(f"⚠️ punkt_tab 解压后结构不对（zip 顶层：{names[:3]}）", style="red")
+        return None
+    langs = sorted(p.name for p in punkt_tab_dir().iterdir() if p.is_dir())
+    info(f"✅ NLTK punkt_tab 已装好：{nltk_data_dir()}（{len(langs)} 种语言）",
+         style="green")
+    return nltk_data_dir()
+
+
 def _ffmpeg_manual_hint():
     info(f"   手动方案：下载 FFmpeg {FFMPEG_MIN_MAJOR}–{FFMPEG_MAX_MAJOR} 的 Windows "
          f"构建（https://github.com/BtbN/FFmpeg-Builds/releases 或 "
@@ -1857,6 +1983,13 @@ __     ___     _            _     _
     if needs_restart:
         info("ℹ️ 请重启终端后重新运行本脚本。", style="yellow")
         return 1
+
+    # NLTK 的 punkt_tab 同理：whisperx 对齐阶段要用，而运行期那次
+    # `nltk.download()` 会被网络策略拦（SSRF/Security Violation），
+    # 必须在安装期先装到项目内。装不上不致命 —— 报一条 warning 继续，
+    # 由体检的 --smoke 或运行时错误暴露。
+    if not punkt_tab_installed():
+        install_nltk_punkt_tab(download_dir=args.download_dir)
 
     maybe_configure_mirror(args.auto_mirror)
 

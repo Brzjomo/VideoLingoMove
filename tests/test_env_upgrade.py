@@ -751,5 +751,73 @@ class TestTorchSpecsCoverage(unittest.TestCase):
         self.assertEqual(installer.TORCHVISION_VERSION, "0.23.0")
 
 
+class TestNltkPunktTab(unittest.TestCase):
+    """NLTK 的 punkt_tab：whisperx 对齐阶段要用，且**不能靠运行期下载**。
+
+    2026-09-19 实测 bug：转录跑到 `whisperx.align()` 崩掉，报
+
+        Resource 'punkt_tab' not found.
+        [nltk_data] Error loading punkt_tab: Security Violation
+        [nltk_data]     [pathsec.urlopen]: SSRF attempt to restricted IP 198.18.0.18
+
+    whisperx 在找不到时会自己 `nltk.download('punkt_tab')`，但受限网络里那次
+    下载必然失败。所以必须**在安装期**把数据装到项目内，运行期只负责让 nltk
+    找到它（`runtime_libraries.register_nltk_data()`）。
+
+    这些用例不联网：只验证路径契约与目录布局。
+    """
+
+    def test_paths_are_project_local(self):
+        """数据目录必须在项目内，不能落到用户主目录。"""
+        data_dir = installer.nltk_data_dir()
+        self.assertIn("_model_cache", str(data_dir))
+        self.assertEqual(installer.punkt_tab_dir(),
+                         data_dir / "tokenizers" / "punkt_tab")
+
+    def test_layout_matches_nltk_expectation(self):
+        """nltk 要求 `<nltk_data>/tokenizers/punkt_tab/<lang>/`。
+
+        实测踩过：zip 顶层就是 `punkt_tab/`，直接解压到 nltk_data 下会变成
+        `<nltk_data>/punkt_tab`，nltk 找不到 —— 必须搬到 `tokenizers/` 下。
+        """
+        self.assertTrue(str(installer.punkt_tab_dir()).replace("\\", "/")
+                        .endswith("nltk_data/tokenizers/punkt_tab"))
+
+    def test_zip_name_and_url_are_set(self):
+        self.assertTrue(installer.NLTK_ZIP_NAME.endswith(".zip"))
+        self.assertIn("punkt_tab", installer.NLTK_PUNKT_URL)
+        # 下载要带浏览器 UA：默认 Python-urllib/3.x 会被网络策略拦（实测）
+        self.assertIn("Mozilla", installer._DOWNLOAD_UA)
+        self.assertNotIn("Python-urllib", installer._DOWNLOAD_UA)
+
+    def test_installed_check(self):
+        """punkt_tab_installed() 必须是可调的布尔判断，不抛异常。"""
+        got = installer.punkt_tab_installed()
+        self.assertIsInstance(got, bool)
+        if got:
+            self.assertTrue((installer.punkt_tab_dir() / "english").is_dir(),
+                            "判为已安装时必须真的存在 english（whisperx 的兜底语言）")
+
+    def test_install_is_idempotent_when_present(self):
+        """已装好时重复调用不应再下载（返回目录、不联网）。"""
+        if not installer.punkt_tab_installed():
+            self.skipTest("本机尚未安装 punkt_tab，跳过幂等检查")
+        with contextlib.redirect_stdout(io.StringIO()):
+            again = installer.install_nltk_punkt_tab()
+        self.assertIsNotNone(again)
+
+    def test_runtime_registers_nltk_path(self):
+        """运行期必须把项目内 nltk_data 注册进 nltk 的搜索路径。"""
+        import runtime_libraries
+        registered = runtime_libraries.register_nltk_data()
+        if registered is None:
+            self.skipTest("项目内没有 punkt_tab，跳过")
+        self.assertEqual(pathlib.Path(registered).resolve(),
+                         pathlib.Path(installer.nltk_data_dir()).resolve())
+        self.assertEqual(os.environ.get("NLTK_DATA"), registered)
+        import nltk.data
+        self.assertIn(registered, nltk.data.path)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

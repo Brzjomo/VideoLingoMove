@@ -172,6 +172,33 @@ def cache_env_report() -> dict:
     return {var: os.environ.get(var, "") for var in _CACHE_ENV}
 
 
+def register_nltk_data() -> str | None:
+    """把项目内的 `_model_cache/nltk_data` 加进 nltk 的搜索路径。
+
+    为什么需要（2026-09-19 实测 bug）：whisperx 的 `align()` 会用 nltk 的
+    punkt_tab 做句子切分；找不到时它会自己 `nltk.download('punkt_tab')` ——
+    而那次下载在受限网络里会被安全策略拦（实测报
+    `SSRF attempt to restricted IP` / `Security Violation`），整个转录在对齐阶段崩掉。
+    所以安装期已把它装到项目内（`installer.install_nltk_punkt_tab`），
+    这里负责让运行期的 nltk 找得到它。
+
+    同时设 `NLTK_DATA` 环境变量：nltk 只在首次 import 时读它，而子进程
+    （streamlit）需要自己那份，所以两边都要有。
+    """
+    target = _PROJECT_ROOT / "_model_cache" / "nltk_data"
+    if not (target / "tokenizers" / "punkt_tab").is_dir():
+        return None
+    os.environ.setdefault("NLTK_DATA", str(target))
+    try:
+        import nltk.data
+        if str(target) not in nltk.data.path:
+            nltk.data.path.insert(0, str(target))
+    except Exception:
+        # nltk 没装或还没 import：环境变量已经设好，nltk 自己会认
+        pass
+    return str(target)
+
+
 def _set_cuda_home_from_torch():
     """未显式设置 CUDA_HOME 时，用 torch 自带的 CUDA 目录兜底。
 
@@ -231,6 +258,8 @@ def setup(verbose: bool = False) -> dict:
     # 把模型/下载缓存指到项目内：否则运行期首次转录会把 wav2vec2 对齐权重、
     # whisper 模型等下到 C:\Users\<你>\.cache\ 下（见 apply_cache_env 的说明）。
     report["cache_env"] = apply_cache_env()
+    # 让 nltk 找到项目内的 punkt_tab（whisperx 对齐阶段要用）
+    report["nltk_data"] = register_nltk_data()
     report["dll_dirs"] = sorted(_REGISTERED_DLL_DIRS)
 
     _CONFIGURED = True
@@ -242,6 +271,7 @@ def setup(verbose: bool = False) -> dict:
         for var, value in cache_env_report().items():
             mark = "（本次设置）" if var in report["cache_env"] else "（沿用已有）"
             print(f"[runtime] {var}: {value or '（未设置）'} {mark}")
+        print(f"[runtime] nltk_data: {report['nltk_data'] or '（未找到 punkt_tab）'}")
     return report
 
 
