@@ -283,7 +283,17 @@ def transcribe_audio_with_whisper(audio_file: str, start: float, end: float) -> 
             raise ValueError("Please specify the transcription language as zh and try again!")
 
         # Align whisper output
-        model_a, metadata = whisperx.load_align_model(language_code=result["language"], device=device)
+        # ⚠️ 必须显式传 model_dir（= config 的 model_dir，项目内 _model_cache）：
+        #   * 英语走 torchaudio 的 WAV2VEC2_* 管线，它最终调到
+        #     torch.hub.load_state_dict_from_url -> 只认 TORCH_HOME；
+        #   * 其他语言走 HuggingFace 的 from_pretrained(cache_dir=...) ->
+        #     传 None 时落到 transformers 默认缓存。
+        # 两者都传项目内路径，才不会下到 C:\Users\<你>\.cache\ 里。
+        # （运行期 TORCH_HOME / HF_HOME 已由 runtime_libraries.setup() 指到项目内，
+        #   这里再显式传一次，双重保险。）
+        model_a, metadata = whisperx.load_align_model(
+            language_code=result["language"], device=device,
+            model_dir=MODEL_DIR)
         result = whisperx.align(result["segments"], model_a, metadata, audio_tensor, device, return_char_alignments=False)
 
         # Free GPU resources again

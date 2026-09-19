@@ -28,15 +28,21 @@ try:
 except Exception:
     pass
 
-# 把项目内 ffmpeg/ 目录接进 PATH 与 DLL 搜索路径（torchcodec 需要）。
+# 把项目内 ffmpeg/ 目录接进 PATH 与 DLL 搜索路径（torchcodec 需要），并把模型/
+# 下载缓存指到项目内（否则运行期首次转录会把 wav2vec2 对齐权重、whisper 模型等
+# 下到 C:\Users\<你>\.cache\ 下）。
+#
 # 必须在 preflight() 里用 shutil.which("ffmpeg") 之前完成 —— 用户只按
 # installer.py 的提示把 FFmpeg 放进了项目内、没重启终端时，这一步让启动
 # 依然找得到它。
+#
+# ⚠️ 这一段还负责把缓存变量写进 os.environ，好让下面 Popen 出去的 streamlit
+# 子进程继承 —— streamlit 是**另一个进程**，靠 import 时序管不到它。
 try:
     import runtime_libraries
-    runtime_libraries.setup()
+    _runtime_report = runtime_libraries.setup()
 except Exception:
-    pass
+    _runtime_report = None
 
 LOG_DIR = Path("logs")
 
@@ -112,12 +118,16 @@ def main(argv=None):
            "--server.port", str(args.port), "--logger.level", "error"]
 
     if args.no_log:
+        # 缓存变量已在模块导入时写进 os.environ，子进程自然继承
         return subprocess.run(cmd).returncode
 
     LOG_DIR.mkdir(exist_ok=True)
     target = log_path()
     print(f"[launch] 🚀 启动中… 地址 http://127.0.0.1:{args.port}")
     print(f"[launch] 📝 运行日志：{target}")
+    if _runtime_report is not None:
+        for var, value in runtime_libraries.cache_env_report().items():
+            print(f"[launch] 📁 {var} = {value or '（未设置）'}")
     env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONWARNINGS": "ignore"}
     with open(target, "w", encoding="utf-8", errors="replace") as log:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE,

@@ -10,11 +10,13 @@ Windows 上需要能找到 `avcodec-*.dll` 等文件。而 Python 3.8 起，
   * 必须在 import torchcodec 之前调用 `os.add_dll_directory(<ffmpeg bin>)`。
 
 上游 3.0.3 为此专门加了 runtime_libraries.py + core/__init__.py，本文件沿用
-同样的思路，但多做了两件 dev 需要的事：
+同样的思路，但多做了三件 dev 需要的事：
   1. 支持**项目内** `ffmpeg/` 目录（installer.py 现在把 FFmpeg 固定版解压到
      这里），避免依赖系统 PATH 与系统的 FFmpeg 大版本；
   2. 把项目内 ffmpeg 目录**前置**到 PATH，让 `subprocess` 调用 `ffmpeg` /
-     `ffprobe` 的各处（下载、切分、压制）也用同一份、且版本受控。
+     `ffprobe` 的各处（下载、切分、压制）也用同一份、且版本受控；
+  3. 把模型与下载缓存（`HF_HOME` / `TORCH_HOME` / `UV_CACHE_DIR` /
+     `PIP_CACHE_DIR`）指到项目内，避免运行期往 C 盘写（见 `apply_cache_env`）。
 
 被谁调用
 --------
@@ -114,6 +116,62 @@ def _prepend_path(path: Path):
     os.environ["PATH"] = str(path) + (os.pathsep + current if current else "")
 
 
+#: 指向项目内的缓存变量（值相对项目根）。与 setup_env.py 的 CACHE_DIRS 同一组。
+#: **只在用户没显式设置时才写**，不覆盖用户自己的选择（见 apply_cache_env）。
+_CACHE_ENV = {
+    "HF_HOME": "_model_cache",
+    "TORCH_HOME": os.path.join("_model_cache", "torch"),
+    "UV_CACHE_DIR": ".uv-cache",
+    "PIP_CACHE_DIR": ".pip-cache",
+}
+
+_CACHE_ENV_APPLIED: dict[str, str] = {}
+
+
+def apply_cache_env(mkdir: bool = True) -> dict:
+    """把模型/下载缓存指到**项目内**，避免运行期往 C 盘写。
+
+    为什么必须有这一步（2026-09-19 实测 bug）：
+    `setup_env.py` 虽然设了 `HF_HOME` / `TORCH_HOME`，但它是在**自己的子进程**里
+    `os.environ.update(...)` —— 变量不会回流到父 shell；而运行期的 `launch.py` /
+    `OneKeyStart.bat` / `st.py` / 批量模式都不设它们。于是运行期出现：
+
+        Downloading: ".../wav2vec2_fairseq_base_ls960_asr_ls960.pth"
+          to C:\\Users\\<你>/.cache/torch/hub/checkpoints/...
+
+    `torch.hub.get_dir()` 是**运行时**读 `TORCH_HOME` 的（实测：设置后立刻变成
+    项目内路径），所以在 import torch 之前设置就来得及。
+
+    策略：只在用户没设过时才写（`setdefault` 语义）—— 用户在系统里为省 C 盘
+    自己设过 `HF_HOME`/`TORCH_HOME` 的话，尊重用户的选择。
+    """
+    applied = {}
+    for var, rel in _CACHE_ENV.items():
+        if os.environ.get(var):
+            continue  # 用户已显式设置，不动
+        target = _PROJECT_ROOT / rel
+        os.environ[var] = str(target)
+        applied[var] = str(target)
+        if mkdir:
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                pass
+
+    # HF_HUB_CACHE 决定 Hub 的实际缓存目录；与 HF_HOME 保持一致
+    if os.environ.get("HF_HOME"):
+        os.environ.setdefault("HF_HUB_CACHE",
+                              str(Path(os.environ["HF_HOME"]) / "hub"))
+
+    _CACHE_ENV_APPLIED.update(applied)
+    return applied
+
+
+def cache_env_report() -> dict:
+    """返回当前生效的缓存变量（供日志/体检打印）。"""
+    return {var: os.environ.get(var, "") for var in _CACHE_ENV}
+
+
 def _set_cuda_home_from_torch():
     """未显式设置 CUDA_HOME 时，用 torch 自带的 CUDA 目录兜底。
 
@@ -170,6 +228,9 @@ def setup(verbose: bool = False) -> dict:
             _add_dll_directory(Path(system_ffmpeg).resolve().parent)
 
     _set_cuda_home_from_torch()
+    # 把模型/下载缓存指到项目内：否则运行期首次转录会把 wav2vec2 对齐权重、
+    # whisper 模型等下到 C:\Users\<你>\.cache\ 下（见 apply_cache_env 的说明）。
+    report["cache_env"] = apply_cache_env()
     report["dll_dirs"] = sorted(_REGISTERED_DLL_DIRS)
 
     _CONFIGURED = True
@@ -178,6 +239,9 @@ def setup(verbose: bool = False) -> dict:
         print(f"[runtime] project ffmpeg: {report['project_ffmpeg'] or '（未使用）'}")
         print(f"[runtime] system ffmpeg: {report['system_ffmpeg'] or '（未找到）'}")
         print(f"[runtime] registered DLL dirs: {report['dll_dirs'] or '（无）'}")
+        for var, value in cache_env_report().items():
+            mark = "（本次设置）" if var in report["cache_env"] else "（沿用已有）"
+            print(f"[runtime] {var}: {value or '（未设置）'} {mark}")
     return report
 
 

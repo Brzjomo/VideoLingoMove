@@ -213,6 +213,7 @@ ffmpeg.zip
 ffmpeg-master-latest-win64-gpl/
 
 .claude/
+.agents/
 
 # 文档默认不入库，但工程文档 devdocs/ 必须有例外（顺序不能颠倒）
 *.md
