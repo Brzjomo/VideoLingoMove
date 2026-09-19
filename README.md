@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="/docs/logo.png" alt="VideoLingo Logo" height="140">
+<img src="/assets/logo.png" alt="VideoLingo Logo" height="140">
 
 # Connect the World, Frame by Frame
 
@@ -27,26 +27,6 @@ VideoLingo 是一站式视频翻译本地化工具，能够一键生成 Netflix 
 > 现在整条配音链路已删除，本项目**只产出字幕文件**。
 
 与同类项目相比的优势：**绝无多行字幕，最佳的翻译质量，术语一致的上下文连贯翻译**
-
-### 语言支持：
-
-当前输入语言支持和示例：
-
-
-| 输入语言 | 支持程度 | 翻译demo                                                                                  |
-| -------- | -------- | ----------------------------------------------------------------------------------------- |
-| 英语     | 🤩       | [英转中](https://github.com/user-attachments/assets/127373bb-c152-4b7a-8d9d-e586b2c62b4b) |
-| 俄语     | 😊       | [俄转中](https://github.com/user-attachments/assets/25264b5b-6931-4d39-948c-5a1e4ce42fa7) |
-| 法语     | 🤩       | [法转日](https://github.com/user-attachments/assets/3ce068c7-9854-4c72-ae77-f2484c7c6630) |
-| 德语     | 🤩       | [德转中](https://github.com/user-attachments/assets/07cb9d21-069e-4725-871d-c4d9701287a3) |
-| 意大利语 | 🤩       | [意转中](https://github.com/user-attachments/assets/f1f893eb-dad3-4460-aaf6-10cac999195e) |
-| 西班牙语 | 🤩       | [西转中](https://github.com/user-attachments/assets/c1d28f1c-83d2-4f13-a1a1-859bd6cc3553) |
-| 日语     | 😐       | [日转中](https://github.com/user-attachments/assets/856c3398-2da3-4e25-9c36-27ca2d1f68c2) |
-| 中文*    | 😊       | [中转英](https://github.com/user-attachments/assets/48f746fe-96ff-47fd-bd23-59e9202b495c) |
-
-> *中文需单独配置标点增强后的 whisper 模型，详见安装文档。但效果一般，因为 faster-whisper 加速的 whisper 失去了原有的好的断句，且识别得到的中文没有标点符号，难以断句。同样问题出现在日语上。
-
-翻译语言支持所有语言。
 
 ## 改进
 

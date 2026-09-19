@@ -96,8 +96,8 @@ flowchart TD
 
 | 顺序 | 行号 | 语句 | 作用域 |
 | --- | --- | --- | --- |
-| 1 | `st.py` | `st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")` | 全局（每 session 只能调一次） |
-| 2 | `st.py` | `st.columns([1,1])` + `st.image("docs/logo.png", use_column_width=True)` | 主区第一列 |
+| 1 | `st.py` | `st.set_page_config(page_title="VideoLingo", page_icon="assets/logo.svg")` | 全局（每 session 只能调一次） |
+| 2 | `st.py` | `st.columns([1,1])` + `st.image("assets/logo.png", use_column_width=True)` | 主区第一列 |
 | 3 | `st.py` | `st.markdown(button_style, unsafe_allow_html=True)` | 全局 `<style>` |
 | 4 | `st.py` | 欢迎语 HTML（含 `videolingo.io` 外链） | 主区 |
 | 5 | `st.py` | `with st.sidebar:` → `page_setting` + `st.markdown(give_star_button, ...)` | 侧边栏 |
@@ -449,13 +449,13 @@ stateDiagram-v2
 
 ### 7.13 依赖 cwd = 仓库根（启动脚本已兜底）
 
-Streamlit 1.38 只在运行期把**脚本所在目录**插入 `sys.path`（`streamlit/vendor/ipython/modified_sys_path.py`，由 `streamlit/runtime/scriptrunner/script_runner.py` 使用），**不会 chdir**。因此 `output/...`、`config.yaml`、`docs/logo.png`、`docs/logo.svg` 全部相对「启动命令所在目录」解析（⚠️ 上面两处 streamlit 内部行号本次未复核——本机没有可用的 streamlit 安装，属引用既有结论）。
+Streamlit 只在运行期把**脚本所在目录**插入 `sys.path`（`streamlit/vendor/ipython/modified_sys_path.py`，由 `streamlit/runtime/scriptrunner/script_runner.py` 使用），**不会 chdir**。因此 `output/...`、`config.yaml`、`assets/logo.png`、`assets/logo.svg` 全部相对「启动命令所在目录」解析（⚠️ 上面两处 streamlit 内部行号本次未复核）。
 
 启动脚本现在会主动把 cwd 归位：`OneKeyStart.bat` 的 `cd /d "%~dp0"`（合并时新增，此前从别的目录调用会因找不到 `st.py`/`config.yaml` 而失败），随后 `OneKeyStart.bat` 调 `python launch.py`，由 `launch.py` 起 `python -m streamlit run st.py --server.port 8501`（`launch.py` 自己不改 cwd，直接继承）。
 
 ### 7.14 `st.set_page_config` 的相对路径图标与 streamlit 版本
 
-`st.py` 用 `page_icon="docs/logo.svg"`，并用 `st.image("docs/logo.png", width="stretch")`。
+`st.py` 用 `page_icon="assets/logo.svg"`，并用 `st.image("assets/logo.png", width="stretch")`。
 `use_column_width` 在 streamlit **1.40 起弃用、1.61 才从签名里移除**，而 `width="stretch"` 是 **1.49 才引入**的，
 所以真正的约束是 `streamlit>=1.49`（`requirements.txt` 钉的就是 `streamlit>=1.49.1,<2.0.0`）。
 `st.button` / `st.dataframe` / `st.download_button` 等控件的 `use_container_width=True` 不受影响。

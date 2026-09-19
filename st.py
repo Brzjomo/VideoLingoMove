@@ -349,13 +349,13 @@ def subtitle_length_controls():
 
 
 def main():
-    st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
+    st.set_page_config(page_title="VideoLingo", page_icon="assets/logo.svg")
     logo_col, _ = st.columns([1,1])
     with logo_col:
         # streamlit 1.49 起 st.image() 只认 width（int 或 "stretch"），
         # use_column_width 已被移除 —— 升级后传旧参数会直接 TypeError。
         # 注意 width 在旧版只接受 int，所以这行与新栈的 requirements.txt 绑定。
-        st.image("docs/logo.png", width="stretch")
+        st.image("assets/logo.png", width="stretch")
     st.markdown(button_style, unsafe_allow_html=True)
     st.markdown("<p style='font-size: 20px; color: #808080;'>你好，欢迎使用 VideoLingo。本项目目前正在建设中。如果遇到任何问题，请随时在 Github 上提问！你也可以访问我们的网站：<a href='https://videolingo.io' target='_blank'>videolingo.io</a></p>", unsafe_allow_html=True)
     # add settings
