@@ -4,8 +4,42 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import warnings
 warnings.filterwarnings("ignore")
 
-import whisperx
+import functools
+
 import torch
+
+
+# ---------------------------------------------------------------- torch.load 兼容垫片
+# torch ≥ 2.6 把 torch.load 的 weights_only 默认值从 False 改成了 True。
+# WhisperX 3.8 的 VAD 走 pyannote-audio 4，而 pyannote 的 checkpoint 里含
+# omegaconf 对象（OmegaConf / ListConfig），会被 weights_only=True 的
+# unpickler 按"安全机制"拒掉，报 UnpicklingError。上游
+# core/asr_backend/whisperX_local.py 顶部就是这段垫片。
+#
+# 必须在 `import whisperx` **之前**打上：whisperx 在 import 期就会
+# import pyannote.audio，之后任何一次 torch.load 调用都要走这里。
+#
+# 只包一层、只改默认值：调用方显式传 weights_only=True 时依然尊重，
+# 所以并不会削弱"我们主动要求安全加载"的路径。
+def _patch_torch_load_weights_only():
+    original = torch.load
+    if getattr(original, "_videolingo_weights_only_shim", False):
+        return original
+
+    @functools.wraps(original)
+    def patched(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return original(*args, **kwargs)
+
+    patched._videolingo_weights_only_shim = True
+    torch.load = patched
+    return original
+
+
+_patch_torch_load_weights_only()
+
+import whisperx
+from whisperx.audio import load_audio as _whisperx_load_audio
 from typing import Dict
 import librosa
 from rich import print as rprint
@@ -34,6 +68,12 @@ except ImportError:
 MODEL_DIR = load_key("model_dir")
 WHISPER_FILE = "output/audio/for_whisper.mp3"
 ENHANCED_VOCAL_PATH = "output/audio/enhanced_vocals.mp3"
+
+# 把实际生效的 whisperx 版本打进日志：升级到 3.8 之后，出问题时第一件要
+# 确认的就是"跑的到底是哪一版"（旧环境的 3.2 与 3.8 的 API/行为都不同）。
+rprint(f"[cyan]🔧 whisperx {getattr(whisperx, '__version__', '未知版本')} | "
+       f"torch {torch.__version__} | "
+       f"weights_only 垫片：{'已启用' if getattr(torch.load, '_videolingo_weights_only_shim', False) else '未启用'}[/cyan]")
 
 # 镜像探测结果缓存：同一进程只探测一次。
 # 原实现把探测放在 transcribe_audio_with_whisper() 里，而该函数是按音频分段
@@ -194,8 +234,10 @@ def transcribe_audio_with_whisper(audio_file: str, start: float, end: float) -> 
             raise RuntimeError("FFmpeg failed to create output file")
         
         try:
-            # Try loading with whisperx first
-            audio_numpy = whisperx.load_audio(temp_audio_path)
+            # whisperx 的音频解码入口。3.8 把它放在 whisperx.audio 下（本模块
+            # 顶部已按该路径导入），语义与旧版 whisperx.load_audio 相同：
+            # 调用 ffmpeg CLI 解成 16kHz 单声道 float32 numpy。
+            audio_numpy = _whisperx_load_audio(temp_audio_path)
             if audio_numpy.size == 0 or len(audio_numpy) < 100:  # 100 samples at 16kHz = 6.25ms
                 rprint("[yellow]⚠️ WhisperX load_audio returned empty or too short array, falling back to librosa...[/yellow]")
                 audio_numpy, _ = librosa.load(temp_audio_path, sr=16000)

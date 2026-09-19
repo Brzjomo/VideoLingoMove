@@ -1,37 +1,88 @@
-librosa==0.10.2.post1
-pytorch-lightning==2.3.3
-lightning==2.3.3
-transformers==4.39.3
-numpy==1.26.4
-openai==1.55.3
-opencv-python==4.10.0.84
-openpyxl==3.1.5
-pandas==2.2.3
+# VideoLingo 依赖（upgrade/env-torch28 新栈）
+#
+# 这一版是"环境大升级"的产物：whisperx 3.8 的依赖声明把整条链子锁死了，
+# 想要 whisperx 3.8 就必须同批升 torch / numpy / ctranslate2 / transformers。
+# 依据见 devdocs/05-guides/08-环境大升级方案.md。
+#
+# 关键约束（改版本前务必先看）：
+#   * torch / torchaudio / torchvision 必须同批同源，且 CUDA 轮子由
+#     installer.py --torch-backend 决定（cu126/cu128/cu129/cpu），
+#     因此这里**不写 --index-url**，也不加本地版本号后缀。
+#   * torchcodec 要求与 torch 版本配对（0.7.x ↔ torch 2.8.x）；
+#     它走 FFmpeg 共享库解码，FFmpeg 大版本必须 4–7（8/9 会失败）。
+#   * transformers 只能停在 4.x：whisperx 要求 huggingface-hub<1.0，
+#     而 transformers 5.x 要求 hub>=1.0，两者不可同时满足。
+#   * numpy 必须是 2.x（whisperx 3.8 要求 >=2.1）。
+#
+# 安装方式：python setup_env.py   （uv + 项目内 .venv）
+# 体检：    python installer.py --check --smoke
+
+# --- 核心：ASR / 对齐 / 说话人 ---
+# torch 三件套按硬件选源安装，不在此声明；由 installer.py 负责。
+# 下限由 pyannote-audio 4.0.7 强制：它要求 torch>=2.8.0 / torchaudio>=2.8.0 /
+# torchcodec>=0.7.0，正好与 whisperx 3.8.6 的 torch~=2.8.0 汇合。
+whisperx==3.8.6
+# Windows 上必须落在 0.7.0：0.6.0 根本没有 win_amd64 轮子，而 whisperx 的
+# 上限是 <0.8.0；0.7.x 系列也只发布过 0.7.0。
+torchcodec>=0.7.0,<0.8.0
+ctranslate2>=4.5.0,<5.0.0
+# 上限 <2.5：numpy 2.5.x 起 requires_python 变成 >=3.12，本项目支持 3.10–3.13，
+# 钉住上限可避免 3.10/3.11 上静默解析到另一个版本、装出两套环境。
+numpy>=2.1.0,<2.5.0
+pyannote-audio>=4.0.4,<5.0.0
+# PyPI 上 demucs 最新就是 4.1.0（没有 4.1.6；4.1.0 还是首个带 wheel 的版本）。
+# 它声明 torch>=2.1 且 numpy 在非 macOS-x86_64 平台不受约束，与 2.8/2.x 兼容。
+demucs>=4.1.0,<5.0.0
+
+# --- 文本 / NLP ---
+# transformers 只能停在 4.x：whisperx 3.8.6 要求 huggingface-hub<1.0.0，
+# 而 transformers 5.x 要求 huggingface-hub>=1.3.0，二者互斥。
+transformers>=4.57.6,<5.0.0
+huggingface-hub>=0.36.2,<1.0.0
+tokenizers<0.24.0
+spacy>=3.8.7,<3.9.0
+sentencepiece>=0.2.0,<0.3.0
+
+# --- 音频处理 ---
+librosa>=0.10.2,<0.11.0
 pydub==0.25.1
-PyYAML==6.0.2
-requests==2.32.3
-spacy==3.7.4
-streamlit==1.38.0
-yt-dlp
-json-repair
-ruamel.yaml
+# soundfile 在 core/all_whisper_methods/volcano_asr.py 里是函数内 import，
+# 缺了会等到跑火山 ASR 时才炸，所以显式声明。
+soundfile>=0.13.0,<0.14.0
+# av 不手工钉版本：faster-whisper 需要它。Windows 上 av 17/18 的 win_amd64
+# 轮子文件名只有 cp310 / cp311-abi3 / cp314-cp314t —— cp311-abi3 是稳定 ABI
+# 轮子，在 3.11+ 上都可装，所以 3.12/3.13 并不会被挡住（av 18.x 的
+# requires_python 是 >=3.11）。钉死版本反而容易与 faster-whisper 冲突。
+
+# --- Web / 交互 ---
+streamlit>=1.49.1,<2.0.0
+openai==1.55.3
 plyer
+requests==2.32.3
+
+# --- 数据处理 / 工具 ---
+pandas>=2.2.3,<3.0.0
+openpyxl>=3.1.5,<4.0.0
+opencv-python>=4.10.0,<5.0.0
+PyYAML>=6.0.2,<7.0.0
+ruamel.yaml>=0.18.0,<0.19.0
+json-repair>=0.30.0,<0.50.0
+yt-dlp
 autocorrect-py
-ctranslate2==4.4.0
 
-demucs[dev] @ git+https://github.com/adefossez/demucs
-whisperx @ git+https://github.com/m-bain/whisperx.git@v3.2.0
-
-# 字幕朗读时长估算（core/estimate_duration.py），仍被 core/subtitle_trim.py 使用
+# --- 字幕朗读时长估算（core/estimate_duration.py，仍被 core/subtitle_trim.py 使用）---
 syllables
 pypinyin
 g2p-en
 
+# --- 火山引擎 TOS 对象存储（core/all_whisper_methods/volcano_asr.py）---
 tos>=2.8.7
 
 # --- 已移除的声明（均确认无任何代码引用，注释保留以便追溯）---
 # moviepy==1.0.3   : 旧配音链路遗留（上游 3.x 也已移除）
 # replicate==0.33.0: 早期用 Replicate 跑 Demucs 的遗留；dev 用本地 demucs
 # resampy==0.4.3   : 由 librosa 传递引入，无需直接 pin
-# 注意：pytorch-lightning/lightning 的 pin 保留 —— 它们由 pyannote(whisperx 依赖)
-# 传递引入，但在没有环境可验证的情况下不宜放开版本约束。
+# pytorch-lightning / lightning: 过去为 pyannote 传递依赖而 pin。新栈由
+#   pyannote-audio 4.x 自己声明，不再手工钉版本（钉住反而会与 torch 2.8 冲突）。
+# edge-tts / InquirerPy / xmltodict: 上游有、dev 代码里无人引用，不引入。
+# whisperx / demucs 的 git 源: 新栈改走 PyPI，不再需要 git+https 安装。

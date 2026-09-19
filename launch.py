@@ -28,6 +28,16 @@ try:
 except Exception:
     pass
 
+# 把项目内 ffmpeg/ 目录接进 PATH 与 DLL 搜索路径（torchcodec 需要）。
+# 必须在 preflight() 里用 shutil.which("ffmpeg") 之前完成 —— 用户只按
+# installer.py 的提示把 FFmpeg 放进了项目内、没重启终端时，这一步让启动
+# 依然找得到它。
+try:
+    import runtime_libraries
+    runtime_libraries.setup()
+except Exception:
+    pass
+
 LOG_DIR = Path("logs")
 
 

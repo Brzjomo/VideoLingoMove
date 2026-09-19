@@ -154,6 +154,13 @@ cython_debug/
 /output/
 /history/
 _model_cache/
+# 项目内缓存：uv / pip 下载缓存（环境大升级后由 setup_env.py 使用，可随时删）
+/.uv-cache/
+/.pip-cache/
+# 项目内 FFmpeg（installer.py 下载的固定版 7.x，体积大且平台相关）
+/ffmpeg/
+# 安装状态指纹（放在环境目录里，这里兜底防漏）
+.videolingo-install.json
 # 转录内容寻址缓存（core/all_whisper_methods/transcription_cache.py）。
 # 故意放在 output/ 之外，这样归档/清理 output 不会让它失效。
 /.cache/

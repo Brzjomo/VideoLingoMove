@@ -352,11 +352,10 @@ def main():
     st.set_page_config(page_title="VideoLingo", page_icon="docs/logo.svg")
     logo_col, _ = st.columns([1,1])
     with logo_col:
-        # 注意：st.image() 在 streamlit 1.38.0 用的是 use_column_width，
-        # 不是 use_container_width（后者只适用于 button/dataframe 等控件）。
-        # 传错会抛 TypeError: ImageMixin.image() got an unexpected keyword argument。
-        # requirements.txt 固定 streamlit==1.38.0；升级到 1.4x 之后再考虑换名。
-        st.image("docs/logo.png", use_column_width=True)
+        # streamlit 1.49 起 st.image() 只认 width（int 或 "stretch"），
+        # use_column_width 已被移除 —— 升级后传旧参数会直接 TypeError。
+        # 注意 width 在旧版只接受 int，所以这行与新栈的 requirements.txt 绑定。
+        st.image("docs/logo.png", width="stretch")
     st.markdown(button_style, unsafe_allow_html=True)
     st.markdown("<p style='font-size: 20px; color: #808080;'>你好，欢迎使用 VideoLingo。本项目目前正在建设中。如果遇到任何问题，请随时在 Github 上提问！你也可以访问我们的网站：<a href='https://videolingo.io' target='_blank'>videolingo.io</a></p>", unsafe_allow_html=True)
     # add settings

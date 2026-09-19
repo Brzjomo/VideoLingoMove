@@ -5,28 +5,41 @@ rem 切到脚本所在目录：直接双击或从别处调用时，否则会因�
 rem 找不到 st.py / config.example.yaml（原脚本缺这一行）。
 cd /d "%~dp0"
 
-rem 指定的 conda 环境不存在时，直接给出明确提示，而不是让 activate 静默失败后
-rem 用一个错误的 Python 去跑（那样会报一堆看不懂的缺包错误）。
+rem ---- 解释器选择：项目内 .venv 优先，其次 conda ---------------------------------
+rem 环境大升级后推荐用 setup_env.py 建的项目内 .venv（不占 C 盘、可搬移）。
+rem conda 分支保留是为了兼容旧环境，不做硬切。
+set "VENV_PY=%~dp0.venv\Scripts\python.exe"
 set "CONDA_ENV=%USERPROFILE%\anaconda3\envs\videolingo"
-if not exist "%CONDA_ENV%\python.exe" (
-    echo [错误] 未找到 conda 环境: %CONDA_ENV%
-    echo         请先执行: conda create -n videolingo python=3.10
-    echo         然后执行: python install.py
-    pause
-    exit /b 1
+
+if exist "%VENV_PY%" (
+    set "PY=%VENV_PY%"
+    echo [环境] 使用项目内虚拟环境: %VENV_PY%
+    goto :run
 )
 
-call "%USERPROFILE%\anaconda3\Scripts\activate.bat" videolingo
+if exist "%CONDA_ENV%\python.exe" (
+    call "%USERPROFILE%\anaconda3\Scripts\activate.bat" videolingo
+    set "PY=python"
+    echo [环境] 使用 conda 环境: %CONDA_ENV%
+    goto :run
+)
 
+echo [错误] 未找到可用的 Python 环境。
+echo         推荐:  python setup_env.py --python 3.11
+echo         旧方式: conda create -n videolingo python=3.11  ^&^&  python installer.py
+pause
+exit /b 1
+
+:run
 rem 启动前先体检；有问题就提示修复方式，而不是直接崩在 Streamlit 里。
 rem 用 launch.py 启动可以顺带写入 logs\videolingo_<时间戳>.log。
-python installer.py --check --quiet
+"%PY%" installer.py --check --quiet
 if errorlevel 1 (
     echo.
-    echo [提示] 体检发现问题，尝试修复: python install.py
+    echo [提示] 体检发现问题，尝试修复: python setup_env.py
     echo.
 )
 
-python launch.py
+"%PY%" launch.py
 
 pause
