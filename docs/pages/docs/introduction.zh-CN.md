@@ -60,15 +60,17 @@ https://github.com/user-attachments/assets/47d965b2-b4ab-4a0b-9d08-b49a7bf3508c
 
 ## 安装
 
-> **注意:** 在 Windows 上使用 NVIDIA GPU 加速需要先完成以下步骤:
-> 1. 安装 [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe)
-> 2. 安装 [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
-> 3. 将 `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` 添加到系统环境变量 PATH 中
-> 4. 重启电脑
+> **Windows 用户：只需要一个脚本。** 双击项目根目录的 `Install.bat`（或在控制台运行
+> `Install.bat`）即可。它会自动准备 Python 3.11 与 uv、在**项目内**建好虚拟环境、
+> 按你的显卡算力选择 torch 的 CUDA 版本（cu126/cu128/cu129）、安装依赖并体检。
+> 全程不写 C 盘，装完用 `OneKeyStart.bat` 启动。
 
-> **注意:** Windows 和 macOS 用户建议通过包管理器（Chocolatey/Homebrew）安装 FFmpeg：
-> ```choco install ffmpeg```（Windows）或 ```brew install ffmpeg```（macOS）。
-> 如果未安装，程序会在本地下载 FFmpeg。
+> **不需要手工安装 CUDA Toolkit 或 cuDNN**：CUDA 版 PyTorch 的 wheel 自带所需的
+> CUDA 运行库，只要显卡驱动足够新即可。这与旧版（torch 2.1 + cu118）不同。
+
+> **FFmpeg**：需要 **大版本 4–7**。若系统里已经有合规版本，安装脚本会直接跳过下载；
+> 没有则自动在项目内 `ffmpeg\` 目录装一份 7.x，运行期自动接入，**不需要改 PATH**。
+> 不推荐用 Chocolatey 装 latest（现在已是 8.x，`torchcodec` 不支持）。
 
 1. 克隆仓库
 
@@ -77,26 +79,39 @@ git clone https://github.com/Huanshere/VideoLingo.git
 cd VideoLingo
 ```
 
-2. 安装依赖（需要 `python=3.10`）
+2. 一键安装（推荐）
 
 ```bash
-conda create -n videolingo python=3.10.0 -y
-conda activate videolingo
-python install.py
+Install.bat
 ```
+
+网络不佳时，先只拿下载地址，用下载工具把大文件下好放进 `_downloads\`，再重跑：
+
+```bash
+Install.bat --download-only
+Install.bat
+```
+
+也可以手工来（等价于 Install.bat 做的事）：
+
+```bash
+python setup_env.py --python 3.11    # 建项目内 .venv + 装依赖
+python installer.py --check --smoke  # 体检（会逐个 import whisperx/torchcodec 等）
+```
+
+> 旧版的 conda 流程仍然可用：`conda create -n videolingo python=3.11` 后运行
+> `python installer.py`；三个启动脚本都是「项目内 .venv 优先，conda 回退」。
 
 3. 启动应用
 
 ```bash
-streamlit run st.py
+OneKeyStart.bat
 ```
 
-### Docker
-还可以选择使用 Docker（要求 CUDA 12.4 和 NVIDIA Driver 版本 >550），详见[Docker文档](/docs/pages/docs/docker.zh-CN.md)：
+手工启动：
 
 ```bash
-docker build -t videolingo .
-docker run -d -p 8501:8501 --gpus all videolingo
+.venv\Scripts\python.exe launch.py
 ```
 
 ## API

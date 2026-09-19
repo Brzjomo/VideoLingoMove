@@ -61,44 +61,55 @@ class TestPickFfmpegAsset(unittest.TestCase):
         return {"assets": [{"name": n, "browser_download_url": f"https://x/{n}"}
                            for n in names]}
 
-    def test_prefers_seven_over_eight_and_nine(self):
+    def test_prefers_newest_branch(self):
+        # "默认装新版"：8.1 在优先序列最前
         releases = [self._release([
-            "ffmpeg-master-latest-win64-gpl.zip",
             "ffmpeg-n9.0-latest-win64-gpl-9.0.zip",
             "ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
             "ffmpeg-n7.1-latest-win64-gpl-7.1.zip",
         ])]
         picked = installer._pick_ffmpeg_asset(releases)
-        self.assertIsNotNone(picked, "应当挑到 7.1 资产")
-        self.assertEqual(picked[0], "ffmpeg-n7.1-latest-win64-gpl-7.1.zip")
+        self.assertIsNotNone(picked)
+        self.assertIn("n8.1", picked[0])
 
-    def test_skips_shared_variant(self):
-        # shared 版只有 DLL、没有 ffmpeg.exe，installer 需要 exe
+    def test_prefers_shared_within_branch(self):
+        # shared 才含 torchcodec 需要的 avcodec 等动态库
         releases = [self._release([
-            "ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip",
-            "ffmpeg-n7.1-latest-win64-gpl-7.1.zip",
+            "ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
+            "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
         ])]
         self.assertEqual(installer._pick_ffmpeg_asset(releases)[0],
-                         "ffmpeg-n7.1-latest-win64-gpl-7.1.zip")
+                         "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip")
 
-    def test_shared_only_returns_none(self):
-        releases = [self._release(["ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip"])]
-        self.assertIsNone(installer._pick_ffmpeg_asset(releases))
+    def test_falls_back_to_non_shared(self):
+        # 7.x 的非 shared 构建同时含 exe 与 DLL，是可接受的退路
+        releases = [self._release(["ffmpeg-n7.1.5-12-g1fdbca85aa-win64-gpl-7.1.zip"])]
+        picked = installer._pick_ffmpeg_asset(releases)
+        self.assertIsNotNone(picked)
+        self.assertIn("n7.1.5", picked[0])
 
-    def test_no_seven_returns_none(self):
-        releases = [self._release(["ffmpeg-n8.1-latest-win64-gpl-8.1.zip"])]
+    def test_skips_unsupported_branches(self):
+        # 9.0 不在优先序列里（torchcodec 只支持 4-7，而 8.x 是有意放行的上限）
+        releases = [self._release(["ffmpeg-n9.0-latest-win64-gpl-9.0.zip"])]
         self.assertIsNone(installer._pick_ffmpeg_asset(releases))
 
     def test_walks_older_releases(self):
-        # 实测场景：latest tag 只剩 8.x，7.x 资产在更早的 autobuild tag 上
+        # 实测场景：latest tag 只剩 8.x/9.x，7.1 资产在更早的 autobuild tag 上
         releases = [
             self._release(["ffmpeg-n9.0-latest-win64-gpl-9.0.zip"]),
-            self._release(["ffmpeg-n8.1.2-54-gc573a95381-win64-gpl-8.1.zip"]),
             self._release(["ffmpeg-n7.1.5-12-g1fdbca85aa-win64-gpl-7.1.zip"]),
         ]
         picked = installer._pick_ffmpeg_asset(releases)
         self.assertIsNotNone(picked)
         self.assertIn("n7.1.5", picked[0])
+
+    def test_custom_branch_order(self):
+        releases = [self._release([
+            "ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip",
+            "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+        ])]
+        picked = installer._pick_ffmpeg_asset(releases, branches=("7.1",))
+        self.assertIn("n7.1", picked[0])
 
     def test_ignores_non_zip_and_linux_assets(self):
         releases = [self._release([
@@ -111,6 +122,118 @@ class TestPickFfmpegAsset(unittest.TestCase):
         self.assertIsNone(installer._pick_ffmpeg_asset([]))
         self.assertIsNone(installer._pick_ffmpeg_asset(None))
         self.assertIsNone(installer._pick_ffmpeg_asset([{}]))
+
+
+class TestDownloadDirAndLocalWheels(unittest.TestCase):
+    """下载与安装分离：大文件放 _downloads/，存在就优先用本地文件。"""
+
+    def setUp(self):
+        import tempfile
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = self._tmp.name
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def test_wheel_names_match_index_convention(self):
+        names = installer.wheel_names_for("cu126")
+        self.assertEqual(len(names), 3)
+        by_pkg = {pkg: fn for pkg, _ver, fn in names}
+        self.assertIn(f"torch-{installer.TORCH_VERSION}+cu126-", by_pkg["torch"])
+        self.assertIn(f"torchvision-{installer.TORCHVISION_VERSION}+cu126-",
+                      by_pkg["torchvision"])
+        for filename in by_pkg.values():
+            self.assertTrue(filename.endswith(".whl"))
+
+    def test_plan_reports_everything_missing_when_dir_empty(self):
+        have, missing = installer.torch_download_plan("cu128", self.dir)
+        self.assertEqual(have, [])
+        self.assertEqual(len(missing), 3)
+        for _pkg, filename, url in missing:
+            self.assertIn(filename, url.replace("%2B", "+"))
+            self.assertIn("download.pytorch.org", url)
+
+    def test_existing_file_is_reused(self):
+        for pkg, _ver, filename in installer.wheel_names_for("cu126"):
+            target = os.path.join(self.dir, filename)
+            with open(target, "wb") as handle:
+                handle.write(b"x" * 16)
+        have, missing = installer.torch_download_plan("cu126", self.dir)
+        self.assertEqual(len(have), 3)
+        self.assertEqual(missing, [])
+        found = installer.local_wheels_for("cu126", self.dir)
+        self.assertEqual(set(found), {"torch", "torchaudio", "torchvision"})
+
+    def test_empty_file_is_not_reused(self):
+        # 下载中断会留下 0 字节文件，绝不能当成"已下好"
+        _pkg, _ver, filename = installer.wheel_names_for("cu126")[0]
+        with open(os.path.join(self.dir, filename), "wb"):
+            pass
+        have, _missing = installer.torch_download_plan("cu126", self.dir)
+        self.assertEqual(have, [])
+
+    def test_wheel_for_other_backend_is_not_reused(self):
+        # cu128 的轮子不能被当成 cu126 的用
+        _pkg, _ver, filename = installer.wheel_names_for("cu128")[0]
+        with open(os.path.join(self.dir, filename), "wb") as handle:
+            handle.write(b"x" * 16)
+        have, _missing = installer.torch_download_plan("cu126", self.dir)
+        self.assertEqual(have, [])
+
+    def test_ensure_download_dir_creates(self):
+        target = os.path.join(self.dir, "nested", "_downloads")
+        returned = installer.ensure_download_dir(target)
+        self.assertTrue(os.path.isdir(returned))
+        self.assertEqual(str(returned), target)
+
+    def test_python_tag_matches_interpreter(self):
+        self.assertEqual(installer.current_python_tag(),
+                         f"cp{sys.version_info[0]}{sys.version_info[1]}")
+
+
+class TestFfmpegSkipWhenUsable(unittest.TestCase):
+    """需求：环境里已有可用的 FFmpeg 就跳过下载。"""
+
+    def setUp(self):
+        # ensure_ffmpeg 会打印中文提示，测试里静音掉
+        self._saved_info, self._saved_panel = installer.info, installer.panel
+        installer.info = lambda *a, **k: None
+        installer.panel = lambda *a, **k: None
+
+    def tearDown(self):
+        installer.info, installer.panel = self._saved_info, self._saved_panel
+
+    def test_usable_ffmpeg_reports_source(self):
+        bin_dir, source, version = installer.usable_ffmpeg()
+        if bin_dir is None:
+            self.skipTest("本机没有可用的 FFmpeg，跳过")
+        self.assertIn(source, ("项目内", "系统 PATH"))
+        self.assertTrue(installer.ffmpeg_major_ok(version[0]))
+
+    def test_ensure_ffmpeg_skips_download_when_usable(self):
+        """有可用版本时 ensure_ffmpeg 必须直接返回，不触发下载。"""
+        if installer.usable_ffmpeg()[0] is None:
+            self.skipTest("本机没有可用的 FFmpeg，跳过")
+
+        calls = []
+
+        def _boom(*args, **kwargs):
+            calls.append(args)
+            raise AssertionError("已有可用 FFmpeg 时不应触发下载")
+
+        original = installer.download_ffmpeg_windows
+        installer.download_ffmpeg_windows = _boom
+        try:
+            ok, needs_restart = installer.ensure_ffmpeg()
+        finally:
+            installer.download_ffmpeg_windows = original
+        self.assertTrue(ok)
+        self.assertFalse(needs_restart)
+        self.assertEqual(calls, [])
+
+    def test_ffmpeg_zip_name_is_stable(self):
+        # 外部工具下载时用户要按这个名字存放，不能随意改
+        self.assertEqual(installer.FFMPEG_ZIP_NAME, "ffmpeg-win64.zip")
 
 
 class TestTorchBackend(unittest.TestCase):

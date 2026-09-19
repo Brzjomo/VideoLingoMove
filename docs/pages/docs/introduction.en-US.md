@@ -58,15 +58,21 @@ https://github.com/user-attachments/assets/47d965b2-b4ab-4a0b-9d08-b49a7bf3508c
 
 ## Installation
 
-> **Note:** To use NVIDIA GPU acceleration on Windows, please complete the following steps first:
-> 1. Install [CUDA Toolkit 12.6](https://developer.download.nvidia.com/compute/cuda/12.6.0/local_installers/cuda_12.6.0_560.76_windows.exe)
-> 2. Install [CUDNN 9.3.0](https://developer.download.nvidia.com/compute/cudnn/9.3.0/local_installers/cudnn_9.3.0_windows.exe)
-> 3. Add `C:\Program Files\NVIDIA\CUDNN\v9.3\bin\12.6` to your system PATH
-> 4. Restart your computer
+> **Windows users: one script is all you need.** Double-click `Install.bat` in the
+> project root (or run `Install.bat` in a console). It prepares Python 3.11 and uv,
+> creates a **project-local** virtual environment, picks the right torch CUDA build
+> for your GPU (cu126/cu128/cu129), installs the dependencies and runs a health
+> check. Nothing is written to the C: drive. Start the app with `OneKeyStart.bat`.
 
-> **Note:** For Windows and macOS users, it's recommended to install FFmpeg via package managers (Chocolatey/Homebrew):
-> ```choco install ffmpeg``` (Windows) or ```brew install ffmpeg``` (macOS). 
-> If not installed, the program will download FFmpeg locally.
+> **You do NOT need to install the CUDA Toolkit or cuDNN by hand.** The CUDA
+> PyTorch wheels ship with the CUDA runtime they need; a recent GPU driver is
+> enough. This differs from older versions (torch 2.1 + cu118).
+
+> **FFmpeg**: version **4-7** is required. If a compatible build is already present,
+> the installer skips the download entirely; otherwise it fetches a 7.x build into
+> the project's `ffmpeg\` folder and wires it up at runtime, so **you never touch
+> your PATH**. Please do not install "latest" via Chocolatey (that is 8.x now, which
+> `torchcodec` does not support).
 
 1. Clone the repository
 
@@ -75,26 +81,41 @@ git clone https://github.com/Huanshere/VideoLingo.git
 cd VideoLingo
 ```
 
-2. Install dependencies(requires `python=3.10`)
+2. One-click install (recommended)
 
 ```bash
-conda create -n videolingo python=3.10.0 -y
-conda activate videolingo
-python install.py
+Install.bat
 ```
+
+On a slow connection, fetch the download URLs first, grab the big files with a
+download manager into `_downloads\`, then run it again:
+
+```bash
+Install.bat --download-only
+Install.bat
+```
+
+Or do it by hand (this is what `Install.bat` does):
+
+```bash
+python setup_env.py --python 3.11    # project-local .venv + dependencies
+python installer.py --check --smoke  # health check, imports whisperx/torchcodec/...
+```
+
+> The old conda flow still works: `conda create -n videolingo python=3.11` then
+> `python installer.py`. All three launcher scripts prefer the project `.venv` and
+> fall back to conda.
 
 3. Start the application
 
 ```bash
-streamlit run st.py
+OneKeyStart.bat
 ```
 
-### Docker
-Alternatively, you can use Docker (requires CUDA 12.4 and NVIDIA Driver version >550), see [Docker docs](/docs/pages/docs/docker.en-US.md):
+Or manually:
 
 ```bash
-docker build -t videolingo .
-docker run -d -p 8501:8501 --gpus all videolingo
+.venv\Scripts\python.exe launch.py
 ```
 
 ## API

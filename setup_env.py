@@ -203,6 +203,10 @@ def build_parser():
                              "（whisperx/torchcodec/pyannote 等逐个 import）")
     parser.add_argument("--torch-backend", default="auto",
                         help="透传给 installer.py（auto/cu126/cu128/cu129/cpu）")
+    parser.add_argument("--download-dir", default=None,
+                        help="透传给 installer.py：大文件目录（默认 <项目>/_downloads）")
+    parser.add_argument("--download-only", action="store_true",
+                        help="只让 installer.py 打印大文件下载地址后退出（不建环境、不安装）")
     parser.add_argument("--hf-mirror", action="store_true",
                         help=f"设置 HF_ENDPOINT={HF_MIRROR}（国内加速）")
     parser.add_argument("--print-env", action="store_true",
@@ -234,6 +238,15 @@ def main(argv=None):
         if args.smoke:
             cmd.append("--smoke")
         return subprocess.run(cmd, env=env).returncode
+
+    if args.download_only:
+        # 只打印大文件下载地址：不需要环境存在，也不必先建 .venv
+        cmd = [sys.executable, "installer.py", "--download-only",
+               "--torch-backend", args.torch_backend]
+        if args.download_dir:
+            cmd += ["--download-dir", args.download_dir]
+        info(f"📥 只打印下载地址：{' '.join(cmd)}", style="cyan")
+        return subprocess.run(cmd, env=env, cwd=str(ROOT)).returncode
 
     panel(f"🧰 建立项目内环境\n"
           f"项目根：{ROOT}\n"
@@ -288,6 +301,8 @@ def main(argv=None):
 
     cmd = [str(python_exe), str(ROOT / "installer.py"),
            "--torch-backend", args.torch_backend, "--python", str(python_exe)]
+    if args.download_dir:
+        cmd += ["--download-dir", args.download_dir]
     if args.smoke:
         # installer.py 装完本来就会体检；--smoke 让它额外逐个 import
         # whisperx / torchcodec / pyannote 等，正是新栈最容易出问题的地方

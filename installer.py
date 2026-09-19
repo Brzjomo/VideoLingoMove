@@ -32,6 +32,8 @@
     python installer.py --force                # 忽略状态指纹强制重装
     python installer.py --auto-mirror          # 显式允许自动切换 pip 镜像
     python installer.py --launch               # 装完启动应用（--no-launch 反之）
+    python installer.py --download-only        # 只用外部工具下大文件：打印 URL 后退出
+    python installer.py --download-dir D       # 指定大文件目录（默认 ./_downloads）
 """
 
 from __future__ import annotations
@@ -63,6 +65,19 @@ except Exception:
 TORCH_VERSION = "2.8.0"
 TORCHVISION_VERSION = "0.23.0"
 
+# 大文件（torch 三件套、FFmpeg 压缩包）统一放这个目录。
+#
+# 存在的意义：torch 的单个 wheel 就有 2.7–3.6 GB，网络不佳时几乎必然下载失败。
+# 所以把"下载"和"安装"解耦成两步 ——
+#   1. 先运行 `python installer.py --download-only`，脚本会把**完整下载 URL**
+#      和**应该存放的文件名**打印出来；
+#   2. 用浏览器 / 迅雷 / aria2 等外部工具下好，放进本目录；
+#   3. 重新运行安装脚本，它会**优先使用已存在的本地文件**，不再联网。
+# 目录名以 "_" 开头，排序时靠前、便于手动找到；已在 .gitignore 中排除。
+DEFAULT_DOWNLOAD_DIR = "_downloads"
+# pip 下载缓存也指到这里，便于统一清理/搬移
+PIP_DL_CACHE_DIR = os.path.join(DEFAULT_DOWNLOAD_DIR, ".pip-cache")
+
 # Python 闸门：whisperx 3.8.6 的 requires_python 是 >=3.10,<3.14。
 # 默认 3.11（与方案一致）。3.12/3.13 也完全可用：Windows 上 av 17/18 的
 # win_amd64 轮子里有 cp311-abi3（稳定 ABI，3.11+ 通用），并不存在"3.12/3.13
@@ -91,20 +106,21 @@ COMPUTE_CAP_RULES = (
 
 # torchcodec 0.7 只支持 FFmpeg 大版本 4–7；8/9 会在导入或解码时失败。
 FFMPEG_MIN_MAJOR, FFMPEG_MAX_MAJOR = 4, 7
-# 项目内 FFmpeg 想要的**分支**（不再用 master/latest —— 那已经是 8.1/9.0，
-# 正好落在 torchcodec 不支持的区间，等于把环境装坏）。
+# 下载时优先选的 BtbN 分支。
 #
-# 为什么不写死下载链接（2026-09 实测）：
-#   * BtbN/FFmpeg-Builds 的长期 tag 只有 `latest`，而且**会被覆盖** —— 实测
-#     `latest` 下已经只剩 8.1/9.0 的资产，7.1 的资产随 autobuild 轮换消失；
-#   * `7.1` / `7.0.2` 这类 tag 从来不存在；
-#   * 带 7.1 资产的 autobuild tag（如 autobuild-2026-07-31-14-10，
-#     ffmpeg-n7.1.5-12-g1fdbca85aa-win64-gpl-7.1.zip）验证可下载，但会被
-#     GitHub 定期清理。
-# 所以改为**运行时查询 GitHub Releases API** 挑一个 7.x 资产，并允许用
-# VIDELINGO_FFMPEG_URL 覆盖（离线/内网场景）。
-FFMPEG_WIN_BRANCH = "7.1"
+# 策略（对应"默认装新版，但环境里已有可用版本就跳过下载"）：
+#   * 安装前先看项目内 ffmpeg/、再看系统 PATH：只要有一份 **大版本 4–7**
+#     的 ffmpeg+ffprobe，就**完全跳过下载**；
+#   * 确实需要下载时，按这个优先序列挑资产 ——
+#       [n8.1, n8.0, n7.1, n7.0, N(master)]
+#     即"尽量给最新版"，但 8.x 只有带 -shared 的构建才含 torchcodec 需要的
+#     FFmpeg 动态库，所以 8.x 挑不到 shared 时会退回 7.1（7.x 的非 shared
+#     构建本身就同时含 exe 与 DLL）。
+FFMPEG_WIN_BRANCHES = ("8.1", "8.0", "7.1", "7.0")
+# 兼容旧名（文档/测试引用）
+FFMPEG_WIN_BRANCH = FFMPEG_WIN_BRANCHES[2]
 FFMPEG_DIR_NAME = "ffmpeg"
+FFMPEG_ZIP_NAME = "ffmpeg-win64.zip"
 FFMPEG_API_LATEST = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases/tags/latest"
 FFMPEG_API_LIST = "https://api.github.com/repos/BtbN/FFmpeg-Builds/releases?per_page=30"
 
@@ -168,13 +184,51 @@ def run(cmd, retries=1, check=True, env=None):
     return result
 
 
-def pip(args, retries=2, check=True):
-    """统一的 pip 调用，带上对国内网络更友好的参数。"""
+def pip(args, retries=2, check=True, cache_dir=None):
+    """统一的 pip 调用，带上对国内网络更友好的参数。
+
+    `cache_dir` 用来把 pip 的下载缓存也收进项目内（默认 requirements 走的
+    是项目内 `.pip-cache`），避免动辄几个 GB 的轮子落到 C 盘用户目录。
+    """
     cmd = [sys.executable, "-m", "pip", "install",
            "--disable-pip-version-check", "--prefer-binary",
            "--retries", "5", "--timeout", "120", *args]
     env = {**os.environ, "PIP_NO_INPUT": "1", "PYTHONIOENCODING": "utf-8"}
+    if cache_dir:
+        env["PIP_CACHE_DIR"] = str(cache_dir)
     return run(cmd, retries=retries, check=check, env=env)
+
+
+def pip_download(requirements, target_dir, retries=2, check=False, cache_dir=None):
+    """把 requirements 里的第三方依赖**下载**到目录（不安装）。
+
+    这一步是"下载与安装分离"的关键：下载阶段只往磁盘写文件，失败了也不影响
+    已经装好的部分；用户可以拿这个目录里的文件做离线安装，或者在中途断网时
+    用外部工具补齐缺的那几个。
+    """
+    cmd = [sys.executable, "-m", "pip", "download",
+           "--disable-pip-version-check", "--prefer-binary",
+           "--retries", "5", "--timeout", "120",
+           "-r", str(requirements), "-d", str(target_dir)]
+    env = {**os.environ, "PIP_NO_INPUT": "1", "PYTHONIOENCODING": "utf-8"}
+    if cache_dir:
+        env["PIP_CACHE_DIR"] = str(cache_dir)
+    return run(cmd, retries=retries, check=check, env=env)
+
+
+def pip_install_local_dir(target_dir, requirements, cache_dir=None):
+    """优先用已下载到 `target_dir` 的轮子安装，缺的再走索引。"""
+    # 1) 只用本地文件装（最快，且完全不联网）
+    result = pip(["-r", str(requirements), "--no-index",
+                  "--find-links", str(target_dir), "--no-cache-dir"],
+                 retries=1, check=False, cache_dir=cache_dir)
+    if result.returncode == 0:
+        return 0
+    # 2) 本地文件不全：退回正常安装（pip 会自己补缺的）
+    info("ℹ️ 本地文件不足以完成安装，改走在线安装（缺的部分由 pip 补下）",
+         style="yellow")
+    return pip(["-r", str(requirements), "--find-links", str(target_dir)],
+               retries=2, check=True, cache_dir=cache_dir).returncode
 
 
 def python_ok(version_info=None):
@@ -197,6 +251,212 @@ def requirements_hash():
             digest.update(path.read_bytes())
     digest.update(f"torch={TORCH_VERSION}".encode())
     return digest.hexdigest()
+
+
+# ---------------------------------------------------------------- 大文件下载目录
+def download_dir_path(directory=None):
+    return Path(directory or DEFAULT_DOWNLOAD_DIR)
+
+
+def ensure_download_dir(directory=None):
+    path = download_dir_path(directory)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def current_python_tag():
+    return f"cp{sys.version_info[0]}{sys.version_info[1]}"
+
+
+def platform_wheel_tag():
+    """本机 wheel 平台标签（只用于拼出"应该下哪个文件"的文件名）。"""
+    if os.name == "nt":
+        return "win_amd64"
+    if sys.platform == "darwin":
+        return "macosx_11_0_arm64" if platform.machine() == "arm64" else "macosx_10_9_x86_64"
+    # Linux：manylinux 的次版本号随构建而变，本地复用只要求前缀能对上
+    return "manylinux"
+
+
+def wheel_names_for(backend):
+    """返回 [(包名, 版本号, 该后端对应的 wheel 文件名), ...]。
+
+    文件名按 PyTorch 官方索引的命名规则拼（`{pkg}-{ver}+{backend}-{cp}-{cp}-{plat}.whl`）。
+    只有**本地复用**时才会去比对文件名，所以即使将来标签变了，也只是"没命中本地文件"，
+    会退回正常联网安装，不会装错东西。
+    """
+    tag, plat = current_python_tag(), platform_wheel_tag()
+    specs = (("torch", TORCH_VERSION), ("torchaudio", TORCH_VERSION),
+             ("torchvision", TORCHVISION_VERSION))
+    return [(pkg, ver, f"{pkg}-{ver}+{backend}-{tag}-{tag}-{plat}.whl")
+            for pkg, ver in specs]
+
+
+def find_local_wheel(directory, filename):
+    """在下载目录里找一个可复用的 wheel。
+
+    命中条件（Windows/macOS 要求文件名精确匹配；Linux 的 manylinux 次版本号
+    不确定，所以放宽为"包名-版本+后端"前缀匹配）。
+    """
+    root = download_dir_path(directory)
+    if not root.is_dir():
+        return None
+    exact = root / filename
+    if exact.is_file() and exact.stat().st_size > 0:
+        return exact
+    if platform_wheel_tag() == "manylinux":
+        prefix = filename.split("-")[0] + "-" + filename.split("-")[1]
+        for candidate in sorted(root.glob(f"{prefix}-*.whl")):
+            if candidate.is_file() and candidate.stat().st_size > 0:
+                return candidate
+    return None
+
+
+def local_wheels_for(backend, directory=None):
+    """返回 {包名: 本地 wheel 路径}，只含**已经存在**的那些。"""
+    found = {}
+    for pkg, _ver, filename in wheel_names_for(backend):
+        path = find_local_wheel(directory, filename)
+        if path is not None:
+            found[pkg] = path
+    return found
+
+
+def torch_download_plan(backend, directory=None):
+    """返回 (已存在清单, 缺失清单)，每项是 (包名, 文件名, 下载 URL)。"""
+    index_url, _label = TORCH_SPECS[backend]
+    have, missing = [], []
+    for pkg, _ver, filename in wheel_names_for(backend):
+        item = (pkg, filename, f"{index_url.rstrip('/')}/{pkg}/{filename}")
+        if find_local_wheel(directory, filename) is not None:
+            have.append(item)
+        else:
+            missing.append(item)
+    return have, missing
+
+
+def index_wheel_info(index_url, pkg, filename):
+    """从 PyTorch 索引页解析出 wheel 的**真实下载地址**（附带 sha256）。
+
+    为什么不自己拼 URL：实测 `download.pytorch.org/whl/...` 的文件直链会返回
+    **403**，索引页里的 href 指向的是 `download-r2.pytorch.org`，那个域名才能
+    直接下载。给用户打印一个打不开的地址等于没帮上忙，所以这里直接读索引页。
+
+    返回 `(url, sha256)`；解析失败返回 `(兜底 url, None)`。
+    """
+    import json as _json
+    from urllib.request import Request, urlopen
+
+    fallback = f"{index_url.rstrip('/')}/{pkg}/{filename}"
+    try:
+        request = Request(f"{index_url.rstrip('/')}/{pkg}/",
+                          headers={"User-Agent": "VideoLingo-installer"})
+        with urlopen(request, timeout=60) as response:
+            html = response.read().decode("utf-8", "replace")
+    except Exception:
+        return fallback, None
+
+    for match in re.finditer(r'href="([^"#]+)(?:#([^"]*))?"[^>]*>([^<]+)</a>', html):
+        href, fragment, text = match.group(1), match.group(2) or "", match.group(3).strip()
+        if text != filename and not href.endswith(filename.replace("+", "%2B")):
+            continue
+        sha = None
+        sha_match = re.search(r"sha256=([0-9a-f]{64})", fragment)
+        if sha_match:
+            sha = sha_match.group(1)
+        else:
+            # 有些索引把 sha256 放在 data-* 属性里
+            tail = html[match.start():match.start() + 1200]
+            attr = re.search(r'data-core-metadata="sha256=([0-9a-f]{64})"', tail)
+            if attr:
+                sha = attr.group(1)
+        return href, sha
+    return fallback, None
+
+
+def _wheel_line(item, directory, with_url=True):
+    """把 (pkg, filename, url) 渲染成几行提示。"""
+    pkg, filename, url = item
+    lines = [f"      · {pkg}", f"        文件名：{filename}"]
+    if with_url:
+        lines.append(f"        下载地址：{url}")
+    return lines
+
+
+def report_torch_download_plan(backend, directory=None, verbose=True, resolve_urls=True):
+    """打印 torch 三件套的下载 URL 与本地复用情况。返回缺失清单。"""
+    root = ensure_download_dir(directory)
+    have, missing = torch_download_plan(backend, directory)
+    if not verbose:
+        return missing
+
+    info(f"📁 大文件目录：[bold cyan]{root}[/bold cyan]")
+    for pkg, filename, _url in have:
+        size = ""
+        path = find_local_wheel(directory, filename)
+        if path is not None:
+            size = f"（{path.stat().st_size / 1024 ** 2:.0f} MB）"
+        info(f"   ♻️ 已有本地文件，将直接使用：{filename} {size}", style="green")
+    if missing:
+        info("   ⬇️ 以下文件不存在，需要下载（单个 2.7–3.6 GB，"
+             "网络不佳时建议用外部工具先下好）：", style="yellow")
+        for item in missing:
+            pkg, filename, url = item
+            if resolve_urls:
+                url, sha256 = index_wheel_info(TORCH_SPECS[backend][0], pkg, filename)
+                item = (pkg, filename, url)
+                for line in _wheel_line(item, root):
+                    info(line, style="cyan" if "下载地址" in line else None)
+                if sha256:
+                    info(f"        sha256：{sha256}", style="bright_black")
+            else:
+                for line in _wheel_line(item, root):
+                    info(line, style="cyan" if "下载地址" in line else None)
+        info(f"      下载完成后放进：{root}", style="yellow")
+    return missing
+
+
+def print_full_download_plan(backend, directory=None):
+    """`--download-only` 的全部内容：torch 三件套 + FFmpeg + 其余依赖。"""
+    root = ensure_download_dir(directory)
+    panel(f"📥 只下载、不安装\n\n所有文件统一放到：[bold cyan]{root}[/bold cyan]\n"
+          f"下好后重新运行安装脚本，它会优先使用这些本地文件。", style="cyan")
+    report_torch_download_plan(backend, directory)
+
+    info("")
+    info("📦 FFmpeg：")
+    bin_dir, source, version = usable_ffmpeg()
+    if bin_dir is not None:
+        info(f"   ♻️ 已有可用的 FFmpeg {_fmt_version(version)}（{source}）：{bin_dir}",
+             style="green")
+        info("   ⏭️ 安装时会跳过 FFmpeg 下载", style="bright_black")
+    else:
+        cached_zip = root / FFMPEG_ZIP_NAME
+        if cached_zip.is_file() and cached_zip.stat().st_size > 0:
+            info(f"   ♻️ 已有压缩包：{cached_zip}"
+                 f"（{cached_zip.stat().st_size / 1024 ** 2:.0f} MB）", style="green")
+        else:
+            url, why = resolve_ffmpeg_url()
+            if url:
+                info("   ⬇️ 未找到可用的 FFmpeg，需要下载：")
+                info(f"        文件名：{FFMPEG_ZIP_NAME}（zip，安装脚本会自动解压到 "
+                     f"./{FFMPEG_DIR_NAME}/）")
+                info(f"        下载地址：{url}", style="cyan")
+                info(f"        说明：{why}", style="bright_black")
+                info(f"        存放位置：{cached_zip}", style="yellow")
+            else:
+                info(f"   ⚠️ 无法解析 FFmpeg 下载地址：{why}", style="yellow")
+                _ffmpeg_manual_hint()
+
+    info("")
+    pkg_dir = root / "python"
+    info(f"ℹ️ 其余第三方依赖（whisperx / pyannote / spacy 等）会由 pip 下载到："
+         f"{pkg_dir}", style="bright_black")
+    info(f"   安装脚本每次都会先 `pip download -r requirements.txt -d {pkg_dir}`，"
+         f"再用这些文件离线安装；", style="bright_black")
+    info(f"   想手工补齐时，在有网的机器上执行同一条命令，把目录整体拷过来即可。",
+         style="bright_black")
+    return 0
 
 
 def state_path():
@@ -323,8 +583,13 @@ def detect_cuda_version():
     return int(match.group(1)), int(match.group(2))
 
 
-def install_torch(backend="auto", dry_run=False):
-    """安装与硬件匹配的 PyTorch 三件套 + torchcodec，返回实际使用的后端。"""
+def install_torch(backend="auto", dry_run=False, download_dir=None):
+    """安装与硬件匹配的 PyTorch 三件套，返回实际使用的后端。
+
+    下载与安装分离：先在 `_downloads/` 里找同名 wheel，找到就直接用本地文件
+    （不联网）；找不到才按官方索引下载。单个 torch wheel 有 2.7–3.6 GB，
+    网络不佳时可以把 URL 拿出去用外部工具下好再放回来。
+    """
     resolved, reason = detect_torch_backend(backend)
     index_url, label = TORCH_SPECS[resolved]
 
@@ -342,22 +607,36 @@ def install_torch(backend="auto", dry_run=False):
         lines.append("   ⚠️ CPU 转录会非常慢，强烈建议使用 NVIDIA GPU")
     panel("\n".join(lines), style="cyan" if resolved != "cpu" else "yellow")
 
-    pkgs = [f"torch=={TORCH_VERSION}", f"torchaudio=={TORCH_VERSION}",
-            f"torchvision=={TORCHVISION_VERSION}"]
-    cmd = [*pkgs, "--index-url", index_url]
-    # 本地 wheel 缓存约定：不写死 cp 标签，按当前解释器推导
-    tag = f"cp{sys.version_info[0]}{sys.version_info[1]}"
-    local_wheel = Path(f"torch-{TORCH_VERSION}+{resolved}-{tag}-{tag}-win_amd64.whl")
-    if (platform.system() == "Windows" and resolved != "cpu" and local_wheel.exists()):
-        info(f"📦 发现本地 wheel，优先使用：{local_wheel.name}", style="green")
-        cmd = [str(local_wheel), f"torchaudio=={TORCH_VERSION}",
-               f"torchvision=={TORCHVISION_VERSION}", "--index-url", index_url]
+    missing = report_torch_download_plan(resolved, download_dir)
+
+    # 组装安装命令：已存在的本地文件直接用文件路径，其余交给索引
+    local = local_wheels_for(resolved, download_dir)
+    targets, from_index = [], []
+    for pkg, ver, filename in wheel_names_for(resolved):
+        local_path = local.get(pkg)
+        if local_path is not None:
+            # 直接用文件路径安装，pip 不会把它当成"另一个 requirement"，
+            # 因此不会出现"本地装一份 + 索引再下一份"的双份下载。
+            targets.append(str(local_path))
+        else:
+            targets.append(f"{pkg}=={ver}")
+            from_index.append(pkg)
 
     if dry_run:
-        info(f"   [dry-run] pip install {' '.join(cmd)}")
+        info(f"   [dry-run] pip install {' '.join(targets)}"
+             + (f" --index-url {index_url}" if from_index else ""))
         return resolved
 
-    pip(cmd, check=True)
+    if not from_index:
+        panel(f"✅ torch 三件套全部使用本地文件（不联网）："
+              f"{len(targets)} 个文件来自 {ensure_download_dir(download_dir)}", style="green")
+    elif len(from_index) < len(targets):
+        info(f"♻️ 本地已有部分轮子，剩余 {', '.join(from_index)} 从官方索引下载",
+             style="yellow")
+
+    # --no-cache-dir：本函数已经从本地文件安装，不需要 pip 再存一份缓存
+    # （否则一次安装会在磁盘上留两份几 GB 的轮子）
+    pip([*targets, "--index-url", index_url, "--no-cache-dir"], check=True)
     return resolved
 
 
@@ -443,6 +722,18 @@ def ffmpeg_major_ok(major):
     return major is not None and FFMPEG_MIN_MAJOR <= major <= FFMPEG_MAX_MAJOR
 
 
+def _ffmpeg_exe_name():
+    return "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+
+
+def _ffprobe_exe_name():
+    return "ffprobe.exe" if os.name == "nt" else "ffprobe"
+
+
+def _fmt_version(version):
+    return ".".join(map(str, version)) if version else "版本未知"
+
+
 def project_ffmpeg_bin():
     """项目内 FFmpeg 的 bin 目录（优先），没有返回 None。"""
     try:
@@ -456,23 +747,55 @@ def project_ffmpeg_bin():
         return None
 
 
-def _pick_ffmpeg_asset(releases):
-    """从 releases 列表里挑一个 7.x 的 win64-gpl 资产，返回 (name, url) 或 None。
+def usable_ffmpeg():
+    """返回 (bin 目录, 来源, ffmpeg 版本) —— 找得到**大版本合规**的一份就返回。
 
-    排除 `-shared`：shared 版只带 avcodec 等 DLL、不带 ffmpeg.exe；非 shared
-    版同时含 exe 与 DLL，一套就够（installer 要 exe，torchcodec 要 DLL）。
+    顺序与"跳过下载"的判断一致：项目内优先，其次系统 PATH。
+    找不到时返回 (None, None, None)。
     """
-    prefix = f"ffmpeg-n{FFMPEG_WIN_BRANCH}"
-    for release in releases or []:
-        for asset in release.get("assets") or []:
+    local = project_ffmpeg_bin()
+    if local is not None:
+        version = ffmpeg_version_of(str(local / _ffmpeg_exe_name()))
+        if ffmpeg_major_ok(version[0] if version else None):
+            return local, "项目内", version
+
+    system = shutil.which("ffmpeg")
+    if system:
+        version = ffmpeg_version_of(system)
+        if ffmpeg_major_ok(version[0] if version else None):
+            return Path(system).resolve().parent, "系统 PATH", version
+
+    return None, None, None
+
+
+def _pick_ffmpeg_asset(releases, branches=None):
+    """从 releases 列表里挑一个 win64-gpl 资产，返回 (name, url) 或 None。
+
+    按 `branches` 给的优先序列（默认 FFMPEG_WIN_BRANCHES，即"尽量新版"）逐个分支找：
+    **先找带 -shared 的**（含 torchcodec 需要的 avcodec 等动态库），找不到再退回
+    非 shared（含 exe；7.x 的非 shared 构建同时带 DLL）。
+    8.x 只有 shared 变体带动态库，所以 8.x 挑不到 shared 时会继续往 7.x 找。
+    """
+    branches = branches or FFMPEG_WIN_BRANCHES
+    assets = [a for r in (releases or []) for a in (r.get("assets") or [])]
+
+    def find(branch, want_shared):
+        prefix = f"ffmpeg-n{branch}"
+        for asset in assets:
             name = asset.get("name") or ""
             if not name.startswith(prefix):
                 continue
             if "win64-gpl" not in name or not name.endswith(".zip"):
                 continue
-            if "-shared" in name:
+            if ("-shared" in name) != want_shared:
                 continue
             return name, asset.get("browser_download_url")
+        return None
+
+    for branch in branches:
+        picked = find(branch, want_shared=True) or find(branch, want_shared=False)
+        if picked:
+            return picked
     return None
 
 
@@ -516,37 +839,56 @@ def resolve_ffmpeg_url():
     return None, "；".join(problems)
 
 
-def download_ffmpeg_windows(target_dir):
-    """把**大版本合规**（7.x）的 FFmpeg 下载到项目内 ffmpeg/ 目录。
+def download_ffmpeg_windows(target_dir, download_dir=None):
+    """把 FFmpeg 下载/解压到项目内 ffmpeg/ 目录。
 
-    原实现下的是 `master-latest`（现已是 8.1/9.0），而 torchcodec 0.7 只支持
-    FFmpeg 4–7 —— 下最新版等于把环境装坏。
+    两处相对原实现的改动：
+      1. **不再下 `master-latest`**（现已是 8.1/9.0，而 torchcodec 0.7 只支持 4–7）；
+         改为按 `FFMPEG_WIN_BRANCHES` 的优先序列挑"最新的合规版"；
+      2. 压缩包**先落在可复用的 `_downloads/ffmpeg-win64.zip`**：网络不佳时可以
+         用外部工具下好直接放进该目录，脚本会跳过联网、直接用这个文件解压
+         （与 torch 轮子是同一套"下载与安装分离"的思路）。
 
-    zip 内通常有一层 `ffmpeg-n7.1.x-.../` 目录，`project_ffmpeg_bin()` 会自动
-    往下一层找 bin，所以解压后无需移动文件。
+    zip 内通常有一层 `ffmpeg-nX.Y.../` 目录，`project_ffmpeg_bin()` 会自动往下
+    一层找 bin，所以解压后无需移动文件。
     """
     import zipfile
     from urllib.request import urlretrieve
 
     target_dir = Path(target_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir = ensure_download_dir(download_dir)
+    cached_zip = cache_dir / FFMPEG_ZIP_NAME
 
-    url, why = resolve_ffmpeg_url()
-    if not url:
-        info(f"❌ 无法确定 FFmpeg 下载地址（{why}）", style="red")
-        _ffmpeg_manual_hint()
-        return None
+    # 先看有没有已经下好的压缩包（外部工具下载的情况）
+    if cached_zip.is_file() and cached_zip.stat().st_size > 0:
+        info(f"♻️ 使用已下载的 FFmpeg 压缩包：{cached_zip}"
+             f"（{cached_zip.stat().st_size / 1024 ** 2:.0f} MB）", style="green")
+    else:
+        url, why = resolve_ffmpeg_url()
+        if not url:
+            info(f"❌ 无法确定 FFmpeg 下载地址（{why}）", style="red")
+            _ffmpeg_manual_hint()
+            return None
+        info(f"🚀 正在下载 FFmpeg（{why}）")
+        info(f"   文件名：{cached_zip}")
+        info(f"   下载地址：{url}", style="cyan")
+        try:
+            urlretrieve(url, cached_zip)
+        except Exception as e:
+            info(f"❌ 下载 FFmpeg 失败：{e}", style="red")
+            info(f"   你可以用外部工具下载上面的地址，保存为 {cached_zip}，"
+                 f"然后重新运行安装脚本。", style="yellow")
+            _ffmpeg_manual_hint()
+            return None
 
-    info(f"🚀 正在下载 FFmpeg {FFMPEG_WIN_BRANCH}（{why}）")
-    info(f"   {url}", style="bright_black")
-    zip_path = target_dir / "ffmpeg.zip"
     try:
-        urlretrieve(url, zip_path)
-        with zipfile.ZipFile(zip_path, "r") as zf:
+        with zipfile.ZipFile(cached_zip, "r") as zf:
             zf.extractall(target_dir)
-        os.remove(zip_path)
     except Exception as e:
-        info(f"❌ 下载或解压 FFmpeg 失败：{e}", style="red")
+        info(f"❌ 解压 FFmpeg 失败：{e}", style="red")
+        info(f"   若压缩包是外部工具下的，可能不完整；删掉 {cached_zip} 重试。",
+             style="yellow")
         _ffmpeg_manual_hint()
         return None
 
@@ -555,60 +897,70 @@ def download_ffmpeg_windows(target_dir):
         info("❌ FFmpeg 解压后未找到可执行文件", style="red")
         _ffmpeg_manual_hint()
         return None
-    info(f"✅ FFmpeg 已就位：{found}", style="green")
+    version = ffmpeg_version_of(str(found / _ffmpeg_exe_name()))
+    if not ffmpeg_major_ok(version[0] if version else None):
+        info(f"⚠️ 解压得到的 FFmpeg 大版本不合规（{_fmt_version(version)}），"
+             f"需要 {FFMPEG_MIN_MAJOR}–{FFMPEG_MAX_MAJOR}", style="yellow")
+        _ffmpeg_manual_hint()
+        return None
+    info(f"✅ FFmpeg {_fmt_version(version)} 已就位：{found}", style="green")
     return found
 
 
 def _ffmpeg_manual_hint():
     info(f"   手动方案：下载 FFmpeg {FFMPEG_MIN_MAJOR}–{FFMPEG_MAX_MAJOR} 的 Windows "
          f"构建（https://github.com/BtbN/FFmpeg-Builds/releases 或 "
-         f"https://www.gyan.dev/ffmpeg/builds/），把 ffmpeg.exe / ffprobe.exe 放进 "
-         f"./{FFMPEG_DIR_NAME}/bin/ 即可 —— 本项目运行期会自动接入该目录，"
-         f"不需要改 PATH。", style="yellow")
+         f"https://www.gyan.dev/ffmpeg/builds/），两种用法都行：\n"
+         f"     · 把压缩包存成 {download_dir_path() / FFMPEG_ZIP_NAME}，重跑安装脚本；\n"
+         f"     · 或直接解压，把 ffmpeg.exe / ffprobe.exe 放进 "
+         f"./{FFMPEG_DIR_NAME}/bin/。\n"
+         f"   本项目运行期会自动接入该目录，不需要改 PATH。", style="yellow")
 
 
-def ensure_ffmpeg(dry_run=False):
-    """确保有一份**大版本合规**的 ffmpeg/ffprobe。返回 (ok, 是否需重启终端)。"""
-    # 1) 项目内固定版优先
+def ensure_ffmpeg(dry_run=False, download_dir=None):
+    """确保有一份**大版本合规**的 ffmpeg/ffprobe。返回 (ok, 是否需重启终端)。
+
+    策略（对应"默认装新版，但已有可用版本就跳过下载"）：
+      1. 项目内 `./ffmpeg/` 里已有合规版本 → **直接跳过下载**；
+      2. 系统 PATH 上有合规版本 → **同样跳过下载**（不重复占磁盘）；
+      3. 都没有才去下载（Windows 优先 8.x shared，退而 7.1），
+         压缩包先落在 `_downloads/`，解压到 `./ffmpeg/`。
+    """
+    # 1) / 2) 已有的可用版本
+    bin_dir, source, version = usable_ffmpeg()
+    if bin_dir is not None:
+        info(f"✅ 已找到可用的 FFmpeg {_fmt_version(version)}（{source}）：{bin_dir}",
+             style="green")
+        info("   ⏭️ 跳过 FFmpeg 下载", style="bright_black")
+        return True, False
+
+    # 有大版本不合规的，要说清楚为什么不能用
     local = project_ffmpeg_bin()
     if local is not None:
-        version = ffmpeg_version_of(str(local / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")))
-        if version and ffmpeg_major_ok(version[0]):
-            info(f"✅ 使用项目内 FFmpeg {version[0]}.{version[1]}.{version[2]}：{local}",
-                 style="green")
-            return True, False
-        info(f"⚠️ 项目内 FFmpeg 大版本不受支持（{version}），将重新获取", style="yellow")
-
-    # 2) 系统 PATH
+        info(f"⚠️ 项目内 FFmpeg 大版本不合规（{_fmt_version(ffmpeg_version_of(str(local / _ffmpeg_exe_name())))}），"
+             f"需要 {FFMPEG_MIN_MAJOR}–{FFMPEG_MAX_MAJOR}", style="yellow")
     system_ffmpeg = shutil.which("ffmpeg")
-    system_ffprobe = shutil.which("ffprobe")
-    if system_ffmpeg and system_ffprobe:
-        version = ffmpeg_version_of(system_ffmpeg)
-        if ffmpeg_major_ok(version[0] if version else None):
-            info(f"✅ 使用系统 FFmpeg {'.'.join(map(str, version))}：{system_ffmpeg}",
-                 style="green")
-            return True, False
-        shown = ".".join(map(str, version)) if version else "无法识别版本"
-        panel(f"⚠️ 系统 FFmpeg 大版本不受支持（{shown}）。\n"
+    if system_ffmpeg:
+        panel(f"⚠️ 系统 FFmpeg 大版本不合规"
+              f"（{_fmt_version(ffmpeg_version_of(system_ffmpeg))}）。\n"
               f"torchcodec 0.7 只支持 FFmpeg {FFMPEG_MIN_MAJOR}–{FFMPEG_MAX_MAJOR}，"
               f"8/9 会在解码时失败。", style="yellow")
 
-    # 3) 自动补齐
+    # 3) 下载
     system = platform.system()
     if system == "Windows":
         if dry_run:
             url, why = resolve_ffmpeg_url()
-            info(f"   [dry-run] 将下载 FFmpeg {FFMPEG_WIN_BRANCH} 到 "
-                 f"./{FFMPEG_DIR_NAME}/（{why}）")
+            info(f"   [dry-run] 将下载 FFmpeg 到 ./{FFMPEG_DIR_NAME}/（{why}）")
             if url:
                 info(f"   [dry-run] {url}")
             else:
                 info("   [dry-run] ⚠️ 解析下载地址失败，真实运行时会给出手动方案",
                      style="yellow")
-            return True, True
-        panel(f"⬇️ 未找到合规的 FFmpeg，下载 7.x 分支到项目内 "
-              f"./{FFMPEG_DIR_NAME}/ …", style="yellow")
-        if download_ffmpeg_windows(FFMPEG_DIR_NAME):
+            return True, False
+        panel(f"⬇️ 未找到可用的 FFmpeg，下载最新合规版到项目内 ./{FFMPEG_DIR_NAME}/ …",
+              style="yellow")
+        if download_ffmpeg_windows(FFMPEG_DIR_NAME, download_dir):
             panel("✅ FFmpeg 安装完成；本项目会在运行期自动接入该目录。", style="green")
             return True, False
         panel("❌ 自动安装失败，请按上面的手动方案放好 ffmpeg.exe / ffprobe.exe。",
@@ -834,6 +1186,11 @@ def build_parser():
                         help="PyTorch 轮子来源；auto=按显卡算力自动选择（默认）")
     parser.add_argument("--python", default=None,
                         help="用指定的解释器安装/体检（如 .venv\\Scripts\\python.exe 或 3.11）")
+    parser.add_argument("--download-dir", default=None,
+                        help=f"大文件（torch 轮子、FFmpeg 压缩包）存放目录，"
+                             f"默认 ./{DEFAULT_DOWNLOAD_DIR}")
+    parser.add_argument("--download-only", action="store_true",
+                        help="只打印大文件的下载地址清单后退出（用外部工具下好后重跑即可）")
     # 故意不提供 --yes：本脚本全程非交互（不提问、不确认），没有需要"跳过"的环节
     parser.add_argument("--force", action="store_true", help="忽略安装状态，强制重装")
     parser.add_argument("--auto-mirror", action="store_true",
@@ -874,14 +1231,21 @@ def main(argv=None):
     if args.check:
         return 1 if health_check(quiet=args.quiet, smoke=args.smoke) else 0
 
+    if args.download_only:
+        backend, _reason = detect_torch_backend(args.torch_backend)
+        return print_full_download_plan(backend, args.download_dir)
+
     if args.dry_run:
         backend, reason = detect_torch_backend(args.torch_backend)
         index_url, label = TORCH_SPECS[backend]
         panel(f"🧪 干跑：不做任何改动\n"
               f"Python：{sys.version.split()[0]}（{sys.executable}）\n"
               f"torch 后端：{backend} —— {label}\n依据：{reason}", style="cyan")
-        install_torch(args.torch_backend, dry_run=True)
-        info(f"   [dry-run] pip install -r requirements.txt")
+        install_torch(args.torch_backend, dry_run=True, download_dir=args.download_dir)
+        info(f"   [dry-run] pip download -r requirements.txt -d "
+             f"{ensure_download_dir(args.download_dir) / 'python'}")
+        info(f"   [dry-run] pip install -r requirements.txt "
+             f"--no-index --find-links {ensure_download_dir(args.download_dir) / 'python'}")
         ensure_ffmpeg(dry_run=True)
         return 0
 
@@ -889,7 +1253,8 @@ def main(argv=None):
     try:
         import rich  # noqa: F401
     except ImportError:
-        pip(["requests", "rich", "ruamel.yaml"], retries=2, check=False)
+        pip(["requests", "rich", "ruamel.yaml"], retries=2, check=False,
+            cache_dir=PIP_DL_CACHE_DIR)
 
     info(r"""
 __     ___     _            _     _
@@ -909,8 +1274,8 @@ __     ___     _            _     _
               f"{PYTHON_RECOMMENDED[0]}.{PYTHON_RECOMMENDED[1]}", style="red")
         return 1
 
-    # FFmpeg 是硬依赖（且大版本会影响 torchcodec），先确认再装一堆东西
-    ffmpeg_ok, needs_restart = ensure_ffmpeg()
+    # FFmpeg 是硬依赖（且大版本会影响 torchcodec）；已有可用版本时会跳过下载
+    ffmpeg_ok, needs_restart = ensure_ffmpeg(download_dir=args.download_dir)
     if not ffmpeg_ok:
         return 1
     if needs_restart:
@@ -928,9 +1293,13 @@ __     ___     _            _     _
               "（需要强制重装请加 --force）", style="green")
         backend = state.get("torch_backend", args.torch_backend)
     else:
-        backend = install_torch(args.torch_backend)
+        backend = install_torch(args.torch_backend, download_dir=args.download_dir)
         info("📦 安装 requirements.txt ...")
-        pip(["-r", "requirements.txt"], retries=2, check=True)
+        # 先下载到项目内目录，再优先用这些文件安装 —— 下载与安装分离，
+        # 断了可以重来，也能把目录拷到别的机器上离线装。
+        pkg_dir = ensure_download_dir(args.download_dir) / "python"
+        pip_download("requirements.txt", pkg_dir, cache_dir=PIP_DL_CACHE_DIR)
+        pip_install_local_dir(pkg_dir, "requirements.txt", cache_dir=PIP_DL_CACHE_DIR)
         write_state(backend)
 
     if platform.system() == "Linux":
