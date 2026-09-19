@@ -15,7 +15,8 @@ import time
 import gc
 import numpy as np
 
-from core.config_utils import load_key
+from core.config_utils import load_key, load_key_or
+from core.all_whisper_methods import transcription_cache
 from core.all_whisper_methods.demucs_vl import demucs_main, RAW_AUDIO_FILE, VOCAL_AUDIO_FILE
 from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, CLEANED_CHUNKS_EXCEL_PATH, RAW_AUDIO_WAV_FILE
 from core.step1_ytdlp import find_video_files
@@ -361,13 +362,61 @@ def enhance_vocals(vocals_ratio=2.50, asr_engine="whisper"):
         else:
             return VOCAL_AUDIO_FILE  # Fallback to original vocals if enhancement fails
     
+def _asr_cache_settings() -> Dict:
+    """构造参与转录缓存身份的 ASR 设置。
+
+    只放"会实质改变识别结果"的东西：引擎、模型、识别语言、是否人声分离，
+    以及火山侧那一组会影响输出的参数。不含密钥、文件名与翻译设置。
+    """
+    whisper = load_key("whisper")
+    settings = {
+        "asr_engine": load_key("asr_engine"),
+        "model": whisper.get("model") if isinstance(whisper, dict) else None,
+        "language": whisper.get("language") if isinstance(whisper, dict) else None,
+        "demucs": bool(load_key("demucs")),
+    }
+    if settings["asr_engine"] == "volcano":
+        volcano = load_key("volcano_asr") or {}
+        if isinstance(volcano, dict):
+            settings["volcano"] = {
+                key: volcano.get(key) for key in (
+                    "resource_id", "language", "enable_punc", "enable_itn",
+                    "enable_ddc", "enable_speaker_info", "show_utterances",
+                    "enable_channel_split", "vad_segment", "model_version",
+                )
+            }
+    return settings
+
+
 def transcribe():
     if os.path.exists(CLEANED_CHUNKS_EXCEL_PATH):
         rprint("[yellow]⚠️ Transcription results already exist, skipping transcription step.[/yellow]")
         return
-    
+
     # step0 Convert video to audio
     video_file = find_video_files()
+
+    # 内容寻址缓存：命中"完整结果"时连 Demucs 人声分离都一起跳过。
+    # 这是 dev 相对上游能多省一步的地方 —— dev 没有配音链路消费 vocal.mp3，
+    # 所以缓存命中时根本不需要生成它。
+    cache_enabled = load_key_or("whisper.cache", True)
+    cache_key = None
+    if cache_enabled:
+        try:
+            cache_key = transcription_cache.cache_key(video_file, _asr_cache_settings())
+        except OSError as e:
+            rprint(f"[yellow]⚠️ 计算转录缓存键失败，本次不启用缓存: {e}[/yellow]")
+            cache_key = None
+
+    if cache_key:
+        cached = transcription_cache.read_result(cache_key, "complete")
+        if cached:
+            rprint("[green]♻️ 命中转录缓存：跳过音频分离与识别，直接复用结果[/green]")
+            save_language(cached.get('language'))
+            df = process_transcription({'segments': cached['result']['segments']})
+            save_results(df)
+            return
+
     convert_video_to_audio(video_file)
 
     # step1 Demucs vocal separation:
@@ -407,14 +456,34 @@ def transcribe():
         else:
             audio_file_for_transcription = whisper_audio
 
+        # 分段级缓存：长视频中途失败/被中断时，重跑只需补缺失的段
+        part = f"{start:.2f}_{end:.2f}"
+        if cache_key:
+            cached_part = transcription_cache.read_result(cache_key, part)
+            if cached_part:
+                rprint(f"[cyan]♻️ 复用缓存分段 {part}[/cyan]")
+                all_results.append(cached_part['result'])
+                continue
+
         result = transcribe_audio(audio_file_for_transcription, start, end)
+        if cache_key:
+            transcription_cache.write_result(
+                cache_key, part, result, result.get('language')
+            )
         all_results.append(result)
     
     # step5 Combine results
     combined_result = {'segments': []}
     for result in all_results:
         combined_result['segments'].extend(result['segments'])
-    
+
+    # 写"完整结果"条目。语言取各分段里第一个非空值。
+    if cache_key:
+        language = next(
+            (r.get('language') for r in all_results if r.get('language')), None
+        )
+        transcription_cache.write_result(cache_key, "complete", combined_result, language)
+
     # step6 Process df
     df = process_transcription(combined_result)
     save_results(df)

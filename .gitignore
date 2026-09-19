@@ -154,6 +154,9 @@ cython_debug/
 /output/
 /history/
 _model_cache/
+# 转录内容寻址缓存（core/all_whisper_methods/transcription_cache.py）。
+# 故意放在 output/ 之外，这样归档/清理 output 不会让它失效。
+/.cache/
 
 batch/input/
 batch/output/
