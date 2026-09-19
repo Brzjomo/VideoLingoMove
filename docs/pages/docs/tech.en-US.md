@@ -1,68 +1,101 @@
-**Videolingo Video Translation System Technical Documentation**
+**VideoLingo Video Translation System — Technical Documentation**
 
-Videolingo is a highly integrated video translation system capable of automating a series of complex operations including video downloading, audio extraction, speech recognition, subtitle generation, text translation, and audio-video synthesis. The system also provides a web interface for task management and system configuration.
+VideoLingo is a video translation / subtitle localisation tool. It automates video download, audio extraction, speech recognition, sentence segmentation, terminology extraction and translation, subtitle timeline generation, and finally burning the subtitles into the video. It also ships a web interface for task management and configuration.
 
-For developers, each `step__.py` file under the `core` directory can be executed individually, and the output of each step can be checked under the `output` directory.
+> ⚠️ **The dubbing (TTS) pipeline has been removed.** Earlier versions supported Fish / OpenAI / Azure / Edge /
+> SiliconFlow / GPT-SoVITS voice engines. All of that code (`core/tts_*`, `core/step8_*`…`core/step12_*`) is gone,
+> and the project now **only produces subtitle files**.
 
-The following are the core technical modules and workflow of the system:
+For developers, each `step*_*.py` file under `core/` can be executed individually, and the artefacts of each step can be inspected under `output/`.
 
-1. **Video Acquisition Module**:
-   - `core/step1_ytdlp.py`: Integrates the `yt-dlp` library to efficiently download videos from specified URLs and clean up filenames.
+## Tech stack
 
-2. **Audio Processing and Speech Recognition Module**:
-   - `core/all_whisper_methods/whisperX.py`: Uses local WhisperX model for transcription.
-   - `core/all_whisper_methods/whisperXapi.py`: Uses replicate's WhisperX model for transcription.
-   - `core/step2_whisper.py`: Utilizes the Whisper model for high-precision speech recognition, generating text transcripts with timestamps.
+| Layer | Choice |
+| --- | --- |
+| Runtime | Python 3.10–3.13 (3.11 recommended), project-local `.venv` created by uv |
+| ASR | WhisperX 3.8 + faster-whisper (local), or Volcengine large-model ASR (cloud) |
+| NLP | spaCy 3.8 (multilingual models) |
+| LLM | any OpenAI-compatible endpoint (translation / splitting / terminology) |
+| Media | FFmpeg 4–7 (**shared build**) + torchcodec |
+| Web | Streamlit ≥1.49 |
 
-3. **Text Processing and Translation Module**:
-   - `core/step3_1_spacy_split.py`: Applies SpaCy natural language processing tools for initial text segmentation.
-   - `core/step3_2_splitbymeaning.py`: Combines GPT model's semantic understanding capability for more precise segmentation of long sentences.
-   - `core/step4_1_summarize.py`: Uses GPT model to intelligently summarize video content and extract key terms.
-   - `core/step4_2_translate_all.py`: Implements batch processing of subtitle text translation.
-   - `core/translate_once.py`: Adopts a three-step translation method (literal translation, free translation, and polishing) to achieve high-quality English to Chinese sentence-by-sentence translation.
+## Core modules
 
-4. **Subtitle Processing and Synthesis Module**:
-   - `core/step5_splitforsub.py`: Performs precise segmentation and time alignment of translated text according to subtitle format specifications.
-   - `core/step6_generate_final_timeline.py`: Generates standard SRT format subtitle files with accurate timeline information.
-   - `core/step7_merge_sub_to_vid.py`: Achieves seamless integration of subtitles with video using ffmpeg for processing.
+1. **Video acquisition and audio extraction**
+   - `core/step1_ytdlp.py`: downloads with `yt-dlp` (cookies / proxy supported), sanitises filenames, probes duration
+     with `ffprobe`. Audio input is tracked via an `output/input_manifest.json` manifest instead of being wrapped
+     into `black_screen.mp4`.
+   - `core/all_whisper_methods/whisperX_utils.py`: audio extraction/compression (`convert_video_to_audio()`,
+     `compress_audio()`) and `split_audio()` segmentation.
 
-5. **Audio Processing and Dubbing Module**:
-   - `core/step8_gen_audio_task.py`: Generates audio tasks, processing subtitles to ensure time consistency.
-   - `core/step10_gen_audio.py`: Generates audio files from text and adjusts speech rate according to timing.
-   - `core/step11_merge_audio_to_vid.py`: Performs professional-level synthesis of generated dubbing audio with video.
-   - `core/delete_retry_dubbing.py`: Deletes unnecessary audio files to clean up excess files generated during the process.
+2. **Speech recognition**
+   - `core/step2_whisperX.py`: ASR orchestration with two engines:
+     - local WhisperX (`transcribe_with_whisper()`, faster-whisper backend)
+     - Volcengine large-model ASR (`transcribe_with_volcano()`, async submit/query + TOS object storage)
+     - both normalised into WhisperX-style `{"segments": [...]}`; supports Demucs vocal separation and
+       loudness normalisation based on measured levels.
+   - `core/all_whisper_methods/transcription_cache.py`: **content-addressed** transcription cache
+     (media content + ASR settings + package versions). A `complete` hit skips separation *and* recognition.
+   - `core/all_whisper_methods/volcano_asr.py`, `tos_service.py`: Volcengine client and TOS upload/cleanup (singleton).
+   - `core/all_whisper_methods/demucs_vl.py`: Demucs vocal/accompaniment separation.
 
-6. **Natural Language Processing Toolkit**:
-   - `core/ask_gpt.py`: Encapsulates a standardized interface for interacting with GPT models, used for various text generation and analysis tasks.
-   - `core/prompts_storage.py`: Centrally manages optimized prompt templates for different tasks.
-   - `core/spacy_utils/`: Encapsulates advanced text processing functions based on SpaCy, such as sentence segmentation.
-     - `split_by_connector.py`: Splits text sentences based on connectors to improve readability.
-     - `split_by_comma.py`: Splits text processing based on commas and colons.
-     - `split_long_by_root.py`: Splits long sentences by sentence root nodes to enhance text readability.
-     - `split_by_mark.py`: Uses punctuation marks for sentence splitting in text.
-     - `load_nlp_model.py`: Loads and initializes required NLP models, supporting multiple languages.
+3. **Text processing and translation**
+   - `core/step3_1_spacy_split.py`: initial spaCy sentence splitting.
+   - `core/step3_2_splitbymeaning.py`: LLM-based semantic re-splitting (dual-candidate CoT); in
+     transcription-only mode the whole stage can be disabled via the `llm_sentence_split` toggle, falling back to
+     mechanical punctuation splitting.
+   - `core/step4_1_summarize.py`: summarises the content and extracts a terminology table.
+   - `core/step4_2_translate_all.py`: concurrent batch translation with caching and back-filling.
+   - `core/translate_once.py`: single translation pass (literal → reflect → free, a three-step method).
+   - `core/subtitle_trim.py`, `core/estimate_duration.py`: estimate reading time and compress over-long translations.
 
-7. **Text-to-Speech (TTS) Module**:
-   - `core/all_tts_functions/fish_tts.py`: Implements text-to-speech functionality using external APIs to generate audio files.
-   - `core/all_tts_functions/openai_tts.py`: Uses OpenAI's TTS service to convert text to audio and save it.
-   - `core/all_tts_functions/gpt_sovits_tts.py`: Uses GPT-SoVITS for text-to-speech conversion, supporting multiple languages.
-   - `core/all_tts_functions/azure_tts.py`: Utilizes Azure Speech Service to convert text to audio, saving in WAV format.
+4. **Subtitle splitting, timeline and final render**
+   - `core/step5_splitforsub.py`: splits subtitles to the Netflix single-line length rule and aligns
+     word-level to sentence-level inside each cue.
+   - `core/step6_generate_final_timeline.py`: emits `src.srt` / `trans.srt` / `src_trans.srt` / `trans_src.srt`.
+   - `core/step7_merge_sub_to_vid.py`: burns hard subtitles with ffmpeg (`h264_nvenc` when available);
+     `resolution: '0x0'` skips burning, and audio-only input is copied verbatim to `output_sub.mp4`.
+   - `core/json_to_subtitle.py`, `core/onekeycleanup.py`: SRT helpers and artefact archiving/cleanup.
 
-8. **System Configuration and Utility Module**:
-   - `config.yaml`: Centrally stores and manages global parameter configurations for the system.
-   - `install.py`: Automates the installation and configuration process of system dependencies and models.
-   - `onekeycleanup.py`: Provides one-click intermediate file cleanup functionality to optimize system storage space.
-   - `core/config_utils.py`: Reads and updates YAML configuration files, ensuring thread-safe read and write operations.
+5. **LLM layer**
+   - `core/ask_gpt.py`: unified OpenAI-compatible call wrapper (base_url normalisation, timeouts, retries,
+     `output/gpt_log/` cache and token accounting).
+   - `core/prompts_storage.py`: central prompt templates.
+   - `core/config_utils.py`: thread-safe YAML config access, env-var overrides (`VIDEOLINGO_<KEY>`),
+     and a single source-language resolution entry point.
 
-9. **Batch Processing Module**:
-   - `batch/utils/batch_processor.py`: Batch processes video tasks, managing video processing workflows through Excel configuration.
-   - `batch/utils/video_processor.py`: Implements video downloading, transcription, sentence segmentation, translation, and synthesis of videos with subtitles.
-   - `batch/utils/settings_check.py`: Checks the consistency of input files and configurations to ensure the correctness of video processing settings.
+6. **NLP toolkit**
+   - `core/spacy_utils/`
+     - `split_by_connector.py`: split on connectors.
+     - `split_by_comma.py`: split on commas/colons.
+     - `split_long_by_root.py`: split over-long sentences at the root node.
+     - `split_by_mark.py`: split on punctuation.
+     - `load_nlp_model.py`: load and initialise spaCy models per language.
 
-10. **Streamlit Interface Module**:
-    - `st.py`: An interactive web application built on the Streamlit framework, integrating various processing modules seamlessly.
-    - `st_components/download_video_section.py`: Provides two video acquisition methods: YouTube link downloading and local file uploading.
-    - `st_components/imports_and_utils.py`: Encapsulates common utility functions for interface components.
-    - `st_components/sidebar_setting.py`: Implements a sidebar-based system settings interface, providing intuitive configuration management.
+7. **Web interface**
+   - `st.py`: the Streamlit app; `build_task_steps()` assembles the step list and `TaskRunner` executes it on a
+     background thread with pause/resume/stop and live progress.
+   - `st_components/task_runner.py`: background executor and cancellation checkpoints.
+   - `st_components/download_video_section.py`: YouTube download and local upload (idempotent).
+   - `st_components/sidebar_setting.py`: sidebar settings (API presets, ASR engine, Volcengine params, TOS, resolution…).
+   - `st_components/imports_and_utils.py`: shared UI helpers (subtitle zipping, default-subtitle selection).
 
-The Videolingo system achieves full-process automation from video downloading to the final generation of videos with translated subtitles and dubbing through the collaborative work of these modules. The modular design of the system allows each step to be run and debugged independently, while also providing convenience for future functional expansions.
+8. **Batch mode**
+   - `batch/utils/batch_processor.py`: batch processing driven by an Excel task table.
+   - `batch/utils/video_processor.py`: the per-video flow download → transcribe → split → translate → burn → archive.
+   - `batch/utils/batch_paths.py`: batch path helpers (auto-creates `batch/input`).
+   - `batch/tasks_setting-template.xlsx`: task-table template (`Video File / Source Language / Target Language / Status`).
+   - `AudioExtract/`: standalone batch audio-extraction tool.
+
+9. **Install, health-check and cleanup**
+   - `Install.bat` → `setup_env.py` → `installer.py`: one-click install (uv creates the project-local `.venv`,
+     picks the torch CUDA backend from GPU compute capability, installs FFmpeg, runs a health check).
+   - `launch.py`: pre-flight checks (key packages / ffmpeg / port) and writes run logs to `logs/`.
+   - `cleanup.py` (`Cleanup.bat`): inventories and cleans old conda environments and scattered model caches.
+   - `runtime_libraries.py`: wires the project-local FFmpeg DLL directory and PATH **before** torchcodec is imported.
+   - `requirements.txt`: dependency pins; `config.yaml` (local, untracked) plus `config.example.yaml` (template) hold config.
+   - `tests/`: standard-library `unittest` regression suite (9 files / 174 tests).
+
+Through these modules VideoLingo automates the path from a video URL to a finished video with translated subtitles.
+The modular design lets every step run and be debugged independently, and makes it easy to swap one link in the
+chain — adding a new ASR engine, for example.

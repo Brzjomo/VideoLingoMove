@@ -17,13 +17,17 @@ Key features:
 
 - **✅ Netflix-standard single-line subtitles only**
 
-- **🗣️ Dubbing alignment with GPT-SoVITS and other methods**
+- 🚀 One-click installation, then output in Streamlit
 
-- 🚀 One-click startup and output in Streamlit
+- 📝 Detailed logging with pause/stop and progress resumption
 
-- 📝 Detailed logging with progress resumption
+- ♻️ Content-addressed transcription cache — skips even vocal separation when the media and ASR settings are unchanged
 
-Difference from similar projects: **Single-line subtitles only, superior translation quality, seamless dubbing experience**
+> ⚠️ **The dubbing feature has been removed.** Earlier versions supported GPT-SoVITS / Fish / Azure / OpenAI / Edge
+> voice engines. That whole pipeline is gone, and the project now **only produces subtitle files**
+> (`src.srt` / `trans.srt` / bilingual subtitles / `<video name>.srt`).
+
+Difference from similar projects: **Single-line subtitles only, superior translation quality, terminology-consistent contextual translation**
 
 ## 🎥 Demo
 
@@ -38,9 +42,9 @@ https://github.com/user-attachments/assets/25264b5b-6931-4d39-948c-5a1e4ce42fa7
 </td>
 <td width="50%">
 
-### GPT-SoVITS Dubbing
+### French Translation
 ---
-https://github.com/user-attachments/assets/47d965b2-b4ab-4a0b-9d08-b49a7bf3508c
+https://github.com/user-attachments/assets/3ce068c7-9854-4c72-ae77-f2484c7c6630
 
 </td>
 </tr>
@@ -54,7 +58,7 @@ https://github.com/user-attachments/assets/47d965b2-b4ab-4a0b-9d08-b49a7bf3508c
 
 > *Chinese uses a separate punctuation-enhanced whisper model, for now...
 
-**Translation supports all languages, while dubbing language depends on the chosen TTS method.**
+**Translation supports all languages.**
 
 ## Installation
 
@@ -119,9 +123,11 @@ Or manually:
 ```
 
 ## API
-The project supports OpenAI-Like API format and various dubbing interfaces:
+The project needs just one **OpenAI-compatible** LLM endpoint:
 - `claude-3-5-sonnet-20240620`, `gemini-1.5-pro-002`, `gpt-4o`, `qwen2.5-72b-instruct`, `deepseek-coder`, ... (sorted by performance)
-- `azure-tts`, `openai-tts`, `siliconflow-fishtts`, `fish-tts`, `GPT-SoVITS`
+
+> Earlier versions also supported several dubbing interfaces (`azure-tts` / `openai-tts` / `siliconflow-fishtts` /
+> `fish-tts` / `GPT-SoVITS`). Those were removed together with the dubbing pipeline, so no TTS key is needed.
 
 For detailed installation, API configuration, and batch mode instructions, please refer to the documentation: [English](/docs/pages/docs/start.en-US.md) | [中文](/docs/pages/docs/start.zh-CN.md)
 
@@ -131,11 +137,9 @@ For detailed installation, API configuration, and batch mode instructions, pleas
 
 2. Using weaker models can lead to errors during intermediate processes due to strict JSON format requirements for responses. If this error occurs, please delete the `output` folder and retry with a different LLM, otherwise repeated execution will read the previous erroneous response causing the same error.
 
-3. The dubbing feature may not be 100% perfect due to differences in speech rates and intonation between languages, as well as the impact of the translation step. However, this project has implemented extensive engineering processing for speech rates to ensure the best possible dubbing results.
+3. **Multilingual video transcription recognition will only retain the main language**. This is because whisperX uses a specialized model for a single language when forcibly aligning word-level subtitles, and will delete unrecognized languages.
 
-4. **Multilingual video transcription recognition will only retain the main language**. This is because whisperX uses a specialized model for a single language when forcibly aligning word-level subtitles, and will delete unrecognized languages.
-
-5. **Cannot dub multiple characters separately**, as whisperX's speaker distinction capability is not sufficiently reliable.
+4. Subtitle splitting and alignment depend on spaCy models and word-level timestamps, so in rare cases a whole sentence fails to align and falls back with a warning. Set `subtitle.align_on_mismatch` to `strict` to make it fail loudly instead of falling back.
 
 ## 📄 License
 

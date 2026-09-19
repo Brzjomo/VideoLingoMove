@@ -1,68 +1,91 @@
-**Videolingo 视频翻译系统技术文档**
+**VideoLingo 视频翻译系统技术文档**
 
-Videolingo 是一个高度集成的视频翻译系统，能够自动化执行视频下载、音频提取、语音识别、字幕生成、文本翻译，以及音视频合成等一系列复杂操作。该系统还提供了一个 Web 界面，用于任务管理和系统配置。
+VideoLingo 是一个视频翻译 / 字幕本地化工具：自动完成视频下载、音频提取、语音识别、句子切分、术语提取与翻译、字幕时间轴生成，最后可选地把字幕压制进视频。它也提供 Web 界面用于任务管理与系统配置。
 
-对于开发人员，可以单步执行 `core` 下的每一个 `step__.py` 文件并在 `output` 下检查每一步的输出。
+> ⚠️ **配音（TTS）链路已移除。** 早期版本支持 Fish / OpenAI / Azure / Edge / SiliconFlow / GPT-SoVITS 等配音引擎，
+> 现在 `core/tts_*`、`core/step8_*`~`core/step12_*` 与全部 TTS 相关代码已删除，本项目**只产出字幕文件**。
 
-以下是系统的核心技术模块和工作流程：
+对于开发人员，可以单步执行 `core` 下的每一个 `step*_*.py` 文件，并在 `output/` 下检查每一步的产物。
 
-1. **视频获取模块**:
-   - `core/step1_ytdlp.py`: 集成`yt-dlp`库，实现从指定 URL 高效下载视频的功能，并清理文件名。
+## 技术栈
 
-2. **音频处理与语音识别模块**:
-   - `core/all_whisper_methods/whisperX.py`: 使用本地 WhisperX 模型进行转录。
-   - `core/all_whisper_methods/whisperXapi.py`: 使用 replicate 的 whisperX 模型进行转录。
-   - `core/step2_whisper.py`: 利用 Whisper 模型进行高精度的语音识别，生成带时间戳的文本转录结果。
+| 层 | 选型 |
+| --- | --- |
+| 运行时 | Python 3.10–3.13（推荐 3.11），项目内 `.venv`（由 uv 创建） |
+| ASR | WhisperX 3.8 + faster-whisper（本地）或 火山引擎大模型录音识别（云端） |
+| NLP | spaCy 3.8（多语言模型） |
+| LLM | 任何 OpenAI 兼容接口（翻译 / 断句 / 术语总结） |
+| 媒体 | FFmpeg 4–7（**共享库构建**）+ torchcodec |
+| Web | Streamlit ≥1.49 |
 
-3. **文本处理与翻译模块**:
-   - `core/step3_1_spacy_split.py`: 应用 SpaCy 自然语言处理工具进行初步的文本分割。
-   - `core/step3_2_splitbymeaning.py`: 结合 GPT 模型的语义理解能力，对长句进行更精确的分割。
-   - `core/step4_1_summarize.py`: 利用 GPT 模型对视频内容进行智能摘要，提取关键术语。
-   - `core/step4_2_translate_all.py`: 实现批量化的字幕文本翻译处理。
-   - `core/translate_once.py`: 采用三步翻译法（直译、意译和润色）实现高质量的英文到中文的逐句翻译。
+## 核心模块
 
-4. **字幕处理与合成模块**:
-   - `core/step5_splitforsub.py`: 根据字幕格式规范，对翻译后的文本进行精确分割和时间对齐。
-   - `core/step6_generate_final_timeline.py`: 生成标准 SRT 格式的字幕文件，包含精确的时间轴信息。
-   - `core/step7_merge_sub_to_vid.py`: 实现字幕与视频的无缝集成，使用 ffmpeg 进行处理。
+1. **视频获取与音频提取**
+   - `core/step1_ytdlp.py`：用 `yt-dlp` 下载视频（支持 cookies / 代理），清理文件名；用 `ffprobe` 取时长；
+     音频输入走 `output/input_manifest.json` 清单，不再包装成 `black_screen.mp4`。
+   - `core/all_whisper_methods/whisperX_utils.py`：音频抽取与压缩（`convert_video_to_audio()`、
+     `compress_audio()`）以及 `split_audio()` 分段。
 
-5. **音频处理与配音模块**:
-   - `core/step8_gen_audio_task.py`: 生成音频任务，处理字幕以确保与时间相符。
-   - `core/step10_gen_audio.py`: 从文本生成音频文件，并根据时间调整语速。
-   - `core/step11_merge_audio_to_vid.py`: 将生成的配音音频与视频进行专业级别的合成。
-   - `core/delete_retry_dubbing.py`: 删除不必要的音频文件以清理生成过程中的多余文件。
+2. **语音识别**
+   - `core/step2_whisperX.py`：编排 ASR，支持两个引擎：
+     - 本地 WhisperX（`transcribe_with_whisper()`，faster-whisper 后端）
+     - 火山引擎大模型录音识别（`transcribe_with_volcano()`，异步 submit/query + TOS 对象存储）
+     - 两者结果统一成 WhisperX 风格的 `{"segments": [...]}`；支持 Demucs 人声分离与按实测电平归一化。
+   - `core/all_whisper_methods/transcription_cache.py`：**内容寻址**的转录缓存（源媒体内容 + ASR 设置 + 包版本），
+     命中 `complete` 条目时连音频分离与识别一起跳过。
+   - `core/all_whisper_methods/volcano_asr.py`、`tos_service.py`：火山引擎客户端与 TOS 上传/清理（单例）。
+   - `core/all_whisper_methods/demucs_vl.py`：Demucs 人声/伴奏分离。
 
-6. **自然语言处理工具集**:
-   - `core/ask_gpt.py`: 封装与 GPT 模型交互的标准化接口，用于各类文本生成和分析任务。
-   - `core/prompts_storage.py`: 集中管理针对不同任务优化的提示模板。
-   - `core/spacy_utils/`: 封装基于 SpaCy 的句子分割等高级文本处理功能。
-     - `split_by_connector.py`: 根据连接词拆分文本句子，提高可读性。
-     - `split_by_comma.py`: 根据逗号和冒号拆分文本处理。
-     - `split_long_by_root.py`: 按句子根节点拆分长句子，增强文本的可读性。
-     - `split_by_mark.py`: 用标点符号对文本进行句子拆分。
-     - `load_nlp_model.py`: 加载和初始化所需的 NLP 模型，支持多种语言。
+3. **文本处理与翻译**
+   - `core/step3_1_spacy_split.py`：spaCy 初步分句。
+   - `core/step3_2_splitbymeaning.py`：用 LLM 按句意重新切分（双候选 CoT）；
+     仅转录模式下可通过 `llm_sentence_split` 开关整体关闭，改走标点机械切分。
+   - `core/step4_1_summarize.py`：总结内容并提取术语表。
+   - `core/step4_2_translate_all.py`：并发批量翻译，带缓存与失败回填。
+   - `core/translate_once.py`：单次翻译（直译 → 反思 → 意译三步法）。
+   - `core/subtitle_trim.py`、`core/estimate_duration.py`：按朗读时长估算并压缩过长的译文。
 
-7. **文本转语音（TTS）模块**:
-   - `core/all_tts_functions/fish_tts.py`: 使用外部 API 实现文本转语音功能，生成音频文件。
-   - `core/all_tts_functions/openai_tts.py`: 使用 OpenAI 的 TTS 服务将文本转换为音频并保存。
-   - `core/all_tts_functions/gpt_sovits_tts.py`: 使用 GPT-SoVITS 进行文本到语音转换，支持多语言。
-   - `core/all_tts_functions/azure_tts.py`: 利用 Azure 语音服务将文本转换为音频，保存为 WAV 格式。
+4. **字幕切分、时间轴与成片**
+   - `core/step5_splitforsub.py`：按 Netflix 单行长度规范切分字幕，并做词级→句级的段内对齐。
+   - `core/step6_generate_final_timeline.py`：生成 `src.srt` / `trans.srt` / `src_trans.srt` / `trans_src.srt`。
+   - `core/step7_merge_sub_to_vid.py`：用 ffmpeg 压制硬字幕（可选 `h264_nvenc`）；
+     `resolution: '0x0'` 时跳过压制，纯音频输入则原样复制成 `output_sub.mp4`。
+   - `core/json_to_subtitle.py`、`core/onekeycleanup.py`：SRT 工具与产物归档/清理。
 
-8. **系统配置与工具模块**:
-   - `config.yaml`: 集中存储和管理系统的全局参数配置。
-   - `install.py`: 自动化系统依赖包和模型的安装与配置过程。
-   - `onekeycleanup.py`: 提供一键式中间文件清理功能，优化系统存储空间。
-   - `core/config_utils.py`: 读取和更新 YAML 配置文件，确保多线程安全的读写操作。
+5. **LLM 与提示词**
+   - `core/ask_gpt.py`：统一的 OpenAI 兼容调用封装（base_url 归一化、超时、重试、`output/gpt_log/` 缓存与 token 统计）。
+   - `core/prompts_storage.py`：集中管理各步骤的提示模板。
+   - `core/config_utils.py`：YAML 配置的线程安全读写、环境变量覆盖（`VIDEOLINGO_<KEY>`）、源语言统一解析。
 
-9. **批量处理模块**:
-   - `batch/utils/batch_processor.py`: 批量处理视频任务，通过 Excel 配置管理视频处理流程。
-   - `batch/utils/video_processor.py`: 实现视频的下载、转录、分句、翻译和合成带字幕的视频。
-   - `batch/utils/settings_check.py`: 检查输入文件与配置的一致性，确保视频处理设置的正确性。
+6. **自然语言处理工具集**
+   - `core/spacy_utils/`
+     - `split_by_connector.py`：按连接词拆分。
+     - `split_by_comma.py`：按逗号/冒号拆分。
+     - `split_long_by_root.py`：按句子根节点拆分过长句。
+     - `split_by_mark.py`：按标点拆分。
+     - `load_nlp_model.py`：按语言加载与初始化 spaCy 模型。
 
-10. **Streamlit 界面模块**:
-    - `st.py`: 基于 Streamlit 框架构建的交互式 Web 应用，实现各处理模块的无缝集成。
-    - `st_components/download_video_section.py`: 提供 YouTube 链接下载和本地文件上传两种视频获取方式。
-    - `st_components/imports_and_utils.py`: 封装界面组件通用的工具函数库。
-    - `st_components/sidebar_setting.py`: 实现基于侧边栏的系统设置界面，提供直观的配置管理。
+7. **界面**
+   - `st.py`：Streamlit 主应用；`build_task_steps()` 组装步骤表，`TaskRunner` 在后台线程执行，支持暂停/继续/停止与实时进度。
+   - `st_components/task_runner.py`：后台任务执行器与取消检查点。
+   - `st_components/download_video_section.py`：YouTube 链接下载与本地文件上传（上传幂等）。
+   - `st_components/sidebar_setting.py`：侧边栏配置界面（API 预设、ASR 引擎、火山参数、TOS、分辨率等）。
+   - `st_components/imports_and_utils.py`：界面通用工具（字幕打包、默认字幕选择）。
 
-Videolingo 系统通过这些模块的协同工作，实现了从视频下载到最终生成带有翻译字幕和配音的视频的全流程自动化。系统的模块化设计使得每个步骤都可以独立运行和调试，同时也为未来的功能扩展提供了便利。
+8. **批量模式**
+   - `batch/utils/batch_processor.py`：按 Excel 任务表批量处理。
+   - `batch/utils/video_processor.py`：下载 → 转录 → 分句 → 翻译 → 压制 → 归档的单视频流程。
+   - `batch/utils/batch_paths.py`：批量路径辅助（自动创建 `batch/input`）。
+   - `batch/tasks_setting-template.xlsx`：任务表模板（`Video File / Source Language / Target Language / Status`）。
+   - `AudioExtract/`：独立的批量音频提取小工具。
+
+9. **安装、体检与清理**
+   - `Install.bat` → `setup_env.py` → `installer.py`：一键安装（uv 建项目内 `.venv`、按显卡算力选 torch 后端、安 FFmpeg、体检）。
+   - `launch.py`：启动前预检（关键包 / ffmpeg / 端口）并把运行日志写到 `logs/`。
+   - `cleanup.py`（`Cleanup.bat`）：盘点并清理旧 conda 环境与散落在各处的模型缓存。
+   - `runtime_libraries.py`：把项目内 FFmpeg 的 DLL 目录与 PATH 在 import torchcodec 之前接好。
+   - `requirements.txt`：依赖清单；`config.yaml`（本地、不入库）与 `config.example.yaml`（模板）为配置。
+   - `tests/`：标准库 `unittest` 回归测试（9 个文件 / 174 例）。
+
+VideoLingo 通过这些模块协同，实现从视频下载到最终生成带翻译字幕成片的自动化流程。
+模块化设计让每一步都能独立运行与调试，也便于替换其中某一环（例如新增一个 ASR 引擎）。

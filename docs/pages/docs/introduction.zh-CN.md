@@ -19,13 +19,16 @@ VideoLingo 是一站式视频翻译本地化配音工具，能够一键生成 Ne
 
 - **✅ 按照 Netflix 标准检查单行长度，绝无双行字幕**
 
-- **🗣️ 使用 GPT-SoVITS 等方法对齐克隆配音**
-
 - 🚀 整合包一键启动，在 streamlit 中一键出片
 
-- 📝 详细记录每步操作日志，支持随时中断和恢复进度
+- 📝 详细记录每步操作日志，支持随时中断（暂停/停止）和恢复进度
 
-与同类项目相比的优势：**绝无多行字幕，最佳的翻译质量，无缝的配音体验**
+- ♻️ 内容寻址的转录缓存：源媒体与识别设置不变时，连人声分离都跳过
+
+> ⚠️ **配音（Dubbing）功能已移除。** 早期版本支持 GPT-SoVITS / Fish / Azure / OpenAI / Edge 等多种配音引擎，
+> 现在整条配音链路已删除，本项目**只产出字幕文件**（`src.srt` / `trans.srt` / 双语字幕 / `<视频名>.srt`）。
+
+与同类项目相比的优势：**绝无多行字幕，最佳的翻译质量，术语一致的上下文连贯翻译**
 
 ## 🎥 效果演示
 
@@ -40,9 +43,9 @@ https://github.com/user-attachments/assets/25264b5b-6931-4d39-948c-5a1e4ce42fa7
 </td>
 <td width="50%">
 
-### GPT-SoVITS配音
+### 法语翻译
 ---
-https://github.com/user-attachments/assets/47d965b2-b4ab-4a0b-9d08-b49a7bf3508c
+https://github.com/user-attachments/assets/3ce068c7-9854-4c72-ae77-f2484c7c6630
 
 </td>
 </tr>
@@ -56,7 +59,7 @@ https://github.com/user-attachments/assets/47d965b2-b4ab-4a0b-9d08-b49a7bf3508c
 
 > *中文使用单独的标点增强后的 whisper 模型
 
-**翻译语言支持所有语言，配音语言取决于选取的TTS。**
+**翻译语言支持所有语言。**
 
 ## 安装
 
@@ -115,22 +118,22 @@ OneKeyStart.bat
 ```
 
 ## API
-本项目支持 OpenAI-Like 格式的 api 和多种配音接口：
+本项目只需要一个 **OpenAI 兼容格式**的大模型接口：
 - `claude-3-5-sonnet-20240620`, `gemini-1.5-pro-002`, `gpt-4o`, `qwen2.5-72b-instruct`, `deepseek-coder`, ...（按效果排序）
-- `azure-tts`, `openai-tts`, `siliconflow-fishtts`, `fish-tts`, `GPT-SoVITS`
 
-详细的安装、 API 配置、汉化、批量说明可以参见文档：[English](/docs/pages/docs/start.en-US.md) | [简体中文](/docs/pages/docs/start.zh-CN.md)
+> 早期版本还支持多种配音接口（`azure-tts` / `openai-tts` / `siliconflow-fishtts` / `fish-tts` / `GPT-SoVITS`），
+> 已随配音链路一并移除，不再需要 TTS 的 key。
+
+详细的安装、 API 配置、批量说明可以参见文档：[English](/docs/pages/docs/start.en-US.md) | [简体中文](/docs/pages/docs/start.zh-CN.md)
 
 ## 当前限制
 1. WhisperX 转录效果可能受到视频背景声影响，因为使用了 wav2vac 模型进行对齐。对于背景音乐较大的视频，请开启人声分离增强。另外，如果字幕以数字或特殊符号结尾，可能会导致提前截断，这是因为 wav2vac 无法将数字字符（如"1"）映射到其发音形式（"one"）。
 
 2. 使用较弱模型时容易在中间过程报错，这是因为对响应的 json 格式要求较为严格。如果出现此错误，请删除 `output` 文件夹后更换 llm 重试，否则重复执行会读取上次错误的响应导致同样错误。
 
-3. 配音功能由于不同语言的语速和语调差异，还受到翻译步骤的影响，可能不能 100% 完美，但本项目做了非常多的语速上的工程处理，尽可能保证配音效果。
+3. **多语言视频转录识别仅仅只会保留主要语言**，这是由于 whisperX 在强制对齐单词级字幕时使用的是针对单个语言的特化模型，会因为不认识另一种语言而删去。
 
-4. **多语言视频转录识别仅仅只会保留主要语言**，这是由于 whisperX 在强制对齐单词级字幕时使用的是针对单个语言的特化模型，会因为不认识另一种语言而删去。
-
-5. **无法多角色分别配音**，whisperX 的说话人区分效果不够好用。
+4. 字幕切分与对齐依赖 spaCy 模型与词级时间戳，极少数情况下会出现整句对不齐的兜底告警；可把 `subtitle.align_on_mismatch` 设为 `strict` 让它立即报错而非兜底。
 
 ## 📄 许可证
 
