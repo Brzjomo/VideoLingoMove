@@ -1,30 +1,77 @@
 @echo off
+rem ============================================================================
+rem  VideoLingo batch mode (Windows) -- launches batch\utils\gui.py
+rem
+rem  Interpreter order: project .venv  ->  conda env videolingo  ->  python on PATH
+rem
+rem  Fixes over the old version:
+rem    * the old script did "cd .." which lands in the PARENT of the project when
+rem      invoked from the project root; now it resolves its own directory;
+rem    * the interpreter is probed instead of assumed, so a broken environment
+rem      gives a clear message instead of dumping you into a python REPL.
+rem
+rem  ASCII-only on purpose: cmd.exe parses the whole .bat before "chcp 65001"
+rem  takes effect, so non-ASCII bytes break parsing on non-UTF-8 code pages.
+rem  Chinese output comes from Python instead.
+rem ============================================================================
+setlocal EnableExtensions
+cd /d "%~dp0.."
 chcp 65001 >nul
 
-rem 切到脚本所在目录（batch\），再回到项目根运行，避免路径依赖调用方。
-cd /d "%~dp0.."
-
-rem ---- 解释器选择：项目内 .venv 优先，其次 conda ----
 set "VENV_PY=%~dp0..\.venv\Scripts\python.exe"
 set "CONDA_ENV=%USERPROFILE%\anaconda3\envs\videolingo"
+set "PY="
 
 if exist "%VENV_PY%" (
-    set "PY=%VENV_PY%"
-    goto :run
+    "%VENV_PY%" -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14) else 1)" >nul 2>&1
+    if not errorlevel 1 (
+        set "PY=%VENV_PY%"
+        echo [env] using project .venv
+        goto :run
+    )
+    echo [warn] .venv exists but its python is unusable -- falling back
 )
 
 if exist "%CONDA_ENV%\python.exe" (
-    call "%USERPROFILE%\anaconda3\Scripts\activate.bat" videolingo
+    "%CONDA_ENV%\python.exe" -c "import sys" >nul 2>&1
+    if not errorlevel 1 (
+        set "PY=%CONDA_ENV%\python.exe"
+        echo [env] using conda env videolingo
+        goto :run
+    )
+)
+
+python -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14) else 1)" >nul 2>&1
+if not errorlevel 1 (
     set "PY=python"
+    echo [env] using python on PATH
     goto :run
 )
 
-echo [错误] 未找到可用的 Python 环境。
-echo         推荐:  python setup_env.py --python 3.11
+echo.
+echo [ERROR] No usable Python 3.10-3.13 found.
+echo         Recommended:  run Install.bat
+echo.
 pause
 exit /b 1
 
 :run
-"%PY%" -m streamlit run "batch\utils\gui.py"
+%PY% -c "import sys" >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Interpreter is not usable: %PY%
+    pause
+    exit /b 1
+)
+
+echo [1/2] health check ...
+%PY% installer.py --check --quiet
+if errorlevel 1 (
+    echo [hint] Health check reported problems -- see above.
+    echo.
+)
+
+echo [2/2] starting batch mode ...
+%PY% -m streamlit run "batch\utils\gui.py"
 
 pause
+exit /b 0

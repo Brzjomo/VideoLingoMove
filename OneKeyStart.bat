@@ -1,45 +1,93 @@
 @echo off
+rem ============================================================================
+rem  VideoLingo launcher (Windows)
+rem
+rem  Picks a working interpreter and starts the app:
+rem    1. the project-local .venv  (preferred -- created by Install.bat)
+rem    2. the conda environment "videolingo" (legacy layout, still supported)
+rem    3. any python 3.10-3.13 on PATH
+rem
+rem  It runs a health check first and, if that fails, tells you how to fix it
+rem  instead of dying inside Streamlit. The app is started through launch.py so
+rem  the run is also written to logs\videolingo_<timestamp>.log.
+rem
+rem  NOTE: this file is ASCII-only on purpose. cmd.exe parses the WHOLE .bat
+rem  before "chcp 65001" can take effect, so non-ASCII bytes get read in the
+rem  console code page and break parsing (symptom: a stray line like
+rem  "'-----------------' is not recognized as an internal or external
+rem  command", followed by a bare python REPL). Chinese output comes from
+rem  installer.py / launch.py instead.
+rem ============================================================================
+setlocal EnableExtensions
+cd /d "%~dp0"
 chcp 65001 >nul
 
-rem 切到脚本所在目录：直接双击或从别处调用时，否则会因为工作目录不对
-rem 找不到 st.py / config.example.yaml（原脚本缺这一行）。
-cd /d "%~dp0"
-
-rem ---- 解释器选择：项目内 .venv 优先，其次 conda ---------------------------------
-rem 环境大升级后推荐用 setup_env.py 建的项目内 .venv（不占 C 盘、可搬移）。
-rem conda 分支保留是为了兼容旧环境，不做硬切。
 set "VENV_PY=%~dp0.venv\Scripts\python.exe"
 set "CONDA_ENV=%USERPROFILE%\anaconda3\envs\videolingo"
+set "PY="
 
+rem ---- 1) project-local .venv ------------------------------------------------
 if exist "%VENV_PY%" (
-    set "PY=%VENV_PY%"
-    echo [环境] 使用项目内虚拟环境: %VENV_PY%
-    goto :run
+    "%VENV_PY%" -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14) else 1)" >nul 2>&1
+    if not errorlevel 1 (
+        set "PY=%VENV_PY%"
+        echo [env] using project .venv
+        goto :run
+    )
+    echo [warn] .venv exists but its python is unusable -- falling back
 )
 
+rem ---- 2) legacy conda env --------------------------------------------------
 if exist "%CONDA_ENV%\python.exe" (
-    call "%USERPROFILE%\anaconda3\Scripts\activate.bat" videolingo
+    "%CONDA_ENV%\python.exe" -c "import sys" >nul 2>&1
+    if not errorlevel 1 (
+        set "PY=%CONDA_ENV%\python.exe"
+        echo [env] using conda env videolingo
+        goto :run
+    )
+)
+
+rem ---- 3) python on PATH -----------------------------------------------------
+python -c "import sys; raise SystemExit(0 if (3,10)<=sys.version_info[:2]<(3,14) else 1)" >nul 2>&1
+if not errorlevel 1 (
     set "PY=python"
-    echo [环境] 使用 conda 环境: %CONDA_ENV%
+    echo [env] using python on PATH
     goto :run
 )
 
-echo [错误] 未找到可用的 Python 环境。
-echo         推荐:  python setup_env.py --python 3.11
-echo         旧方式: conda create -n videolingo python=3.11  ^&^&  python installer.py
+echo.
+echo [ERROR] No usable Python 3.10-3.13 found.
+echo         Checked: .venv, conda env videolingo, and PATH.
+echo.
+echo         Recommended:  run Install.bat
+echo         Manual:       python setup_env.py --python 3.11
+echo.
 pause
 exit /b 1
 
 :run
-rem 启动前先体检；有问题就提示修复方式，而不是直接崩在 Streamlit 里。
-rem 用 launch.py 启动可以顺带写入 logs\videolingo_<时间戳>.log。
-"%PY%" installer.py --check --quiet
+rem Guard: if PY somehow still points at a broken interpreter, python would
+rem drop into an interactive REPL and the window would look "hung". Verify
+rem once more and abort cleanly instead.
+%PY% -c "import sys" >nul 2>&1
+if errorlevel 1 (
+    echo [ERROR] Interpreter is not usable: %PY%
+    pause
+    exit /b 1
+)
+
+echo [1/2] health check ...
+%PY% installer.py --check --quiet
 if errorlevel 1 (
     echo.
-    echo [提示] 体检发现问题，尝试修复: python setup_env.py
+    echo [hint] Health check reported problems.
+    echo        Fix automatically:  python setup_env.py
+    echo        Full report:        .venv\Scripts\python.exe installer.py --check --smoke
     echo.
 )
 
-"%PY%" launch.py
+echo [2/2] starting VideoLingo ...
+%PY% launch.py
 
 pause
+exit /b 0

@@ -10,7 +10,7 @@ source_files:
   - OneKeyStart.bat
   - .streamlit/config.toml
 status: partially-obsolete
-last_verified: 2026-09-16
+last_verified: 2026-09-19
 ---
 
 > ## ⚠️ 本文部分内容已在「重构 Round 1」后失效
@@ -46,8 +46,8 @@ last_verified: 2026-09-16
 | `st_components/sidebar_setting.py` | 447 | 侧边栏全部配置控件（详见同上文档） |
 | `core/onekeycleanup.py` | 91 | `cleanup()`：把 `output/` 全量归档到 `history/<video_name>/` |
 | `core/config_utils.py` | 242 | `load_key / load_key_or / update_key / assign_key / get_joiner / get_source_language`，配置文件为根目录 `config.yaml` |
-| `OneKeyStart.bat` | 32 | Windows 一键启动脚本：`chcp 65001` + `cd /d "%~dp0"` + 校验 conda 环境 + `python installer.py --check --quiet` + `python launch.py` |
-| `installer.py` | 450 | 安装与体检（`--check`）；`launch()`（`installer.py:442`）调用 `launch.py` |
+| `OneKeyStart.bat` | 93 | Windows 一键启动脚本（**纯 ASCII**）：`cd /d "%~dp0"` + `chcp 65001` + **解释器探测**（`.venv` → conda `videolingo` → PATH，含 `:run` 处二次校验）+ `installer.py --check --quiet` + `launch.py` |
+| `installer.py` | 1338+ | 安装与体检（`--check`）；`launch()` 调用 `launch.py`。环境大升级后改为 uv 原生安装（`uv pip compile/sync`）+ 大文件下载分离，详见 [`../06-batch-and-tools/02-安装脚本与依赖.md`](../06-batch-and-tools/02-安装脚本与依赖.md) |
 | `launch.py` | 124 | 启动预检（缺包 / 缺 ffmpeg / 端口占用）+ 写 `logs/videolingo_<时间戳>.log` 后拉起 `streamlit run st.py` |
 | `install.py` | 19 | 向后兼容包装：转发到 `installer.main()`，默认补 `--launch` |
 | `.streamlit/config.toml` | 13 | `server.maxUploadSize = 4096` + `[client] toolbarMode = "viewer"`（隐藏 Deploy 菜单；**没有**设置 `fileWatcherType`） |
