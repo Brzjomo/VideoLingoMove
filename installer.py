@@ -14,7 +14,8 @@
     调用 `runtime_libraries.setup()` 注册 FFmpeg 的 DLL 目录，否则会把
     "没接 DLL 目录"误报成"FFmpeg 版本不对"；
   * `--python` 可以把整套安装**重定向到另一个解释器**（setup_env.py 建的
-    项目内 `.venv`），实现"不碰 conda、不写 C 盘"。
+    项目内 `.venv`），实现"不碰 conda、不写 C 盘"。`.venv` 的宿主解释器固定在
+    项目内 `.python\\`（见 setup_env.py），运行时标准库也从那里读。
 
 从上游 3.x 移植并保留的修复（相对 dev 原 install.py）：
   1. 无 GPU / macOS 分支真的装 CPU 轮子（原实现打印 CPU 提示却执行 cu118 命令）。
@@ -38,6 +39,7 @@
     python installer.py --launch               # 装完启动应用（--no-launch 反之）
     python installer.py --download-only        # 只用外部工具下大文件：打印 URL 后退出
     python installer.py --download-dir D       # 指定大文件目录（默认 ./_downloads）
+    python installer.py --no-keep-wheels       # 不把 torch 轮子留在下载目录
 """
 
 from __future__ import annotations
@@ -73,10 +75,12 @@ TORCHVISION_VERSION = "0.23.0"
 #
 # 存在的意义：torch 的单个 wheel 就有 2.7–3.6 GB，网络不佳时几乎必然下载失败。
 # 所以把"下载"和"安装"解耦成两步 ——
-#   1. 先运行 `python installer.py --download-only`，脚本会把**完整下载 URL**
-#      和**应该存放的文件名**打印出来；
-#   2. 用浏览器 / 迅雷 / aria2 等外部工具下好，放进本目录；
-#   3. 重新运行安装脚本，它会**优先使用已存在的本地文件**，不再联网。
+#   1. 正常跑安装：脚本自己把 torch 轮子下到本目录并**留在那里**（`ensure_torch_wheels`），
+#      随后用这些本地文件安装。**装完不删** —— 重装 / 重建 venv 时直接复用；
+#      想去掉这个行为用 `--no-keep-wheels`；
+#   2. 网络更差时先跑 `python installer.py --download-only`，脚本会把
+#      **完整下载 URL** 和**应该存放的文件名**打印出来；
+#   3. 用浏览器 / 迅雷 / aria2 等外部工具下好，放进本目录，再跑一次安装。
 # 目录名以 "_" 开头，排序时靠前、便于手动找到；已在 .gitignore 中排除。
 DEFAULT_DOWNLOAD_DIR = "_downloads"
 #: 项目根 —— **所有项目内路径都必须挂在这里，不能依赖 cwd**。
@@ -356,9 +360,13 @@ def explain_missing_pip():
     panel(
         "❌ 当前环境既没有 pip，也无法自动引导。\n\n"
         "这通常是因为虚拟环境由 uv 创建且未包含 pip。任选一种修复方式：\n"
-        f"  1) 删掉环境重建（推荐）：\n"
+        f"  1) 删掉环境重建（推荐，会重新装依赖）：\n"
+        f"       python setup_env.py --recreate\n"
+        f"     手工等价做法：`uv venv` 的 `--python` 必须给**项目内**那个解释器\n"
+        f"     （`<项目>\\.python\\cpython-3.11*\\python.exe`，写完整路径），否则\n"
+        f"     venv 会绑到别的项目的 Python 上：\n"
         f"       rmdir /s /q .venv\n"
-        f"       uv venv .venv --python 3.11 --seed\n"
+        f"       uv venv .venv --python <上面那个路径> --seed\n"
         f"  2) 直接补装 pip：\n"
         f"       {sys.executable} -m ensurepip --upgrade\n"
         + (f"  3) 用 uv 装（无需 pip）：\n"
@@ -563,6 +571,16 @@ def uv_install_torch(backend, download_dir=None, dry_run=False):
     if not from_index:
         # 全部来自本地文件：不需要 uv 再缓存一份几 GB 的轮子
         args.append("--no-cache-dir")
+        # 但 `--no-cache-dir` 会让 uv 把轮子解到**系统临时目录**（多半在 C 盘），
+        # 再往项目内（此处是 E 盘）的 venv 里"硬链接"，跨文件系统必然失败：
+        # 它每次都会先试一遍、再退回整份复制，并打印
+        #
+        #   warning: Failed to hardlink files; falling back to full copy.
+        #   This may lead to degraded performance. ... set UV_LINK_MODE=copy
+        #
+        # 我们的场景里"复制"本来就是预期行为（正是为了不留第二份 3 GB 缓存），
+        # 所以直接指定 copy：省掉那次注定失败的重试，也不再刷这行警告（实测）。
+        args.append("--link-mode=copy")
     return uv_pip(args, retries=2, check=True,
                   cache_dir=PIP_DL_CACHE_DIR).returncode
 
@@ -796,6 +814,148 @@ def _wheel_line(item, directory, with_url=True):
     return lines
 
 
+#: 下载大文件时每隔这么多字节打一行进度。torch 轮子 2.7–3.6 GB，
+#: 按 512 MB 打一行够看又不刷屏。
+_PROGRESS_STEP = 512 * 1024 * 1024
+_CHUNK = 1024 * 1024
+
+
+def download_file(url, dest, sha256=None, retries=3, label=None):
+    """把 `url` 流式下载到 `dest`。成功返回 True。
+
+    为什么不用 `urlretrieve`（FFmpeg 那处还在用，因为它是几十 MB 的小文件）：
+
+      * **断点续传**：单个 torch 轮子 2.7–3.6 GB，网络中途断掉时 `urlretrieve`
+        只能从头再来（实测本机代理会断）。这里把已收到的字节留在
+        `<dest>.part`，下次带 `Range` 接着下；
+      * **sha256 校验**：PyTorch 索引页里带 sha256（`index_wheel_info`），下完就地
+        校验 —— 一个悄悄损坏的 3 GB 轮子装出来的环境极难排查；
+      * **浏览器 UA**：默认 `Python-urllib/3.x` 会被本机网络策略拦（见 `_DOWNLOAD_UA`）。
+
+    `dest` 已存在且非空时直接返回 True（不覆盖已有文件）。
+    """
+    import hashlib
+    import time
+    from urllib.error import HTTPError, URLError
+    from urllib.request import Request, urlopen
+
+    dest = Path(dest)
+    if dest.is_file() and dest.stat().st_size > 0:
+        return True
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".part")
+    name = label or dest.name
+
+    for attempt in range(1, retries + 1):
+        offset = part.stat().st_size if part.is_file() else 0
+        headers = {"User-Agent": _DOWNLOAD_UA}
+        if offset:
+            headers["Range"] = f"bytes={offset}-"
+        hasher = hashlib.sha256() if sha256 else None
+        started = time.time()
+        try:
+            with urlopen(Request(url, headers=headers), timeout=120) as response:
+                status = getattr(response, "status", 200) or 200
+                length = response.headers.get("Content-Length")
+                total = int(length) if length else None
+                if status == 206 and offset:
+                    total = total + offset if total is not None else None
+                    mode = "ab"
+                else:
+                    # 服务器不支持 Range（或文件变了）：老老实实从头写
+                    offset, total, mode = 0, total, "wb"
+                if hasher and offset:
+                    # 续传要对**已有部分**重新算一遍摘要，否则校验必然不通过。
+                    # 分块读，不能把 2 GB 一次性读进内存。
+                    with part.open("rb") as fh:
+                        for chunk in iter(lambda: fh.read(_CHUNK), b""):
+                            hasher.update(chunk)
+                progress_next = ((offset // _PROGRESS_STEP) + 1) * _PROGRESS_STEP
+                done = offset
+                with part.open(mode) as fh:
+                    while True:
+                        chunk = response.read(_CHUNK)
+                        if not chunk:
+                            break
+                        fh.write(chunk)
+                        if hasher:
+                            hasher.update(chunk)
+                        done += len(chunk)
+                        if done >= progress_next:
+                            info(f"      … {done / 1024 ** 3:.2f}"
+                                 + (f"/{total / 1024 ** 3:.2f} GB" if total else " GB"),
+                                 style="bright_black")
+                            progress_next += _PROGRESS_STEP
+            if total is not None and done < total:
+                raise URLError(f"连接提前结束（{done}/{total} 字节）")
+        except (HTTPError, URLError, OSError, TimeoutError) as e:
+            if isinstance(e, HTTPError) and e.code == 416 and part.is_file():
+                # 416 = Range 起点越界（本地 .part 比服务器上那份还长，或文件被
+                # 换过）。必须删掉，否则每次重试都用同一个坏起点，永远下不完。
+                try:
+                    part.unlink()
+                except OSError:
+                    pass
+            info(f"      ⚠️ 第 {attempt}/{retries} 次下载失败：{e}", style="yellow")
+            if attempt < retries:
+                continue
+            return False
+
+        if hasher is not None and hasher.hexdigest().lower() != str(sha256).lower():
+            info(f"      ❌ {name} 的 sha256 校验不通过，删掉重下", style="red")
+            try:
+                part.unlink()
+            except OSError:
+                pass
+            return False
+
+        try:
+            part.replace(dest)
+        except OSError as e:
+            info(f"      ❌ 无法保存 {dest}：{e}", style="red")
+            return False
+        size_mb = dest.stat().st_size / 1024 ** 2
+        info(f"      ✅ {name}（{size_mb:.0f} MB，{time.time() - started:.0f}s）",
+             style="green")
+        return True
+    return False
+
+
+def ensure_torch_wheels(backend, download_dir=None, verbose=True):
+    """把 torch 三件套的轮子下到 `_downloads/` 并**留在那里**。
+
+    为什么必须留下（2026-09-19 用户要求，也是"重装一次就够了"的关键）：
+    装完就把文件丢掉的话，下次重装 / 重建 venv 还得再下 2.7–3.6 GB。这些
+    `.whl` 留着就是现成的 wheelhouse —— `install_torch` 之后会直接拿它们安装，
+    而 uv 在"全是本地文件"时会带 `--no-cache-dir`，**不会**在缓存里再存第二份。
+
+    返回 `{包名: Path}`，只含确实在本地的那几个。任何一步失败都只告警：
+    没下下来的照旧由 uv/pip 在线安装，不影响装成功。
+    """
+    root = ensure_download_dir(download_dir)
+    index_url, _label = TORCH_SPECS[backend]
+    found, failed = {}, []
+    for pkg, _ver, filename in wheel_names_for(backend):
+        existing = find_local_wheel(download_dir, filename)
+        if existing is not None:
+            if verbose:
+                info(f"   ♻️ 已有本地轮子，继续保留：{existing.name}"
+                     f"（{existing.stat().st_size / 1024 ** 2:.0f} MB）", style="green")
+            found[pkg] = existing
+            continue
+        url, sha256 = index_wheel_info(index_url, pkg, filename)
+        if verbose:
+            info(f"   ⬇️ 下载并保留到 {root}：{filename}", style="cyan")
+        if download_file(url, root / filename, sha256=sha256):
+            found[pkg] = root / filename
+        else:
+            failed.append(filename)
+    if failed and verbose:
+        info(f"   ⚠️ 有 {len(failed)} 个轮子没下下来，改由 uv/pip 在线安装："
+             f"{', '.join(failed)}", style="yellow")
+    return found
+
+
 def report_torch_download_plan(backend, directory=None, verbose=True, resolve_urls=True):
     """打印 torch 三件套的下载 URL 与本地复用情况。返回缺失清单。"""
     root = ensure_download_dir(directory)
@@ -996,12 +1156,16 @@ def detect_cuda_version():
     return int(match.group(1)), int(match.group(2))
 
 
-def install_torch(backend="auto", dry_run=False, download_dir=None):
+def install_torch(backend="auto", dry_run=False, download_dir=None, keep_wheels=True):
     """安装与硬件匹配的 PyTorch 三件套，返回实际使用的后端。
 
     下载与安装分离：先在 `_downloads/` 里找同名 wheel，找到就直接用本地文件
     （不联网）；找不到才按官方索引下载。单个 torch wheel 有 2.7–3.6 GB，
     网络不佳时可以把 URL 拿出去用外部工具下好再放回来。
+
+    `keep_wheels=True`（默认）时，缺的轮子会**先由本脚本下到 `_downloads/`
+    并一直留在那里**（见 `ensure_torch_wheels`）：装完即弃的话，重装或重建
+    venv 都得把这几个 GB 再下一遍。
     """
     resolved, reason = detect_torch_backend(backend)
     index_url, label = TORCH_SPECS[resolved]
@@ -1020,11 +1184,15 @@ def install_torch(backend="auto", dry_run=False, download_dir=None):
         lines.append("   ⚠️ CPU 转录会非常慢，强烈建议使用 NVIDIA GPU")
     panel("\n".join(lines), style="cyan" if resolved != "cpu" else "yellow")
 
-    missing = report_torch_download_plan(resolved, download_dir)
-
     if dry_run:
+        report_torch_download_plan(resolved, download_dir)
         uv_install_torch(resolved, download_dir, dry_run=True)
         return resolved
+
+    if keep_wheels:
+        ensure_torch_wheels(resolved, download_dir)
+
+    report_torch_download_plan(resolved, download_dir)
 
     # 优先让 uv 自己处理 PyTorch 索引（`--torch-backend` 就是为这件事设计的，
     # 实测解析出 torch==2.8.0+cu126，与手工拼 --index-url 等价）。
@@ -1893,6 +2061,9 @@ def build_parser():
                              f"默认 ./{DEFAULT_DOWNLOAD_DIR}")
     parser.add_argument("--download-only", action="store_true",
                         help="只打印大文件的下载地址清单后退出（用外部工具下好后重跑即可）")
+    parser.add_argument("--no-keep-wheels", action="store_true",
+                        help="不把 torch 轮子留在下载目录（默认保留，便于重装/搬机器；"
+                             "留着占 2.7–3.6 GB）")
     # 故意不提供 --yes：本脚本全程非交互（不提问、不确认），没有需要"跳过"的环节
     parser.add_argument("--force", action="store_true", help="忽略安装状态，强制重装")
     parser.add_argument("--auto-mirror", action="store_true",
@@ -2018,7 +2189,8 @@ __     ___     _            _     _
               "（需要强制重装请加 --force）", style="green")
         backend = state.get("torch_backend", args.torch_backend)
     else:
-        backend = install_torch(args.torch_backend, download_dir=args.download_dir)
+        backend = install_torch(args.torch_backend, download_dir=args.download_dir,
+                                keep_wheels=not args.no_keep_wheels)
         info("📦 安装 requirements.txt ...")
         uv_cache = os.path.join(args.download_dir or DEFAULT_DOWNLOAD_DIR, ".uv-cache")
         installed = False

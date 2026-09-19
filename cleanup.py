@@ -453,7 +453,8 @@ def build_targets(extra_models=True):
 
         # --- 项目内大件 ---
         Target("downloads", "项目 _downloads（大文件目录）", PROJECT / "_downloads",
-               "confirm", "torch 轮子等；若还要重装就别删，删了要重下 2.9 GB",
+               "confirm", "torch 轮子（现在**装完也留着**，单个 2.7–3.6 GB）与 FFmpeg "
+                          "压缩包；若还要重装就别删，删了要重下几 GB",
                                   size_of=size_of),
         Target("ffmpeg", "项目 ffmpeg（自带 FFmpeg）", PROJECT / "ffmpeg", "confirm",
                "删了下次安装会重新下载（约 68 MB）；系统那份静态版不能替代它",
