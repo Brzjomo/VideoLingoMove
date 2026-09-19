@@ -1,2 +1,9 @@
 [server]
 maxUploadSize = 4096
+# 关闭文件监听：本流水线会在运行中持续写 output/ 并重写 config.yaml，
+# 开着 watcher 会不断触发 "Source file changed" 重跑，干扰长时间任务。
+fileWatcherType = "none"
+
+[client]
+# 隐藏 Deploy / 开发者菜单，避免误触；与 st.set_option("client.toolbarMode", ...) 等价。
+toolbarMode = "viewer"
