@@ -90,9 +90,15 @@ conda install git -y
 python install.py
 ```
 
-`torch-2.1.2+cu118-cp310-cp310-win_amd64.whl`文件（根据设备架构而定）可自行下载放于项目根目录，安装脚本会优先使用本地文件。
+`torch-2.1.2+cu118-cp310-cp310-win_amd64.whl`文件（根据设备架构而定）可自行下载放于项目根目录，安装脚本会优先使用本地文件。注意 wheel 文件名里的解释器标签要与当前 Python 一致（例如 Python 3.10 对应 `cp310`）；本项目支持 **Python 3.10–3.11**（`torch==2.1.2` 没有 cp312 的 wheel）。
 
-6.完毕后，运行`OneKeyStart.bat`启动服务。或者运行`StartBatch.bat`启动批量模式。
+安装脚本会自动识别 NVIDIA GPU 并选择 CUDA 版 PyTorch；没有 GPU 时安装 CPU 版（转录会非常慢）。装完想确认环境是否可用，可以随时体检：
+
+```shell
+python installer.py --check     # 有错误时退出码为 1；加 --quiet 只看问题
+```
+
+6.完毕后，运行`OneKeyStart.bat`启动服务（它会先体检再通过 `launch.py` 启动，并把运行日志写到 `logs/`）。或者运行`StartBatch.bat`启动批量模式。
 
 ## 📄 许可证
 
