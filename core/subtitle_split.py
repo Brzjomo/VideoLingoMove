@@ -447,6 +447,29 @@ def check_align_parts(parts: Sequence[str], original: str, min_width: float = 6.
 POLISH_LENGTH_RATIO = (0.7, 1.4)     # 润色后 / 润色前的 token 数比
 POLISH_COVERAGE_MIN = 0.7            # 原译文的 token 至少要保留这么多（润色允许删虚词）
 POLISH_MAX_GROWTH = 1.15             # 润色后不得比原行更长超过 15%（字幕长度是硬约束）
+#: **关闭思考**时用的覆盖率门槛。实测（2026-09-21）关思考的润色会主动压缩、丢词
+#:（`自由职业手办原型师` → `自由手办原型师`、`制作GK套件` → `做GK`），0.7 太宽拦不住，
+#: 所以在"省 token"档自动收紧到 0.85（与对齐护栏同档），代价是回退的行更多。
+POLISH_COVERAGE_MIN_NO_THINKING = 0.85
+#: "只润色有分句的长行"的宽度门槛（显示宽度；约 8~9 个汉字）。用户 2026-09-21 要求把它做成
+#: 可选开关：短句本来就顺、整行没有分句的行润色收益最低，跳过它们能少开几批调用。
+POLISH_LONG_LINE_MIN_WIDTH = 15.0
+#: 分句标记：出现这些标点才认为这一行"有分句"（与 `HARD_BOUNDARY` 同源，但不含句末句号）
+POLISH_CLAUSE_MARKS = "，、；：,;:"
+
+
+def needs_polish_long_line(text, min_width: float = POLISH_LONG_LINE_MIN_WIDTH) -> bool:
+    """`subtitle.polish_long_lines_only` 打开时，这一行是否值得润色（纯函数）。
+
+    判据（用户原话"只润色有分句的长行"）：宽度 ≥ `min_width` **且** 行内有分句标点。
+    两个条件都不满足的短句/无分句行原样保留 —— 它们既不容易读着断，润色收益也最低。
+    """
+    from core import subtitle_limits as sl
+
+    text = str(text)
+    if sl.measure(text) < min_width:
+        return False
+    return any(mark in text for mark in POLISH_CLAUSE_MARKS)
 
 
 def missing_numbers(original, polished) -> List[str]:

@@ -120,16 +120,42 @@ def _audit_info_changes(pairs: Sequence[Tuple[int, str, str]], stats: Dict[str, 
 
 
 def polish_lines(sources: Sequence[str], translations: Sequence[str],
-                 max_width: Optional[float] = None) -> Tuple[List[str], Dict[str, int]]:
-    """润色整表：返回 `(新的译文列, 统计)`。任何失败都只回退到原译文，绝不丢内容。"""
+                 max_width: Optional[float] = None, *,
+                 use_thinking: Optional[bool] = None,
+                 long_lines_only: bool = False) -> Tuple[List[str], Dict[str, int]]:
+    """润色整表：返回 `(新的译文列, 统计)`。任何失败都只回退到原译文，绝不丢内容。
+
+    三个取舍旋钮（都来自配置，见 `polish_subs_main`）：
+      * `max_width`：目标语显示宽度上限（超了直接回退原行）；
+      * `use_thinking`：是否允许模型思考。关掉省 ~91% token，但润色更激进地压缩，
+        因此自动改用更严的覆盖率门槛 `POLISH_COVERAGE_MIN_NO_THINKING`（回退更多行）；
+      * `long_lines_only`：只把"有分句的长行"送去润色（`needs_polish_long_line`），
+        其余行原样保留并计入 `skipped`。
+    """
     sources = ["" if pd.isna(s) else str(s) for s in sources]
     current = ["" if pd.isna(t) else str(t) for t in translations]
     result = list(current)
+    if use_thinking is None:
+        use_thinking = config_utils.polish_thinking()
+    min_coverage = (subtitle_split.POLISH_COVERAGE_MIN if use_thinking
+                    else subtitle_split.POLISH_COVERAGE_MIN_NO_THINKING)
     stats = {"rows": len(current), "batches": 0, "failed_batches": 0, "changed": 0,
-             "rejected": 0, "audit_calls": 0, "audit_flagged": 0, "audit_failed": 0}
+             "rejected": 0, "audit_calls": 0, "audit_flagged": 0, "audit_failed": 0,
+             "skipped": 0, "sent": len(current), "thinking": int(bool(use_thinking))}
     reject_reasons: List[str] = []
 
-    for batch_index, index_group in enumerate(_chunks(range(len(current)), BATCH_SIZE), start=1):
+    # 预筛：只润色"有分句的长行"时，其余行不参与（省 token 的主要手段之一）
+    if long_lines_only:
+        targets = [i for i, text in enumerate(current)
+                   if subtitle_split.needs_polish_long_line(text)]
+        stats['skipped'] = len(current) - len(targets)
+        stats['sent'] = len(targets)
+    else:
+        targets = list(range(len(current)))
+
+    extra_body = None if use_thinking else {"thinking": {"type": "disabled"}}
+
+    for batch_index, index_group in enumerate(_chunks(targets, BATCH_SIZE), start=1):
         eu.check_cancel()
         rows = [(i, sources[i], current[i]) for i in index_group]
         stats['batches'] += 1
@@ -147,7 +173,8 @@ def polish_lines(sources: Sequence[str], translations: Sequence[str],
                                         f"Return every id once, in order, without merging or splitting lines")}
                 return {"status": "success", "message": "polish ok"}
 
-            data = ask_gpt(prompt, response_json=True, valid_def=valid_polish, log_title='polish_subs')
+            data = ask_gpt(prompt, response_json=True, valid_def=valid_polish,
+                           log_title='polish_subs', extra_body=extra_body)
             parsed = _parse_polish_response(data, tuple(i for i, _, _ in rows))
             if parsed is None:
                 raise ValueError("响应行数与输入的 id 对不上")
@@ -160,7 +187,8 @@ def polish_lines(sources: Sequence[str], translations: Sequence[str],
         changed_pairs: List[Tuple[int, str, str]] = []
         for row_id, (polished, changed) in parsed.items():
             original = current[row_id]
-            ok, reason = subtitle_split.polish_ok(original, polished, max_width=max_width)
+            ok, reason = subtitle_split.polish_ok(original, polished, max_width=max_width,
+                                                 min_coverage=min_coverage)
             if not ok:
                 stats['rejected'] += 1
                 if len(reject_reasons) < 5:
@@ -183,9 +211,11 @@ def polish_lines(sources: Sequence[str], translations: Sequence[str],
 
 def polish_stats_line(stats: Dict[str, int]) -> str:
     """一行汇总（放在 step5.2 末尾；没开启这一步时不会打印）。"""
-    text = (f"✨ 润色统计：{stats['rows']} 行分 {stats['batches']} 批，改动 {stats['changed']} 行 / "
-            f"护栏拦下 {stats['rejected']} 行 / 审校回退 {stats.get('reverted', 0)} 行 / "
-            f"失败 {stats['failed_batches']} 批")
+    text = (f"✨ 润色统计：{stats['rows']} 行（送出 {stats.get('sent', stats['rows'])} / "
+            f"预筛跳过 {stats.get('skipped', 0)}）分 {stats['batches']} 批，"
+            f"改动 {stats['changed']} 行 / 护栏拦下 {stats['rejected']} 行 / "
+            f"审校回退 {stats.get('reverted', 0)} 行 / 失败 {stats['failed_batches']} 批"
+            f"｜思考 {'开' if stats.get('thinking', 1) else '关'}")
     reasons = stats.get('reasons') or []
     if reasons:
         text += "\n   拦下原因示例：" + "；".join(reasons[:3])
@@ -206,9 +236,14 @@ def polish_subs_main():
     df = pd.read_excel(INPUT_FILE)
     limits = resolve_limits()
     console.print(f"[cyan]📐 字幕长度档位：[/cyan]{limits.label}")
+    use_thinking = config_utils.polish_thinking()
+    long_lines_only = config_utils.polish_long_lines_only()
+    console.print(f"[cyan]🧠 思考：{'开（更忠实，约 20 行/批 2 万 tokens）' if use_thinking else '关（省约 91% token，覆盖率门槛自动提到 0.85）'}[/cyan]")
+    console.print(f"[cyan]✂️ 润色范围：{'只润色有分句的长行' if long_lines_only else '全部行'}[/cyan]")
 
     polished, stats = polish_lines(df['Source'].tolist(), df['Translation'].tolist(),
-                                  max_width=limits.tr_limit)
+                                  max_width=limits.tr_limit, use_thinking=use_thinking,
+                                  long_lines_only=long_lines_only)
     df_out = pd.DataFrame({'Source': df['Source'].tolist(), 'Translation': polished})
     df_out.to_excel(OUTPUT_POLISHED_FILE, index=False)
 

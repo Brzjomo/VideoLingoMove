@@ -257,6 +257,33 @@ def polish_translation() -> bool:
         return False
 
 
+def polish_thinking() -> bool:
+    """润色时是否允许模型**思考**（`subtitle.polish_thinking`，默认 True）。
+
+    2026-09-21 用户要求把这个取舍做成开关（侧边栏，在润色开关下面）。实测（deepseek-flash，
+    20 行一批）：开思考 ≈ 1,200 prompt + 19,400 completion（其中 18,800 是 reasoning）；
+    关思考 ≈ 1,220 + 568（−91% tokens）。代价是关思考版更激进地压缩、会丢词
+    （`自由职业手办原型师` → `自由手办原型师`），所以 step5.2 在关思考时自动把覆盖率门槛提到
+    `subtitle_split.POLISH_COVERAGE_MIN_NO_THINKING`，回退的行也就更多。
+    """
+    try:
+        return bool(load_key("subtitle.polish_thinking"))
+    except Exception:
+        return True
+
+
+def polish_long_lines_only() -> bool:
+    """是否只润色"有分句的长行"（`subtitle.polish_long_lines_only`，默认 False）。
+
+    打开后，宽度不足一行的短句、以及整行没有逗号/顿号（没有分句）的行都原样保留 ——
+    用户 2026-09-21 要的省 token 方式：判据见 `subtitle_split.needs_polish_long_line`。
+    """
+    try:
+        return bool(load_key("subtitle.polish_long_lines_only"))
+    except Exception:
+        return False
+
+
 if __name__ == "__main__":
     print(load_key('language_split_with_space'))
 

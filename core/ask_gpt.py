@@ -99,7 +99,7 @@ def increase_completion_tokens(value):
 
 
 def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default', use_cache=True,
-            bypass_cache=False):
+            bypass_cache=False, extra_body=None):
     """调用 LLM 并返回结果。
 
     Args:
@@ -112,6 +112,10 @@ def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default', use
         bypass_cache: 只跳过**读取**缓存，仍会写入结果。
             调用方在"重试同一 prompt 但希望真正重新请求"时使用它——
             历史上是用 `prompt + ' ' * retry` 加空格来绕过缓存键，语义晦涩（见 devdocs R14）。
+        extra_body: 直接透传给 OpenAI SDK 的额外请求体（如
+            `{"thinking": {"type": "disabled"}}` 关闭推理模型的思考，
+            见 core/step5_2_polish_subs.py —— 实测 20 行润色从 ~20,600 tokens 降到 1,788）。
+            **会参与缓存键之外的调用参数**，调用方切换它时应确认缓存语义仍然正确。
 
     Returns:
         解析后的 dict（response_json=True）或原始文本（response_json=False）
@@ -154,6 +158,9 @@ def ask_gpt(prompt, response_json=True, valid_def=None, log_title='default', use
             completion_args = {"model": model, "messages": messages, "timeout": REQUEST_TIMEOUT}
             if response_format is not None:
                 completion_args["response_format"] = response_format
+            if extra_body:
+                # 透传给 SDK 的额外参数（例如关闭推理模型的思考）。
+                completion_args["extra_body"] = extra_body
             response = client.chat.completions.create(**completion_args)
         except RequestException as e:
             last_error = f"网络请求失败: {e}"

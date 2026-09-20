@@ -233,11 +233,18 @@ def subtitle_length_controls():
 
 
 def polish_controls():
-    """字幕润色开关（2026-09-21 用户要求："加个开关，打开后才做这步润色优化"）。
+    """字幕润色面板（2026-09-21 用户要求："加个开关，打开后才做这步润色优化"）。
 
-    默认关：打开后 step5.2 才会额外调用 LLM 逐行润色（每 20 行一批，再对改动过的行做一次批量
-    审校）；关着时这一步零调用。润色结果另存为 `output/log/translation_results_polished.xlsx`，
-    step6 只在开关打开且行数一致时才用它 —— 所以关掉开关重跑一次即可恢复未润色字幕。
+    三个开关，依次是"做不做 → 质量/花费取舍 → 润色范围"：
+      * `polish_translation`（默认关）：打开后 step5.2 才调用 LLM；
+      * `polish_thinking`（默认开）：是否允许模型思考 —— 实测 20 行/批从 ~20,600 tokens
+        降到 1,788（−91%），但关思考版更激进、会丢词（`自由职业手办原型师` → `自由手办原型师`），
+        所以关掉时 step5.2 自动把覆盖率门槛提到 0.85，回退的行更多；
+      * `polish_long_lines_only`（默认关）：只润色"有分句的长行"，短句与无逗号的行原样保留
+        （`subtitle_split.needs_polish_long_line`），用来省 token。
+
+    润色结果另存为 `output/log/translation_results_polished.xlsx`，step6 只在开关打开且行数一致时
+    才用它 —— 所以关掉开关重跑一次即可恢复未润色字幕。
     """
     with st.expander("✨ 字幕润色（可选，会额外调用 LLM）", expanded=False):
         current = bool(load_key_or("subtitle.polish_translation", False))
@@ -252,7 +259,39 @@ def polish_controls():
         if enabled != current:
             update_key("subtitle.polish_translation", bool(enabled))
             st.rerun(scope="app")
-        st.caption("ℹ️ 大约每 20 行一次调用；润色后行数不变，超长/丢数字/丢信息会被拦下并回退原译文。"
+
+        # 下面两个开关只在润色打开时生效（关闭时置灰，避免误以为改了会有效果）
+        thinking = bool(load_key_or("subtitle.polish_thinking", True))
+        allow_thinking = st.toggle(
+            "允许模型思考（更忠实，但贵约 10 倍）",
+            value=thinking,
+            key="polish_thinking",
+            disabled=not enabled,
+            help="开（默认）：润色只做最小改动、几乎不丢词，实测 20 行/批约 2 万 tokens"
+                 "（其中 95% 是思考 token）。\n"
+                 "关：省约 91% 的 token，但模型会明显更激进地压缩，容易丢词"
+                 "（实测 `自由职业手办原型师` → `自由手办原型师`、`制作GK套件` → `做GK`）——"
+                 "因此关掉时覆盖率门槛自动从 0.70 收紧到 0.85，被拦下的行会保持原译文。",
+        )
+        if allow_thinking != thinking:
+            update_key("subtitle.polish_thinking", bool(allow_thinking))
+            st.rerun(scope="app")
+
+        long_only = bool(load_key_or("subtitle.polish_long_lines_only", False))
+        only_long = st.toggle(
+            "只润色有分句的长行",
+            value=long_only,
+            key="polish_long_lines_only",
+            disabled=not enabled,
+            help="打开：宽度不足一行（约 8~9 个汉字以内）的短句、以及整行没有逗号/顿号（没有分句）"
+                 "的行都原样保留，只把长且带分句的行送去润色 —— 这类行才是读起来容易断的。\n"
+                 "关闭（默认）：每一行都送。判据见 subtitle_split.needs_polish_long_line。",
+        )
+        if only_long != long_only:
+            update_key("subtitle.polish_long_lines_only", bool(only_long))
+            st.rerun(scope="app")
+
+        st.caption("ℹ️ 每 20 行一次调用；润色后行数不变，超长/丢数字/丢信息会被拦下并回退原译文。"
                    "「只生成原语言字幕」模式下自动跳过。")
 
 

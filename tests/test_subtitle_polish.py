@@ -109,6 +109,87 @@ class TestPolishSwitchDefaultsOff(unittest.TestCase):
             self.assertFalse(config_utils.polish_translation())
 
 
+class TestPolishThinkingAndScopeSwitches(unittest.TestCase):
+    """两个取舍开关（2026-09-21 用户要求）：思考 与 只润色长行。
+
+    缺键时的默认必须保持"贵但忠实"（思考开）与"全量润色"，这样老 config 的行为不变。
+    """
+
+    def test_thinking_defaults_on_even_without_the_key(self):
+        with mock.patch.object(config_utils, "load_key", side_effect=KeyError("subtitle")):
+            self.assertTrue(config_utils.polish_thinking())
+
+    def test_long_lines_only_defaults_off(self):
+        with mock.patch.object(config_utils, "load_key", side_effect=KeyError("subtitle")):
+            self.assertFalse(config_utils.polish_long_lines_only())
+
+    def test_needs_polish_long_line_rule(self):
+        """判据 = 宽度够长 **且** 有分句标点（用户原话："只润色有分句的长行"）。"""
+        self.assertTrue(ss.needs_polish_long_line("现在也依然制作自己喜欢的作品，并参加Wonder Festival等活动"))
+        self.assertFalse(ss.needs_polish_long_line("大家好"))                       # 太短
+        self.assertFalse(ss.needs_polish_long_line("我是自由职业手办原型师米罗"))     # 够长但无分句
+        self.assertFalse(ss.needs_polish_long_line("由ALTER公司以成品手办形式发售"))  # 够长但无逗号
+        self.assertTrue(ss.needs_polish_long_line("大学时我主修雕塑，大三开始制作GK套件，"))
+
+    def test_thinking_off_passes_disabled_thinking_to_the_api(self):
+        """关思考必须真的把 `thinking: disabled` 传给 SDK，否则用户以为省了其实没省。"""
+        captured = {}
+
+        def fake_ask(prompt, **kwargs):
+            captured.update(kwargs)
+            return {'lines': [{'id': 0, 'polished': '改好的译文', 'changed': True}]}
+
+        with mock.patch.object(p5, "get_polish_prompt", lambda *a, **k: "PROMPT"), \
+                mock.patch.object(p5, "ask_gpt", side_effect=fake_ask), \
+                mock.patch.object(p5, "_audit_info_changes", return_value=set()), \
+                mock.patch.object(p5.eu, "check_cancel", lambda *a, **k: None):
+            p5.polish_lines(["src"], ["原有的一行译文"], use_thinking=False)
+        self.assertEqual(captured.get('extra_body'), {"thinking": {"type": "disabled"}})
+
+        captured.clear()
+        with mock.patch.object(p5, "get_polish_prompt", lambda *a, **k: "PROMPT"), \
+                mock.patch.object(p5, "ask_gpt", side_effect=fake_ask), \
+                mock.patch.object(p5, "_audit_info_changes", return_value=set()), \
+                mock.patch.object(p5.eu, "check_cancel", lambda *a, **k: None):
+            p5.polish_lines(["src"], ["原有的一行译文"], use_thinking=True)
+        self.assertIsNone(captured.get('extra_body'))
+
+    def test_thinking_off_uses_the_stricter_coverage_gate(self):
+        """关思考会自动收紧覆盖率门槛：同一行在 0.70 下放行、在 0.85 下被拦（差别只来自门槛）。"""
+        original = "我是自由职业手办原型师米罗，一直在做商业原型制作"
+        polished = "我是自由手办原型师米罗，一直做商业原型"   # 丢"职业/在/制作"，长度比仍在 0.8 以上
+        ok_loose, loose_reason = ss.polish_ok(original, polished)
+        self.assertTrue(ok_loose, loose_reason)
+        ok_strict, reason = ss.polish_ok(
+            original, polished, min_coverage=ss.POLISH_COVERAGE_MIN_NO_THINKING)
+        self.assertFalse(ok_strict)
+        self.assertIn("survive", reason)
+
+    def test_long_lines_only_skips_rows_without_clauses(self):
+        """预筛：短行/无分句行不进提示词，也不改动，并计入 skipped。"""
+        sent_prompts = []
+        polished_line = "大学时主修雕塑，大三就开始做GK套件，"
+
+        def fake_ask(prompt, **kwargs):
+            sent_prompts.append(prompt)
+            return {'lines': [{'id': 2, 'polished': polished_line, 'changed': True}]}
+
+        sources = ["s0", "s1", "s2"]
+        translations = ["大家好", "我是自由职业手办原型师米罗", "大学时我主修雕塑，大三开始制作GK套件，"]
+        with mock.patch.object(p5, "get_polish_prompt",
+                               lambda rows, *a, **k: "PROMPT " + ",".join(str(r[0]) for r in rows)), \
+                mock.patch.object(p5, "ask_gpt", side_effect=fake_ask), \
+                mock.patch.object(p5, "_audit_info_changes", return_value=set()), \
+                mock.patch.object(p5.eu, "check_cancel", lambda *a, **k: None):
+            polished, stats = p5.polish_lines(sources, translations, long_lines_only=True)
+        self.assertEqual(stats['skipped'], 2)
+        self.assertEqual(stats['sent'], 1)
+        self.assertEqual(sent_prompts, ["PROMPT 2"])           # 只把第 2 行送出去
+        self.assertEqual(polished[0], "大家好")                 # 跳过的行原样保留
+        self.assertEqual(polished[1], "我是自由职业手办原型师米罗")
+        self.assertEqual(polished[2], polished_line)
+
+
 class TestPickTranslationFile(unittest.TestCase):
     """开关关 / 无产物 / 行数不一致 → 必须回到未润色字幕表（错位的字幕比不够顺的字幕糟得多）。"""
 
