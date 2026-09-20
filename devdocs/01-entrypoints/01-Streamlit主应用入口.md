@@ -103,7 +103,7 @@ flowchart TD
 | 5 | `st.py` | `with st.sidebar:` → `page_setting` + `st.markdown(give_star_button, ...)` | 侧边栏 |
 | 6 | `st.py` | `if download_video_section:` —— **区块门控**：无素材时不渲染处理区块 | 主区区块 1 |
 | 7 | `st.py` | `text_processing_section`（仅第 6 步返回 `True` 时） | 主区区块 2 |
-| 8 | `st_components/sidebar_setting.py` | `subtitle_length_controls`（2026-09-20 从主区移入） | 侧边栏「✂️ 字幕长度调节」 |
+| 8 | `st_components/sidebar_setting.py` | `subtitle_length_controls`（2026-09-20 从主区移入）+ `polish_controls`（2026-09-21 新增，紧跟其后） | 侧边栏「✂️ 字幕长度调节」/「✨ 字幕润色（可选，会额外调用 LLM）」 |
 | 9 | `st.py` | `st.info("请先在上方下载或上传一个视频/音频文件，然后再开始处理。")`（第 6 步为 `False` 时） | 主区 |
 | 10 | `st.py` | `cache_maintenance_section`——**无条件渲染**，与是否有素材无关 | 主区区块 3 |
 
@@ -137,7 +137,7 @@ flowchart TD
 | 1 | `转录（Whisper / 火山 ASR）` | `step_transcribe` | `st.py` | `step2_whisperX.transcribe`（含音频抽取，产物 `output/audio/raw.wav`、`raw.mp3`、`for_whisper.mp3`） |
 | 2 | `断句（spaCy + LLM）` | `step_split_sentences` | `st.py` | `step3_1_spacy_split.split_by_spacy` + `step3_2_splitbymeaning.split_sentences_by_meaning` |
 | 3 | `术语提取`（**仅 `transcription_only=False`**，`st.py`） | `step_summarize` | `st.py` | `step4_1_summarize.get_summary`；若 `load_key("pause_before_translate")` 为真则调 `TaskRunner.request_review_pause`（`st.py`，见 §3.5） |
-| 4 | `翻译并压制字幕` | `step_translate_and_burn` | `st.py` | `step4_2_translate_all.translate_all` → `step5_splitforsub.split_for_sub_main` → `step6_generate_final_timeline.align_timestamp_main` → `step7_merge_sub_to_vid.merge_subtitles_to_video` |
+| 4 | `翻译并压制字幕` | `step_translate_and_burn` | `st.py` | `step4_2_translate_all.translate_all` → `step5_splitforsub.split_for_sub_main` → `step5_2_polish_subs.polish_subs_main`（**可选**，开关 `subtitle.polish_translation`，默认关）→ `step6_generate_final_timeline.align_timestamp_main` → `step7_merge_sub_to_vid.merge_subtitles_to_video` |
 
 `transcription_only=True` 时 `build_task_steps` 还会先调 `ensure_terminology_file`（`st.py` → `st.py`）保证 `output/log/terminology.json` 存在（直通模式不需要术语表，但下游会读）。因此直通模式是 3 步（无「术语提取」），翻译模式是 4 步。
 
@@ -278,7 +278,7 @@ stateDiagram-v2
 | `step_transcribe` | `st.py` | 步骤 1「转录」 | `step2_whisperX.transcribe` |
 | `step_split_sentences` | `st.py` | 步骤 2「断句」 | `step3_1_spacy_split.split_by_spacy` + `step3_2_splitbymeaning.split_sentences_by_meaning` |
 | `step_summarize` | `st.py` | 步骤 3「术语提取」（仅翻译模式） | `step4_1_summarize.get_summary`；`pause_before_translate` 为真时调 `TaskRunner.request_review_pause`（**在 worker 线程内**，不写 session_state） |
-| `step_translate_and_burn` | `st.py` | 步骤 4「翻译并压制字幕」 | `step4_2_translate_all.translate_all` → `step5_splitforsub.split_for_sub_main` → `step6_generate_final_timeline.align_timestamp_main` → `step7_merge_sub_to_vid.merge_subtitles_to_video` |
+| `step_translate_and_burn` | `st.py` | 步骤 4「翻译并压制字幕」 | `step4_2_translate_all.translate_all` → `step5_splitforsub.split_for_sub_main` → `step5_2_polish_subs.polish_subs_main`（**可选**，开关 `subtitle.polish_translation`，默认关时只打印一行）→ `step6_generate_final_timeline.align_timestamp_main` → `step7_merge_sub_to_vid.merge_subtitles_to_video` |
 | `build_task_steps` | `st.py` | 按配置组装步骤表 | 读 `transcription_only`；直通模式先调 `ensure_terminology_file`；返回 `[(标签, 无参可调用对象), ...]` |
 | `ensure_terminology_file` | `st.py` | 保证术语文件存在 | 写 `output/log/terminology.json` = `{"topic": "", "terms": []}`；已存在则不覆盖 |
 | `record_start_time` | `st.py` | `eu.start_time = time.time` | 无校验、无返回；由按钮分支调用（`st.py`） |
@@ -288,6 +288,7 @@ stateDiagram-v2
 | `text_processing_section` | `st.py` | 渲染「翻译和生成字幕」/「音频转录和生成原语言字幕」区块 | 读 `transcription_only` 决定标题、步骤文案、按钮文案与成功文案；`runner.state != "idle"` 时只画控制面板并 `return`；**无返回值**（返回值在 `st.py` 被忽略） |
 | `cache_maintenance_section` | `st.py` | 缓存清理入口，**与是否有素材无关** | 两个 expander：火山二级缓存 `output/log/asr_results/*.json`、内容寻址转录缓存 `.cache/asr`（，调 `transcription_cache.clear_cache`） |
 | `subtitle_length_controls` | `st_components/sidebar_setting.py`（2026-09-20 从 `st.py` 主区**移到侧边栏**） | 字幕长度面板 expander「✂️ 字幕长度调节」 | ① 开关「按语言自动设置（切换语言即覆盖）」→ `subtitle.auto_length_by_language`，打开时立刻按当前语言下发一次档位并 `st.rerun`；② caption 显示 `📐 当前：<档位说明>`；③ 两个 `st.number_input`（`max_split_length` / `subtitle.max_length`）在自动模式或"仅转录+关断句"时**置灰**；④「保存手填值」（自动模式禁用）与「恢复当前语言推荐值」（`apply_language_profile(force=True)`，开关关着也能一键套用）；宽度用官方新写法 `width="stretch"` |
+| `polish_controls` | `st_components/sidebar_setting.py`（2026-09-21 新增，紧跟「✂️ 字幕长度调节」之后） | 字幕润色面板 expander「✨ 字幕润色（可选，会额外调用 LLM）」 | 一个 `st.toggle("翻译后润色字幕措辞")` 写 `subtitle.polish_translation`（默认关，`load_key_or` 读），改动即 `update_key` + `st.rerun(scope="app")`；caption 写明"约每 20 行一次调用 / 行数不变 / 超长·丢数字·丢信息会回退原译文 / 仅转录模式跳过"。打开后 step5.2 才会真的调 LLM |
 | `main` | `st.py` | 组装页面 | `st.set_page_config` 必须在最前；`download_video_section` 的返回值决定是否渲染处理区块；`cache_maintenance_section` 无条件调用 |
 
 ### 5.2 `st_components/imports_and_utils.py`
@@ -327,6 +328,7 @@ stateDiagram-v2
 | `pause_before_translate` | `st.py` | 为 `True` 时 `step_summarize` 调 `TaskRunner.request_review_pause`，页面进入术语确认态（见 §3.5） |
 | `subtitle.auto_length_by_language` | `st_components/sidebar_setting.py`（侧边栏「✂️ 字幕长度调节」） | 字幕长度面板的开关（默认 `true`）：开=切语言即按 `core/subtitle_limits.py` 的档位覆盖下面两个值，step3_2/step5 运行期也按当前语言现算（手改无效）；关=完全按手填值走 |
 | `max_split_length` | `st_components/sidebar_setting.py`；`core/step3_2_splitbymeaning.py`（经 `resolve_limits`） | 字幕长度面板的「首次粗切词数上限」。自动模式由语言档位给出（中日 30 / 韩 28 / 拉丁 26 / 泰 20），只有关闭自动时才读这里的手填值（`load_key_or(..., 20)`） |
+| `subtitle.polish_translation` | `st_components/sidebar_setting.py`（侧边栏「✨ 字幕润色（可选，会额外调用 LLM）」） | step5.2 字幕润色的开关（**2026-09-21 新增，默认 `false`**）：打开后 step5 与 step6 之间多跑一步 LLM 润色（每 20 行一次调用 + 每个有改动的批次一次审校）；关着时该步零调用，step6 立刻回到未润色的字幕表 |
 | `subtitle.max_length` | `st_components/sidebar_setting.py`；`core/step5_splitforsub.py`（经 `resolve_limits`） | 字幕长度面板的「单行最大字符数」。自动模式=按语言档位（中日 60 宽度≈34 字 / 韩 48 / 拉丁 70 / 俄与 RTL 65）；手动模式=源文按字符数、译文按宽度×`target_multiplier` |
 
 其他被间接依赖的键：

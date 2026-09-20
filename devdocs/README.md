@@ -53,7 +53,7 @@ devdocs/
 │ ├── 02-语音识别ASR.md ← step2
 │ ├── 03-句子切分NLP.md ← step3
 │ ├── 04-术语总结与翻译.md ← step4
-│ ├── 05-字幕切分与时间轴.md ← step5/step6
+│ ├── 05-字幕切分与时间轴.md ← step5/step5.2/step6
 │ └── 06-字幕压制与成片.md ← step7
 ├── 03-subsystems/ ← 跨步骤的子系统（LLM / ASR / NLP）
 │ ├── 01-LLM调用与提示词.md
@@ -130,7 +130,7 @@ devdocs/
 | [`02-语音识别ASR.md`](02-pipeline/02-语音识别ASR.md) | ~46K | step2：WhisperX / 火山引擎 / 分段算法 / 词级清洗 / 内容寻址缓存 |
 | [`03-句子切分NLP.md`](02-pipeline/03-句子切分NLP.md) | ~24K | step3：spaCy 四步链 + LLM 语义切分 + `llm_sentence_split` 开关 |
 | [`04-术语总结与翻译.md`](02-pipeline/04-术语总结与翻译.md) | ~22K | step4：术语表、三步翻译、并发与回填 |
-| [`05-字幕切分与时间轴.md`](02-pipeline/05-字幕切分与时间轴.md) | ~26K | step5/step6：长度切分、词级→句级时间映射、SRT 生成 |
+| [`05-字幕切分与时间轴.md`](02-pipeline/05-字幕切分与时间轴.md) | ~56K | step5/step5.2/step6：长度切分、可选的字幕润色、词级→句级时间映射、SRT 生成 |
 | [`06-字幕压制与成片.md`](02-pipeline/06-字幕压制与成片.md) | ~19K | step7：ffmpeg 硬字幕压制、`resolution: 0x0` 的三种行为、阶段完成标记 |
 
 ### 03-subsystems —— 跨步骤子系统

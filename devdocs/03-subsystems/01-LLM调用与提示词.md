@@ -68,6 +68,7 @@ flowchart TD
  S41["core/step4_1_summarize.py: get_summary"]
  S42["core/step4_2_translate_all.py: translate_chunk"]
  S5["core/step5_splitforsub.py: align_subs"]
+ S52["core/step5_2_polish_subs.py: polish_lines（可选）"]
  TRIM["core/subtitle_trim.py: check_len_then_trim"]
  end
 
@@ -79,6 +80,8 @@ flowchart TD
  P5["get_prompt_expressiveness"]
  P6["get_align_prompt"]
  P7["get_subtitle_trim_prompt"]
+ P8["get_polish_prompt（可选）"]
+ P9["get_polish_audit_prompt（可选）"]
  end
 
  TO["core/translate_once.py: translate_lines"]
@@ -91,6 +94,8 @@ flowchart TD
 
  ST --> S32 & S41 & S42 & S5
  VP --> S32 & S41 & S42 & S5
+ ST --> S52
+ VP --> S52
  S32 --> P1 --> AG
  S41 --> P2 --> AG
  S42 --> TO
@@ -98,6 +103,8 @@ flowchart TD
  TO --> P3 --> P4 --> AG
  TO --> P5 --> AG
  S5 --> P6 --> AG
+ S52 --> P8 --> AG
+ S52 --> P9 --> AG
  TRIM --> P7 --> AG
  AG --> HIST --> LOG
  AG --> FB
@@ -174,6 +181,8 @@ ask_gpt(prompt, response_json=True, valid_def=None, core/ask_gpt.py
 | `'summary'` | `output/gpt_log/summary.json` | `core/step4_1_summarize.py` | 术语总结 |
 | `'sentence_splitbymeaning'` | `output/gpt_log/sentence_splitbymeaning.json` | `core/step3_2_splitbymeaning.py` | 调用量最大（每句一次） |
 | `'align_subs'` | `output/gpt_log/align_subs.json` | `core/step5_splitforsub.py` | 字幕对齐切分 |
+| `'polish_subs'` | `output/gpt_log/polish_subs.json` | `core/step5_2_polish_subs.py`（`polish_lines`，**每 20 行一次**） | 字幕润色（step5.2，可选，默认关） |
+| `'polish_audit'` | `output/gpt_log/polish_audit.json` | `core/step5_2_polish_subs.py`（`_audit_info_changes`，**每个有改动的批次一次**） | 润色审校：逐 id 判定 `info_changed` |
 | `'subtitle_trim'` | `output/gpt_log/subtitle_trim.json` | `core/subtitle_trim.py` | 超长字幕压缩（由 step4_2 在 `duration > min_trim_duration` 时触发，`core/step4_2_translate_all.py`） |
 | `'translate_faithfulness'` | `output/gpt_log/translate_faithfulness.json` | `core/translate_once.py`（`f'translate_{step_name}'`，`step_name='faithfulness'`） | 直译阶段 |
 | `'translate_expressiveness'` | `output/gpt_log/translate_expressiveness.json` | `core/translate_once.py`（`step_name='expressiveness'`） | 反思+意译阶段 |
@@ -196,15 +205,17 @@ ask_gpt(prompt, response_json=True, valid_def=None, core/ask_gpt.py
 
 签名约定（无类型注解，靠约定）：`valid_def(response_data: dict) -> dict`，返回值必须是 `{"status": ..., "message": ...}`，仅当 `status == 'success'` 才被接受（`core/ask_gpt.py`）。
 
-仓库内已有的 5 个实现：
+仓库内已有的 6 个实现：
 
 | 实现 | 位置 | 校验内容 |
 | --- | --- | --- |
 | `valid_summary` | `core/step4_1_summarize.py` | 必须有 `terms`，且每个 term 含 `src/tgt/note`（**不校验 `topic`**，缺失时 补空串） |
 | `valid_split` | `core/step3_2_splitbymeaning.py` | 必须有 `choice ∈ {1,2}`，且存在 `split{choice}` 并含 `[br]`（与 §5.5 的双候选提示词成对，见 §7.7） |
-| `valid_align` | `core/step5_splitforsub.py` | 必须有 `align`，且 `len(align) >= 2`；`subtitle.align_validate` 为真时还要求**段数恰等于源文段数**，并把各段交给 `core/subtitle_split.check_align_parts(…, allow_rewrite=…)`（段数/空段/孤立碎片/**段首悬空助词**，见 [`../02-pipeline/05-字幕切分与时间轴.md`](../02-pipeline/05-字幕切分与时间轴.md) §5.1、§5.5） |
+| `valid_align` | `core/step5_splitforsub.py` | 必须有 `align`，且 `len(align) >= 2`；`subtitle.align_validate` 为真时还要求**段数恰等于源文段数**，并把各段交给 `core/subtitle_split.check_align_parts(…, allow_rewrite=…)`（段数/空段/孤立碎片/**段首悬空助词**，见 [`../02-pipeline/05-字幕切分与时间轴.md`](../02-pipeline/05-字幕切分与时间轴.md) §5.1、§5.6） |
 | `valid_trim` | `core/subtitle_trim.py` | 必须有 `result` |
 | `valid_faith` / `valid_express` | `core/translate_once.py`，复用 `valid_translate_result`（`core/translate_once.py`） | 必须存在 key `'1'`，且其值含 `direct` / `free` |
+| `valid_polish` | `core/step5_2_polish_subs.py`（定义在 `polish_lines` 内部） | 必须有 `lines`，且**每个输入 id 恰好一条**（id 集合与数量都要对上，否则带原因重试）——这是"不许合并/拆分行、不许漏行"的机械兜底 |
+| `valid_audit` | `core/step5_2_polish_subs.py`（定义在 `_audit_info_changes` 内部） | 必须有 `audit` 列表；**逐项内容不校验**（代码只读 `info_changed`，非 dict 或缺 `id` 的条目直接跳过），校验失败时 `_audit_info_changes` 会吞掉异常并**放行全部改动**（见 `../02-pipeline/05-字幕切分与时间轴.md` §7.8） |
 
 协议的两个隐含要求：**返回值必须是 dict 且含 `status`**（非 dict 会在 抛 `AttributeError`）；校验器**可以**抛异常，异常会被 捕获并当作 `"valid_def 抛异常: ..."` 处理，但异常信息与"最后一次才写 error.json"的规则叠加后仍不易定位。
 
@@ -302,7 +313,7 @@ response_format = {"type": "json_object"} if response_json and model in llm_supp
 - 不在白名单时**静默降级**：请求照发，只是不再约束输出格式，全靠模型自觉 + `json_repair` 兜底。
 - 现实落差：一键切换里的「硅基流动」预设模型是 `Qwen/Qwen2.5-72B-Instruct`（`config.example.yaml`），**不在白名单内**，切过去之后 JSON mode 就失效了；`ollama_api.model` = `qwen3:30b-a3b` 恰好在白名单内。
 - 该白名单是 **dev 的刻意保留**：上游 3.0.4 把它改成了布尔开关 `api.llm_support_json`，dev 明确不跟（保留为逐模型精确匹配的白名单）。改动前请先确认白名单是"逐模型精确匹配"的语义。
-- 现在**没有**任何调用点省略 `response_json` 参数：`core/step3_2_splitbymeaning.py`、`core/step4_1_summarize.py`、`core/translate_once.py`、`core/step5_splitforsub.py`、`core/subtitle_trim.py` 都显式传 `response_json=True`。
+- 现在**没有**任何调用点省略 `response_json` 参数：`core/step3_2_splitbymeaning.py`、`core/step4_1_summarize.py`、`core/translate_once.py`、`core/step5_splitforsub.py`、`core/subtitle_trim.py`、`core/step5_2_polish_subs.py` 都显式传 `response_json=True`。
 
 ### 5.4 重试与容错解析
 
@@ -330,6 +341,8 @@ response_format = {"type": "json_object"} if response_json and model in llm_supp
 | `get_prompt_expressiveness(faithfulness_result, lines, shared_prompt)` | 反思 + 意译（Step 2）：对直译结果逐行挑毛病再改写 | JSON 每项含 `origin/direct/reflection/free` 四键，并显式要求 `free` 不许留空 | `core/translate_once.py` | 遍历 `faithfulness_result.items` 生成样例，因此输出 key 与直译结果绑定；`free` 的空值会污染最终字幕（`core/translate_once.py`）；**反思清单里"译文过于啰嗦"的后半句已删除**（现为 "Check the conciseness of the subtitles, point out where the translation is too wordy"），长度约束改由 `core/subtitle_trim.py` 与 `subtitle.max_length`/`target_multiplier` 在 step5/step4_2 强制 |
 | `get_align_prompt(src_sub, tr_sub, src_part)` | 依据源语已切分版本，对目标语字幕做对齐切分 | JSON `{"analysis": str, "align":[{"src_part_i":..., "target_part_i":...}]}` | `core/step5_splitforsub.py` | 用 `.format` 渲染（**不是 f-string**，）；提示词里新增裸 `{}` 会抛 `KeyError`；`num_parts = len(src_part.split('\n'))`，当 `src_part` 无换行时 `num_parts=1`，与 `valid_align` 的 `len>=2` 要求冲突（`core/step5_splitforsub.py`）；第 3 条有**两版**（`_ALIGN_RULE3_LIGHT` / `_ALIGN_RULE3_STRICT`，由 `core.config_utils.align_allow_rewrite()` 选择，两版都允许**移动边界**），两版都只约束"衔接是否悬空"、**都不要求每行自足**（第 7 条要的是**可解析**：不以悬空助词/孤零零的连接词开头、不切在短语中间）——改措辞时不要写回"每行单独读起来是通顺的句子"（`tests/test_prompt_contract.py::PromptContractTest::test_align_prompt_never_asks_for_self_contained_lines` 会拦） |
 | `get_subtitle_trim_prompt(text, duration)` | 字幕朗读时长不够时压缩字幕文本 | JSON `{"analysis": str, "result": str}`；`result` 需保持原语言 | `core/subtitle_trim.py`（经 `check_len_then_trim` → 调 `ask_gpt`） | 同为 `.format` 渲染；`duration` 单位是**秒**（`core/subtitle_trim.py` 算出可用时长、 与它比较）；`rule` 变量在函数内定义，`.format` 只填 `text`/`duration`/`rule` 三个占位符 |
+| `get_polish_prompt(rows, max_width, src_language="")` | step5.2 字幕润色：把**已译好的**逐条字幕改成更自然的措辞（`rows` 是 `[(id, source, current), …]`，`current` 是现有译文） | JSON `{"lines":[{"id": int, "polished": str, "changed": bool}]}`；**一 id 一条、顺序不变**，不许合并/拆分行，不许增删信息、不许补主语/宾语，专名与带单位数字原样保留，宽度上限写进提示词（`{max_width:.0f}` 显示宽度，中文 1 字 = 1.75）、**不许比当前行更长**、行尾不加标点、未改动要写 `"changed": false` | `core/step5_2_polish_subs.py`（经 `ask_gpt(log_title='polish_subs')`） | ⚠️ 它**不是**翻译步骤（译文本就已存在），所以**不能**把提示词改成"要求每行自足/补全成完整句子"——那正是 step5 的 B 方案明确禁止的（见上一条 `get_align_prompt` 的说明与 `tests/test_prompt_contract.py::PromptContractTest::test_polish_prompt_keeps_the_line_contract`）；改文字即成新缓存键，同一视频重跑会重新付费 |
+| `get_polish_audit_prompt(pairs, src_language="")` | 润色审校：对**确实改动过**的行逐一判断是否增删/篡改了**信息**（`pairs` 是 `[(id, original, polished), …]`） | JSON `{"audit":[{"id": int, "info_changed": bool, "reason": str}]}`；提示词明确"只改措辞、换语序、增删虚词/助词/连接词都算 `false`"，只有补事实、漏信息、改数字与单位、改施受关系、把一次说的说两遍才算 `true` | `core/step5_2_polish_subs.py`（经 `ask_gpt(log_title='polish_audit')`） | 机械护栏（覆盖率/长度/数字/重复）拦不住"换词式增补"，这一步是补那个缺口的；**调用本身失败时 step5.2 会放行全部改动**（只告警，不回退），见 [`../02-pipeline/05-字幕切分与时间轴.md`](../02-pipeline/05-字幕切分与时间轴.md) §7.8 |
 
 > ⚠️ 函数名核实结论：`core/prompts_storage.py` 里**没有** `get_translate_prompt`，也**没有** `get_reflect_prompt`。翻译相关的两个函数真名是 `get_prompt_faithfulness`（直译）与 `get_prompt_expressiveness`（含义译，**反思步骤写在它的提示词正文里**，对应 JSON 字段 `reflection`）。同理也没有 `get_summary` 之类的提示词函数——`get_summary` 是步骤函数，在 `core/step4_1_summarize.py`。此外 `get_correct_text_prompt` 属于**已删除的 TTS 链路**，已不存在。
 
@@ -544,6 +557,7 @@ python core\translate_once.py
 python core\step3_2_splitbymeaning.py # 需要 output/log/sentence_splitbynlp.txt
 python core\step4_1_summarize.py # 需要 output/log/sentence_splitbymeaning.txt + custom_terms.xlsx
 python core\step5_splitforsub.py # 需要 output/log/translation_results.xlsx
+python core\step5_2_polish_subs.py # step5.2 润色（需先开 subtitle.polish_translation，否则只打印一行跳过）
 python core\subtitle_trim.py # 自带 __main__，用一条超长中文样例验证压缩链路
 
 # 9) 核对成本统计产物

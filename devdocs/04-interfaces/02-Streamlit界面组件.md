@@ -57,7 +57,7 @@ last_verified: 2026-09-21
 | --- | --- | --- |
 | `st_components/sidebar_setting.py` | ~19K | `config_input` / `_fetch_model_list` / `_search_models` / `model_input` / `check_api` / `apply_config` / `page_setting`：侧边栏全部控件 |
 | `st_components/download_video_section.py` | ~4K | `download_video_section`：下载/上传区块（含上传幂等与 `input_manifest.json` 写入） |
-| `st_components/imports_and_utils.py` | ~7K | 聚合 core 导入（字幕链路 7 个 step）；`subtitle_zip_name`；`pick_default_subtitle`；`download_subtitle_zip_button`；`button_style` / `give_star_button` |
+| `st_components/imports_and_utils.py` | ~7K | 聚合 core 导入（字幕链路 8 个 step，含可选的 step5_2 润色）；`subtitle_zip_name`；`pick_default_subtitle`；`download_subtitle_zip_button`；`button_style` / `give_star_button` |
 | `core/config_utils.py` | ~8K | `load_key / load_key_or / update_key / assign_key / get_joiner`（界面层唯一配置出入口） |
 | `config.yaml` | — | 配置真值源（ruamel.yaml，保留引号与注释）；**未入库**，模板为 `config.example.yaml` |
 | `.streamlit/config.toml` | 13 | `[server] maxUploadSize = 4096` + `[client] toolbarMode = "viewer"`（隐藏 Deploy 菜单；**没有**设 `fileWatcherType`，见文件内注释） |
@@ -78,7 +78,7 @@ flowchart TD
  cfg["core/config_utils.py<br/>load_key / load_key_or / update_key / assign_key"]
  yt["core/step1_ytdlp.py<br/>download_video_ytdlp / find_media_file / write_input_manifest"]
  eu["easy_util.py"]
- steps["core 字幕链路的 9 个模块（step1_ytdlp / step2_whisperX / step3_1 / step3_2 / step4_1 / step4_2 / step5 / step6 / step7）<br/>imports_and_utils.py"]
+ steps["core 字幕链路的 10 个模块（step1_ytdlp / step2_whisperX / step3_1 / step3_2 / step4_1 / step4_2 / step5 / step5_2 / step6 / step7）<br/>imports_and_utils.py"]
  cl["core/onekeycleanup.py:cleanup<br/>imports_and_utils.py"]
  ag["core/ask_gpt.py:ask_gpt<br/>imports_and_utils.py"]
 
@@ -213,6 +213,7 @@ def config_input(label, key, help=None):
 | `model_input` | | 模型选择控件 | `try: from streamlit_searchbox import st_searchbox`，`ImportError` 时回退 `config_input("模型", "api.model")` 并提示重跑安装脚本即可（该包已进主依赖）；搜索框 `key="api_model_searchbox"`，选中即 `update_key("api.model", selected)` |
 | `check_api` | | 用 `ask_gpt("This is a test, …", response_json=True, log_title=None, use_cache=False)` 探测连通性 | 返回 `resp.get('message') == 'success'`；任何异常 → `False`；**刻意绕过缓存**（`use_cache=False`），`log_title=None` 使结果不落 `output/gpt_log/`；**真实的 API 请求**，调用方只调一次 |
 | `apply_config(config_name)` | | 切换 API 预设 | 见 §4.2 |
+| `polish_controls` | `sidebar_setting.py` | 字幕润色开关 expander「✨ 字幕润色（可选，会额外调用 LLM）」 | **2026-09-21 新增**，渲染位置在 `subtitle_length_controls()` 之后、火山/TOS 区块之前（`page_setting` 内）。一个 `st.toggle("翻译后润色字幕措辞", value=load_key_or("subtitle.polish_translation", False), key="polish_translation")` 写回 `subtitle.polish_translation` 并 `st.rerun(scope="app")`；下方 `st.caption` 说明"大约每 20 行一次调用 / 行数不变 / 超长·丢数字·丢信息会被拦下并回退原译文 / 仅转录模式自动跳过"。默认关（缺键也按关） |
 | `page_setting` | | 渲染整个侧边栏 | 无返回值；到 TOS 的「测试TOS连接」按钮结束 |
 | `download_video_section` | `download_video_section.py` | 渲染下载/上传区块 | 返回值 `True/False` **现在被使用**：`st.py` 用它门控处理区块 |
 
@@ -286,11 +287,13 @@ def config_input(label, key, help=None):
 
 ### 6.1 侧边栏已暴露的键（与 §5.2 一一对应）
 
-`api.key`、`api.base_url`、`api.model`、`asr_engine`、`whisper.language`（含 `🌐 自动检测` → `auto`）、`volcano_asr.language`、`target_language`、`demucs`、`transcription_only`、`llm_sentence_split`（仅只转录模式可见，翻译模式被静默纠正为 `true`）、`resolution`、`volcano_asr.app_id`、`volcano_asr.access_token`、`volcano_asr.resource_id`、`volcano_asr.model_version`、`volcano_asr.enable_punc`、`volcano_asr.enable_itn`、`volcano_asr.enable_ddc`、`volcano_asr.show_utterances`、`volcano_asr.enable_speaker_info`、`volcano_asr.enable_channel_split`、`volcano_asr.vad_segment`、`tos.enabled`、`tos.access_key`、`tos.secret_key`、`tos.bucket_name`、`tos.endpoint`、`tos.region`、`tos.auto_cleanup`。
+`api.key`、`api.base_url`、`api.model`、`asr_engine`、`whisper.language`（含 `🌐 自动检测` → `auto`）、`volcano_asr.language`、`target_language`、`demucs`、`transcription_only`、`llm_sentence_split`（仅只转录模式可见，翻译模式被静默纠正为 `true`）、`resolution`、`volcano_asr.app_id`、`volcano_asr.access_token`、`volcano_asr.resource_id`、`volcano_asr.model_version`、`volcano_asr.enable_punc`、`volcano_asr.enable_itn`、`volcano_asr.enable_ddc`、`volcano_asr.show_utterances`、`volcano_asr.enable_speaker_info`、`volcano_asr.enable_channel_split`、`volcano_asr.vad_segment`、`tos.enabled`、`tos.access_key`、`tos.secret_key`、`tos.bucket_name`、`tos.endpoint`、`tos.region`、`tos.auto_cleanup`、`subtitle.polish_translation`（2026-09-21 新增，见下方「✨ 字幕润色」面板）。
 
 > ⚠️ 旧版本此处还列有 `tts_method` 与各 TTS 引擎子键（`sf_fish_tts.*` / `openai_tts.*` / `fish_tts.*` / `azure_tts.*` / `gpt_sovits.*` / `edge_tts.*`）——Dubbing Settings 已删除，这些键也不在 `config.example.yaml` 中，UI 无法再读写它们。
 >
 > **「✂️ 字幕长度调节」面板**（`st_components/sidebar_setting.py::subtitle_length_controls`，2026-09-20 从主区搬进侧边栏）是另一处写侧，它读写三个键：`subtitle.auto_length_by_language`（开关「按语言自动设置（切换语言即覆盖）」）、`max_split_length`、`subtitle.max_length`（两个 `st.number_input`，自动模式或"仅转录+关断句"时置灰），另有「保存手填值」与「恢复当前语言推荐值」（`subtitle_limits.apply_language_profile(force=True)`）两个按钮；切「识别语言」/改「目标语言」/切「仅转录」时由 `sync_subtitle_lengths()` 按档位覆盖，详见 [`../01-entrypoints/01-Streamlit主应用入口.md`](../01-entrypoints/01-Streamlit主应用入口.md) §5 与 [`../04-interfaces/01-配置文件与参数.md`](01-配置文件与参数.md) §6.2。
+>
+> **「✨ 字幕润色（可选，会额外调用 LLM）」面板**（`st_components/sidebar_setting.py::polish_controls`，2026-09-21 新增）紧跟在上一个面板之后（`page_setting` 内、火山/TOS 区块之前），只写**一个**键：`subtitle.polish_translation`（toggle「翻译后润色字幕措辞」，默认关，改动即 `update_key` + `st.rerun(scope="app")`）。打开后 step5 与 step6 之间会多跑 `core/step5_2_polish_subs.py`（每 20 行一次 LLM 调用 + 每个有改动的批次一次审校调用）；关掉时该步零调用，且 step6 立刻回到未润色的 `translation_results_for_subtitles.xlsx`（润色产物仍在，不必重跑 step5）。详见 [`../02-pipeline/05-字幕切分与时间轴.md`](../02-pipeline/05-字幕切分与时间轴.md) §5.2、§7.8。
 
 ### 6.2 只在 `config.yaml` 里、UI 不暴露的键
 
@@ -301,7 +304,7 @@ def config_input(label, key, help=None):
 | 版本/元信息 | `version` |
 | 下载 | `ytb_resolution`*（只作默认值，UI 不回写）、`youtube.cookies_path`、`youtube.proxy`（**合并新增**，无控件）、`allowed_video_formats`、`allowed_audio_formats`（只作 `file_uploader` 的 `type`） |
 | ASR | `whisper.model`*、`whisper.detected_language`、`whisper.cache`（合并新增，可缺省）、`whisper.initial_prompt`（**2026-09-20 新增**，留空=按语言用内置中性示例） |
-| 字幕/翻译 | `subtitle.target_multiplier`*、`subtitle.align_on_mismatch`*、`subtitle.align_validate`、`subtitle.align_allow_rewrite`、`subtitle.boundary_window`、`subtitle.merge_short_cues`、`subtitle.short_cue_min_duration`、`subtitle.merge_max_gap`、`subtitle.strip_punctuation_in_source`、`subtitle.merge_broken_lines`、`subtitle.length_profiles`（以上九个为 **2026-09-20 新增**，均无控件）、`summary_length`*、`max_workers`*、`reflect_translate`*、`pause_before_translate`*（`max_split_length` / `subtitle.max_length` / `subtitle.auto_length_by_language` 见 §6.1） |
+| 字幕/翻译 | `subtitle.target_multiplier`*、`subtitle.align_on_mismatch`*、`subtitle.align_validate`、`subtitle.align_allow_rewrite`、`subtitle.boundary_window`、`subtitle.merge_short_cues`、`subtitle.short_cue_min_duration`、`subtitle.merge_max_gap`、`subtitle.strip_punctuation_in_source`、`subtitle.merge_broken_lines`、`subtitle.length_profiles`（以上九个为 **2026-09-20 新增**，均无控件；**2026-09-21 新增的 `subtitle.polish_translation` 有控件，归 §6.1**）、`summary_length`*、`max_workers`*、`reflect_translate`*、`pause_before_translate`*（`max_split_length` / `subtitle.max_length` / `subtitle.auto_length_by_language` 见 §6.1） |
 | 其它 | `model_dir`、`llm_support_json`、`spacy_model_map`、`language_split_with_space`、`language_split_without_space`、`tos.public_url_prefix`、`min_trim_duration`、`speed_factor.max` |
 | API 预设源 | `deepseek_api.*`、`qwen_api.*`、`siliconflow_api.*`、`ollama_api.*`（仅被 `apply_config` 读取，不作为运行时配置） |
 
@@ -445,7 +448,7 @@ openrouter_api:
 | `pause_before_translate` | `st.toggle` | 「字幕设置」 | `st.py`（术语确认暂停，见 [`../01-entrypoints/01-Streamlit主应用入口.md`](../01-entrypoints/01-Streamlit主应用入口.md) §7.1） |
 | `youtube.cookies_path` / `youtube.proxy` | `config_input` / `st.text_input` + `st.toggle` | 新增一个 expander | `core/step1_ytdlp.py` |
 
-> 📌 `max_split_length` 与 `subtitle.max_length` **已经在 UI 上**（侧边栏「✂️ 字幕长度调节」面板，`st_components/sidebar_setting.py::subtitle_length_controls`，2026-09-20 从主区移入）；`subtitle.target_multiplier` 仍只能手改文件。
+> 📌 `max_split_length` 与 `subtitle.max_length` **已经在 UI 上**（侧边栏「✂️ 字幕长度调节」面板，`st_components/sidebar_setting.py::subtitle_length_controls`，2026-09-20 从主区移入）；`subtitle.target_multiplier` 仍只能手改文件。**「加一个可选步骤的开关」也有现成先例**：`sidebar_setting.py::polish_controls` 的「✨ 字幕润色（可选，会额外调用 LLM）」expander（2026-09-21）就是一个 toggle + 一段 caption（写明成本与回退行为），`update_key` 后 `st.rerun(scope="app")`。
 
 ### 8.4 其它改进方向
 
