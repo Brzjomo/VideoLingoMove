@@ -241,6 +241,10 @@ Please use a two-step thinking process to handle the text line by line:
 #: 关键区别只在"允许改什么"：轻改写版允许**移动边界/移动虚词**，严格版一个字都不许动。
 #: 两版都不允许"把裸从句补成完整句" —— 用户 2026-09-20 指出："字幕往往几句连起来看才是
 #: 完整的句子"，要求每行自足会诱发跨行语义重复与凭空增补，所以第 3 条只约束**衔接是否悬空**。
+#:
+#: 数值提示：提示词写的是长度"±20%"，而护栏常数是 `subtitle_split.REWRITE_LENGTH_RATIO =
+#: (0.8, 1.3)`（上界 +30%）。这个差是**故意**的：指令收紧、执行留余量，模型按 ±20% 去写，
+#: 护栏又不会因为几条字的浮动就误拦。要改就两边一起看。
 _ALIGN_RULE3_LIGHT = """**You may only fix how the two cues attach to each other — never complete a cue.**
    A cue is one breath of a sentence: the audience reads part 1 and part 2 in a row, so a bare clause
    as a cue is normal and correct (`…作为自由原型师约6年，` followed by `一直从事手办造型工作。` is a
