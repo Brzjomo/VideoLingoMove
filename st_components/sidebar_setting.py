@@ -263,8 +263,6 @@ def polish_controls():
             update_key("subtitle.polish_long_lines_only", bool(only_long))
             st.rerun(scope="app")
 
-        st.caption("ℹ️ 每 20 行一次调用；超长/丢数字/丢信息会被拦下并回退原译文。")
-
 
 def page_setting():
     with st.expander("一键切换配置", expanded=False):
