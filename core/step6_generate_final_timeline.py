@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 import easy_util as eu
 from core.config_utils import load_key, load_key_or, get_joiner
 from core import subtitle_split
+from core import subtitle_limits
 from rich.panel import Panel
 from rich.console import Console
 import autocorrect_py as autocorrect
@@ -202,6 +203,38 @@ def get_sentence_timestamps(df_words, df_sentences, on_mismatch='warn'):
 
     return time_stamp_list
 
+def is_cjk_target() -> bool:
+    """目标语是否为中日韩（决定显示层要不要把 `，。` 换成空格）。
+
+    `target_language` 是自由文本（默认 '简体中文'），用 `subtitle_limits.normalize_language` 归一；
+    读不到配置时按"非 CJK"处理 = 保持旧行为。
+    """
+    try:
+        return subtitle_limits.normalize_language(load_key("target_language")) in ("zh", "ja", "ko")
+    except Exception:
+        return False
+
+
+def polish_translation_for_display(text, cjk_target: bool = True) -> str:
+    """显示层的译文字符处理（纯函数，便于单测）。
+
+    `re.sub(r'[，。]', ' ', …)` 这条规则原本是给**拉丁语目标语**写的：英文里混进中文标点要清掉，
+    逗号变空格正好。但中日韩目标语里，"分句之间的逗号"换成空格会把一句话连成一串 ——
+    用户 2026-09-21 实测：原文 `…约6年，一直从事手办造型工作。` 显示成
+    `…约 6 年 一直从事手办造型工作`，读起来是断的（而用户要的是"句中标点维持现状"）。
+    因此按目标语言分流：CJK 保留句中原文标点，行尾标点统一由
+    `subtitle_split.strip_terminal_punctuation` 去掉。
+    """
+    if text is None:
+        return ""
+    if isinstance(text, float) and text != text:      # NaN：别把字符串 "nan" 写进字幕
+        return ""
+    text = str(text)
+    if cjk_target:
+        return text
+    return re.sub(r'[，。]', ' ', text).strip()
+
+
 def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output_dir: str, for_display: bool = True):
     """Align timestamps and add a new timestamp column to df_translate"""
     df_trans_time = df_translate.copy()
@@ -227,7 +260,11 @@ def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output
 
     # Polish subtitles: replace punctuation in Translation if for_display
     if for_display:
-        df_trans_time['Translation'] = df_trans_time['Translation'].apply(lambda x: re.sub(r'[，。]', ' ', x).strip())
+        # 非 CJK 目标语才把 `，。` 换成空格；CJK 目标语保留句中逗号（行尾另由下面统一去掉）。
+        # 见 polish_translation_for_display 的说明：把分句逗号换成空格会把一条字幕连成一串。
+        cjk_target = is_cjk_target()
+        df_trans_time['Translation'] = df_trans_time['Translation'].apply(
+            lambda x: polish_translation_for_display(x, cjk_target))
         # 原文行**默认保留**标点（日语字幕本来就用 、。）；标点只在 step3/step5 用于断句，
         # 去标点是纯显示层的事（见 core/subtitle_split.py）。要"干净"显示就打开这个键。
         if load_key_or("subtitle.strip_punctuation_in_source", False):
