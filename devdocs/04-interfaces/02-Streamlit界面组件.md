@@ -18,7 +18,25 @@ last_verified: 2026-09-16
 >
 > ⚠️ 本文的「Dubbing Settings」整节（TTS Method 与各引擎子控件、相关 config 键）已失效——该区块已从 `sidebar_setting.py` 删除，`tts_method` / `sf_fish_tts.*` / `openai_tts.*` / `fish_tts.*` / `azure_tts.*` / `gpt_sovits.*` / `edge_tts.*` / `dub_volume` 等键也已从 `config.example.yaml` 移除。§5.2 控件表中对应行（原 #40~#49）与 §6.1/§6.2 里列出的那些键**均不再存在**，请忽略。其余控件（API 预设、ASR、TOS、字幕参数）仍然有效。
 >
-> ⚠️ **上游 3.0.4 合并后新增/变更的控件**（本文已按现状更正）：LLM 配置里新增 `model_input` 模型搜索框与「🔄 获取模型列表」按钮、📡 按钮改为只调一次 `check_api`；Recog Lang 新增「🌐 自动检测」(`auto`)；下载区块的裸 `except:` 改为只捕 `FileNotFoundError`、音频输入不再包成黑屏视频（改 `st.audio` + `input_manifest.json`）、上传增加幂等保护、删除 `convert_audio_to_video`。
+> ⚠️ **上游 3.0.4 合并后新增/变更的控件**（本文已按现状更正）：LLM 配置里新增 `model_input` 模型搜索框与「🔄 获取模型列表」按钮、📡 按钮改为只调一次 `check_api`；识别语言 新增「🌐 自动检测」(`auto`)；下载区块的裸 `except:` 改为只捕 `FileNotFoundError`、音频输入不再包成黑屏视频（改 `st.audio` + `input_manifest.json`）、上传增加幂等保护、删除 `convert_audio_to_video`。
+>
+> 🌐 **2026-09-20：侧边栏文案全部中文化**（本文下面的表格与图示都已按新文案更正 —— 用旧英文名 grep 本文是找不到的，对照表如下）：
+>
+> | 旧（英文） | 现（中文） |
+> | --- | --- |
+> | `Subtitles Settings` | 字幕设置 |
+> | `ASR Engine` | ASR 引擎 |
+> | `Recog Lang` | 识别语言 |
+> | `Target Lang` | 目标语言 |
+> | `Vocal separation enhance` | 人声分离增强（Demucs） |
+> | `Burn-in Subtitles` | 烧录字幕（压进成片） |
+> | `Video Resolution` | 视频分辨率 |
+> | `MODEL` | 模型 |
+> | `API_KEY` / `BASE_URL` | API 密钥 (API_KEY) / 接口地址 (BASE_URL) |
+> | `App ID` / `Access Token` / `Resource ID` | 应用 ID (App ID) / 访问令牌 (Access Token) / 资源 ID (Resource ID) |
+> | `Access Key` / `Secret Key` / `Bucket名称` / `Endpoint` / `Region` | 访问密钥 (Access Key) / 私钥 (Secret Key) / 存储桶 (Bucket) / 接入地址 (Endpoint) / 区域 (Region) |
+>
+> 只动了 `label` / `help` 文案：控件类型、`key`、绑定的 config 键、以及所有写入行为**都没变**（`api.key` / `api.base_url` / `api.model` 等键名不受影响）。平台自己的字段名保留英文原词（放在括号里），方便与火山 / TOS 控制台逐字对上。
 
 
 # Streamlit 界面组件（st_components/）
@@ -88,10 +106,10 @@ flowchart TD
  A["page_setting<br/>sidebar_setting.py"] --> B["expander 一键切换配置<br/>:130"]
  B --> C["selectbox 选择配置 :132 → button 应用配置 :161 → apply_config :106"]
  C --> D["expander LLM 配置 :164<br/>config_input api.key :165 / api.base_url :166<br/>model_input :170（可选 searchbox，回退 config_input api.model）<br/>button 📡 :173 → check_api :92（只调一次）<br/>button 🔄 获取模型列表 :179 → _fetch_model_list :26"]
- D --> E["expander Subtitles Settings :190"]
- E --> F["selectbox ASR Engine :196 → asr_engine<br/>变了就 update_key + st.rerun :201-203"]
- F --> G["selectbox Recog Lang :262（on_change=on_lang_change :222）→ whisper.language<br/>选 auto 时同步 volcano_asr.language='' :244-253"]
- G --> H["text_input Target Lang :271 → target_language<br/>toggle Vocal separation enhance :275 → demucs<br/>toggle 只生成原语言字幕 :279 → transcription_only<br/>toggle 使用 LLM 优化断句 :288（仅只转录模式）→ llm_sentence_split<br/>toggle Burn-in Subtitles :302 → resolution :309-320"]
+ D --> E["expander 字幕设置 :190"]
+ E --> F["selectbox ASR 引擎 :196 → asr_engine<br/>变了就 update_key + st.rerun :201-203"]
+ F --> G["selectbox 识别语言 :262（on_change=on_lang_change :222）→ whisper.language<br/>选 auto 时同步 volcano_asr.language='' :244-253"]
+ G --> H["text_input 目标语言 :271 → target_language<br/>toggle 人声分离增强（Demucs） :275 → demucs<br/>toggle 只生成原语言字幕 :279 → transcription_only<br/>toggle 使用 LLM 优化断句 :288（仅只转录模式）→ llm_sentence_split<br/>toggle 烧录字幕（压进成片） :302 → resolution :309-320"]
  H --> I{"load_key('asr_engine') == 'volcano'?<br/>:323"}
  I -- 是 --> J["expander 火山引擎ASR配置 :324<br/>volcano_asr.* 控件 :327-399 + 测试按钮 :402 + tos.* 控件 :414-434 + 测试按钮 :437"]
  I -- 否 --> K["跳过（expander 不渲染）"]
@@ -192,7 +210,7 @@ def config_input(label, key, help=None):
 | `config_input(label, key, help=None)` | `sidebar_setting.py` | 通用文本配置输入 | 见 §4.1；每次调用读 2 次 `config.yaml`；环境变量覆盖时只警告不写盘 |
 | `_fetch_model_list(base_url, api_key)` | | `GET <base_url>/v1/models` 拉取模型 id | 缺 `/v1` 会自动补；`timeout=15`；`raise_for_status`；返回 `sorted({item['id'] …})`。**合并新增** |
 | `_search_models(search_term, model_list)` | | `model_input` 的搜索回调 | 空串返回前 50 条；有命中返回命中；**完全无命中时返回 `[term]` 本身**（允许手输未在清单里的模型名） |
-| `model_input` | | 模型选择控件 | `try: from streamlit_searchbox import st_searchbox`，`ImportError` 时回退 `config_input("MODEL", "api.model")` 并提示重跑安装脚本即可（该包已进主依赖）；搜索框 `key="api_model_searchbox"`，选中即 `update_key("api.model", selected)` |
+| `model_input` | | 模型选择控件 | `try: from streamlit_searchbox import st_searchbox`，`ImportError` 时回退 `config_input("模型", "api.model")` 并提示重跑安装脚本即可（该包已进主依赖）；搜索框 `key="api_model_searchbox"`，选中即 `update_key("api.model", selected)` |
 | `check_api` | | 用 `ask_gpt("This is a test, …", response_json=True, log_title=None, use_cache=False)` 探测连通性 | 返回 `resp.get('message') == 'success'`；任何异常 → `False`；**刻意绕过缓存**（`use_cache=False`），`log_title=None` 使结果不落 `output/gpt_log/`；**真实的 API 请求**，调用方只调一次 |
 | `apply_config(config_name)` | | 切换 API 预设 | 见 §4.2 |
 | `page_setting` | | 渲染整个侧边栏 | 无返回值；到 TOS 的「测试TOS连接」按钮结束 |
@@ -207,24 +225,24 @@ def config_input(label, key, help=None):
 | 1 | | expander「一键切换配置」 | `st.selectbox("选择配置", options=["Deepseek", "千问", "硅基流动", "Ollama"])` | 无 | 不绑定 | 硬编码 `config_options`，无 `index` → 默认第 0 项 `Deepseek` | 不回写 | 仅作为 `apply_config` 入参 |
 | 2 | | 同上 | `st.button("应用配置")` | 无 | 见 §4.2 | — | `assign_key` ×3 写 `api.key/base_url/model` | LLM 全流程 |
 | 3 | | 同上 | `st.markdown(<style> .stSidebar div[data-testid="stButton"] button, [data-testid="stSidebar"] div[data-testid="stButton"] button { color: white !important; } …)` | — | — | — | — | 侧边栏内 CSS（作用域已限定），见 §7.6 |
-| 4 | | expander「LLM 配置」 | `config_input("API_KEY", "api.key")` | 无 | `api.key` | `load_key("api.key")` | `update_key` | `core/ask_gpt.py/133` |
-| 5 | | 同上 | `config_input("BASE_URL", "api.base_url", help="Openai format, will add /v1/chat/completions automatically")` | 无 | `api.base_url` | `load_key` | `update_key` | `core/ask_gpt.py`（拼接 `/v1`） |
-| 6 | | 同上（`c1`，`columns([5,1])`） | `model_input`：装了 `streamlit-searchbox` 时是搜索框 `st_searchbox(label="MODEL", key="api_model_searchbox", default=load_key("api.model"))`，否则回退 `config_input("MODEL", "api.model", help="click to check API validity 👉")` | `"api_model_searchbox"`（仅搜索框分支） | `api.model` | `load_key("api.model")` | 搜索框选中即 `update_key("api.model", selected)`；回退分支走 `config_input` | `core/ask_gpt.py` 决定是否发 `response_format={"type":"json_object"}`（与 `llm_support_json` 比对）。**合并新增** |
-| 7 | | 同上（`c2`， 垫高 `div`） | `st.button("📡", key="api", help="Check API connection")` | `"api"` | — | — | 无 | `is_valid = check_api` 只调**一次**→ `st.toast("API密钥有效"/"API密钥无效", icon=…)`。合并前是双调用，每次点击发 2 个真实请求 |
+| 4 | | expander「LLM 配置」 | `config_input("API 密钥 (API_KEY)", "api.key")` | 无 | `api.key` | `load_key("api.key")` | `update_key` | `core/ask_gpt.py/133` |
+| 5 | | 同上 | `config_input("接口地址 (BASE_URL)", "api.base_url", help="OpenAI 兼容格式；会自动补上 /v1/chat/completions")` | 无 | `api.base_url` | `load_key` | `update_key` | `core/ask_gpt.py`（拼接 `/v1`） |
+| 6 | | 同上（`c1`，`columns([5,1])`） | `model_input`：装了 `streamlit-searchbox` 时是搜索框 `st_searchbox(label="模型", key="api_model_searchbox", default=load_key("api.model"))`，否则回退 `config_input("模型", "api.model", help="点右侧 📡 可检测 API 是否可用 👉")` | `"api_model_searchbox"`（仅搜索框分支） | `api.model` | `load_key("api.model")` | 搜索框选中即 `update_key("api.model", selected)`；回退分支走 `config_input` | `core/ask_gpt.py` 决定是否发 `response_format={"type":"json_object"}`（与 `llm_support_json` 比对）。**合并新增** |
+| 7 | | 同上（`c2`， 垫高 `div`） | `st.button("📡", key="api", help="检测 API 连接是否可用")` | `"api"` | — | — | 无 | `is_valid = check_api` 只调**一次**→ `st.toast("API密钥有效"/"API密钥无效", icon=…)`。合并前是双调用，每次点击发 2 个真实请求 |
 | 7b | | 同上（expander 末尾） | `st.button("🔄 获取模型列表", key="fetch_model_list", width="stretch", help="从 api.base_url 的 /v1/models 拉取可用模型，供上方搜索框使用")` | `"fetch_model_list"` | 不写 config | — | 无（只写 `st.session_state['_model_list']`） | `_fetch_model_list(load_key("api.base_url"), load_key("api.key"))`→ `st.toast(f"已获取 {len(models)} 个模型")` + `st.rerun(scope="app")`；失败 `st.toast(f"获取失败：{e}", icon="❌")`。**合并新增**。宽度参数 2026-09-20 由 `use_container_width=True` 改为 `width="stretch"` |
-| 8 | | expander「Subtitles Settings」 | `st.selectbox("ASR Engine", options=list(asr_engines.keys), index=…)` | 无 | `asr_engine` | `list(asr_engines.values).index(load_key("asr_engine"))`，取不到则 `0` | `update_key("asr_engine", …)` + `st.rerun` | `core/step2_whisperX.py` 的 `transcribe` 选择 WhisperX / 火山 |
-| 9 | | 同上（`c1`，`columns(2)`） | `st.selectbox("Recog Lang", options=list(langs.keys), index=current_index, key="_recog_lang_select", on_change=on_lang_change)` | `"_recog_lang_select"` | `whisper.language`（回调内）；可选 `volcano_asr.language` | `list(langs.values).index(load_key("whisper.language"))`，`ValueError` 时 `0` | 回调 `on_lang_change`里 `update_key`；`update_key` 会同步 `whisper.detected_language` | WhisperX 识别语言（经 `get_source_language`）；火山引擎识别语言。**`🌐 自动检测` 是合并新增项** |
-| 10 | | 同上（`c2`） | `st.text_input("Target Lang", value=load_key("target_language"))` | 无 | `target_language` | `load_key` | `update_key` | 翻译提示词的目标语言（`config.example.yaml` 默认 `'简体中文'`） |
-| 11 | | 同上 | `st.toggle("Vocal separation enhance", value=load_key("demucs"), help="Recommended for videos with loud background noise, but will increase processing time")` | 无 | `demucs` | `load_key` | `update_key` | 转录前是否跑 Demucs（`core/all_whisper_methods/demucs_vl.py`） |
+| 8 | | expander「字幕设置」 | `st.selectbox("ASR 引擎", options=list(asr_engines.keys), index=…)` | 无 | `asr_engine` | `list(asr_engines.values).index(load_key("asr_engine"))`，取不到则 `0` | `update_key("asr_engine", …)` + `st.rerun` | `core/step2_whisperX.py` 的 `transcribe` 选择 WhisperX / 火山 |
+| 9 | | 同上（`c1`，`columns(2)`） | `st.selectbox("识别语言", options=list(langs.keys), index=current_index, key="_recog_lang_select", on_change=on_lang_change)` | `"_recog_lang_select"` | `whisper.language`（回调内）；可选 `volcano_asr.language` | `list(langs.values).index(load_key("whisper.language"))`，`ValueError` 时 `0` | 回调 `on_lang_change`里 `update_key`；`update_key` 会同步 `whisper.detected_language` | WhisperX 识别语言（经 `get_source_language`）；火山引擎识别语言。**`🌐 自动检测` 是合并新增项** |
+| 10 | | 同上（`c2`） | `st.text_input("目标语言", value=load_key("target_language"))` | 无 | `target_language` | `load_key` | `update_key` | 翻译提示词的目标语言（`config.example.yaml` 默认 `'简体中文'`） |
+| 11 | | 同上 | `st.toggle("人声分离增强（Demucs）", value=load_key("demucs"), help="先用 Demucs 把人声分离出来再识别：背景音乐/噪声大的视频效果更好，但会明显增加处理时间")` | 无 | `demucs` | `load_key` | `update_key` | 转录前是否跑 Demucs（`core/all_whisper_methods/demucs_vl.py`） |
 | 12 | `sidebar_setting.py` | 同上 | `st.toggle("只生成原语言字幕 (跳过翻译)", value=load_key("transcription_only"), help="只生成原语言字幕，跳过翻译步骤")` | 无 | `transcription_only` | `load_key` | `update_key` | `st.py` 的全部文案与 `build_task_steps` 的步骤分支；**同时决定 #12b 是否显示** |
 | 12b | `sidebar_setting.py` | 同上（**仅 #12 为开时渲染**） | `st.toggle("使用 LLM 优化断句", value=load_key("llm_sentence_split"))` | 无 | `llm_sentence_split` | `load_key` | `update_key` | `core/step3_2_splitbymeaning.py` 与 `core/step5_splitforsub.py` 是否调 LLM 做断句优化。**下方 #12c 是它的"反面"** |
 | 12c | `sidebar_setting.py` | 同上（**#12 为关时**） | 无控件，静默把配置纠正为 `true` | — | `llm_sentence_split` | — | `update_key("llm_sentence_split", True)` | 翻译模式**强制开启**断句优化，故不显示开关、也不给提示文案；判定入口是 `core.config_utils.use_llm_sentence_split`，UI 与执行逻辑共用它以免漂移 |
-| 13 | `sidebar_setting.py` | 同上 | `st.toggle("Burn-in Subtitles", value=load_key("resolution") != "0x0", help="takes longer time")` | 无 | **无独立键**（派生自 `resolution`） | `load_key("resolution") != "0x0"` | 不直接写；由 #14/#15 写 `resolution` | 是否压制字幕。**关 = `resolution: '0x0'`**：真实视频不产出成片（`core/step7_merge_sub_to_vid.py`）；纯音频输入（`input_manifest.json` 记为 `audio`）只交字幕；旧 `black_screen.mp4` 走兼容分支被保留为成片 |
-| 14 | | 同上（**仅 #13 为开时渲染**） | `st.selectbox("Video Resolution", options=["1080p", "360p"], index=…)` | 无 | `resolution` | `list(resolution_options.values).index(load_key("resolution"))`，`resolution == "0x0"` 时 `0` | `update_key("resolution", "1920x1080"｜"640x360")` | 压制分辨率；`st.py` 是否内嵌播放 |
+| 13 | `sidebar_setting.py` | 同上 | `st.toggle("烧录字幕（压进成片）", value=load_key("resolution") != "0x0", help="开启后把字幕压进成片，需要重新编码、耗时更长；关闭则只产出字幕文件")` | 无 | **无独立键**（派生自 `resolution`） | `load_key("resolution") != "0x0"` | 不直接写；由 #14/#15 写 `resolution` | 是否压制字幕。**关 = `resolution: '0x0'`**：真实视频不产出成片（`core/step7_merge_sub_to_vid.py`）；纯音频输入（`input_manifest.json` 记为 `audio`）只交字幕；旧 `black_screen.mp4` 走兼容分支被保留为成片 |
+| 14 | | 同上（**仅 #13 为开时渲染**） | `st.selectbox("视频分辨率", options=["1080p", "360p"], index=…)` | 无 | `resolution` | `list(resolution_options.values).index(load_key("resolution"))`，`resolution == "0x0"` 时 `0` | `update_key("resolution", "1920x1080"｜"640x360")` | 压制分辨率；`st.py` 是否内嵌播放 |
 | 15 | | 同上（**#13 为关时**） | 无控件，直接 `resolution = "0x0"` | — | `resolution` | — | `update_key("resolution", "0x0")` | 同 #14 |
-| 16 | | expander「火山引擎ASR配置」(，**仅 `asr_engine == "volcano"` 渲染**，) | `config_input("App ID", "volcano_asr.app_id", help="火山引擎控制台获取的APP ID")` | 无 | `volcano_asr.app_id` | `load_key` | `update_key` | `core/all_whisper_methods/volcano_asr.py` |
-| 17 | | 同上 | `config_input("Access Token", "volcano_asr.access_token", help="…Access Token")` | 无 | `volcano_asr.access_token` | `load_key` | `update_key` | 同上 |
-| 18 | | 同上 | `config_input("Resource ID", "volcano_asr.resource_id", help="资源ID，默认: volc.bigasr.auc")` | 无 | `volcano_asr.resource_id` | `load_key` | `update_key` | 同上 |
+| 16 | | expander「火山引擎ASR配置」(，**仅 `asr_engine == "volcano"` 渲染**，) | `config_input("应用 ID (App ID)", "volcano_asr.app_id", help="火山引擎控制台获取的 App ID")` | 无 | `volcano_asr.app_id` | `load_key` | `update_key` | `core/all_whisper_methods/volcano_asr.py` |
+| 17 | | 同上 | `config_input("访问令牌 (Access Token)", "volcano_asr.access_token", help="…Access Token")` | 无 | `volcano_asr.access_token` | `load_key` | `update_key` | 同上 |
+| 18 | | 同上 | `config_input("资源 ID (Resource ID)", "volcano_asr.resource_id", help="资源 ID，默认：volc.bigasr.auc")` | 无 | `volcano_asr.resource_id` | `load_key` | `update_key` | 同上 |
 | 19 | | 同上 | `st.selectbox("识别语言", options=list(volcano_langs.keys), index=…)` | 无 | `volcano_asr.language` | `list(volcano_langs.values).index(load_key(...))`，取不到则 `0`（「自动检测」） | `update_key` | 火山 ASR 语言 |
 | 20 | | 同上 | `st.selectbox("模型版本", options=["310", "400"], index=0 if load_key("volcano_asr.model_version") == "310" else 1)` | 无 | `volcano_asr.model_version` | 硬编码映射 | `update_key` | 火山 ASR 模型版本（`config.example.yaml` 默认 `'400'`） |
 | 21 | | 同上（`col1`，`columns(2)`） | `st.toggle("自动标点", value=load_key("volcano_asr.enable_punc"))` | 无 | `volcano_asr.enable_punc` | `load_key` | `update_key` | 火山请求参数 |
@@ -238,11 +256,11 @@ def config_input(label, key, help=None):
 | 29 | | 同上 | `st.button("测试火山引擎连接", type="secondary")` | 无 | — | — | 无 | `from core.all_whisper_methods.volcano_asr import VolcanoASR; asr = VolcanoASR`→ `st.success("✅ 火山引擎ASR配置有效")` / `st.error(f"❌ 配置错误: {str(e)}")` |
 | 30 | | 同上 | `st.markdown("---")` + `st.markdown("**TOS对象存储配置**")` | — | — | — | — | 视觉分隔 |
 | 31 | | 同上 | `st.toggle("启用TOS上传", value=load_key("tos.enabled"), help="启用后，音频文件将上传到火山引擎TOS")` | 无 | `tos.enabled` | `load_key` | `update_key` | 决定 #32-#38 是否渲染；火山 ASR 音频上传方式 |
-| 32 | | 同上（**仅 #31 为开**，） | `config_input("Access Key", "tos.access_key", help="…或设置环境变量TOS_ACCESS_KEY")` | 无 | `tos.access_key` | `load_key` | `update_key` | `core/all_whisper_methods/tos_service.py` |
-| 33 | | 同上 | `config_input("Secret Key", "tos.secret_key", help="…或设置环境变量TOS_SECRET_KEY")` | 无 | `tos.secret_key` | `load_key` | `update_key` | 同上 |
-| 34 | | 同上 | `config_input("Bucket名称", "tos.bucket_name", help="火山引擎TOS的Bucket名称")` | 无 | `tos.bucket_name` | `load_key` | `update_key` | 同上 |
-| 35 | | 同上 | `config_input("Endpoint", "tos.endpoint", help="火山引擎TOS的Endpoint地址")` | 无 | `tos.endpoint` | `load_key` | `update_key` | 同上 |
-| 36 | | 同上 | `config_input("Region", "tos.region", help="火山引擎TOS的Region区域")` | 无 | `tos.region` | `load_key` | `update_key` | 同上 |
+| 32 | | 同上（**仅 #31 为开**，） | `config_input("访问密钥 (Access Key)", "tos.access_key", help="…或设置环境变量TOS_ACCESS_KEY")` | 无 | `tos.access_key` | `load_key` | `update_key` | `core/all_whisper_methods/tos_service.py` |
+| 33 | | 同上 | `config_input("私钥 (Secret Key)", "tos.secret_key", help="…或设置环境变量TOS_SECRET_KEY")` | 无 | `tos.secret_key` | `load_key` | `update_key` | 同上 |
+| 34 | | 同上 | `config_input("存储桶 (Bucket)", "tos.bucket_name", help="火山引擎 TOS 的 Bucket 名称")` | 无 | `tos.bucket_name` | `load_key` | `update_key` | 同上 |
+| 35 | | 同上 | `config_input("接入地址 (Endpoint)", "tos.endpoint", help="火山引擎 TOS 的 Endpoint 地址")` | 无 | `tos.endpoint` | `load_key` | `update_key` | 同上 |
+| 36 | | 同上 | `config_input("区域 (Region)", "tos.region", help="火山引擎 TOS 的 Region 区域")` | 无 | `tos.region` | `load_key` | `update_key` | 同上 |
 | 37 | | 同上 | `st.markdown("---")` + `st.markdown("**TOS高级设置**")` | — | — | — | — | 视觉分隔 |
 | 38 | | 同上 | `st.toggle("自动清理", value=load_key("tos.auto_cleanup"), help="启用后，ASR处理完成返回结果后会删除TOS上的音频文件")` | 无 | `tos.auto_cleanup` | `load_key` | `update_key` | TOS 上传后清理策略 |
 | 39 | | 同上 | `st.button("测试TOS连接", type="secondary")` | 无 | — | — | 无 | `from core.all_whisper_methods.tos_service import get_tos_service; tos_service = get_tos_service`→ `st.success("✅ TOS连接成功")` / `st.error("❌ TOS连接失败，请检查配置")` / `st.error(f"❌ TOS连接错误: {str(e)}")` |
@@ -272,7 +290,7 @@ def config_input(label, key, help=None):
 
 > ⚠️ 旧版本此处还列有 `tts_method` 与各 TTS 引擎子键（`sf_fish_tts.*` / `openai_tts.*` / `fish_tts.*` / `azure_tts.*` / `gpt_sovits.*` / `edge_tts.*`）——Dubbing Settings 已删除，这些键也不在 `config.example.yaml` 中，UI 无法再读写它们。
 >
-> 另外 `max_split_length` 与 `subtitle.max_length` **不在侧边栏**，但由主区的字幕长度面板写入（`st.py`），详见 [`../01-entrypoints/01-Streamlit主应用入口.md`](../01-entrypoints/01-Streamlit主应用入口.md) §5.1。
+> 另外 `max_split_length` 与 `subtitle.max_length` 的控件在**侧边栏**的「✂️ 字幕长度调节」expander 里（`st_components/sidebar_setting.py::subtitle_length_controls`，2026-09-20 从主区搬过来）；这两个值默认由 `core/subtitle_limits.py` 按语言档位自动管理（切「识别语言」/改「目标语言」即覆盖，见 [`../01-entrypoints/01-Streamlit主应用入口.md`](../01-entrypoints/01-Streamlit主应用入口.md) §5）。1。
 
 ### 6.2 只在 `config.yaml` 里、UI 不暴露的键
 
@@ -296,7 +314,7 @@ def config_input(label, key, help=None):
 | 条件 | 形态 | 数据来源 |
 | --- | --- | --- |
 | 装了 `streamlit-searchbox`（**已在主依赖里**） | `st_searchbox` 搜索框（`key="api_model_searchbox"`，`default=load_key("api.model")`） | 候选来自 `st.session_state['_model_list']`，由「🔄 获取模型列表」按钮经 `_fetch_model_list(api.base_url, api.key)` 拉 `GET <base_url>/v1/models` 填充；搜索无命中时把输入本身作为候选（`_search_models`，） |
-| 未装该依赖 | 回退 `config_input("MODEL", "api.model")` 自由文本输入框，并提示「重跑 `python installer.py`（或 `Install.bat`）即可获得带搜索的下拉框」。**正常安装不会再走到这个分支** —— `streamlit-searchbox>=0.1.24,<0.2.0` 已在 `requirements.txt` 里，只有旧环境没重装时才会命中 | 手输 |
+| 未装该依赖 | 回退 `config_input("模型", "api.model")` 自由文本输入框，并提示「重跑 `python installer.py`（或 `Install.bat`）即可获得带搜索的下拉框」。**正常安装不会再走到这个分支** —— `streamlit-searchbox>=0.1.24,<0.2.0` 已在 `requirements.txt` 里，只有旧环境没重装时才会命中 | 手输 |
 
 无论哪种形态，写入的都是 `api.model`。`llm_support_json`（`config.example.yaml`，10 项）**与界面无关**，只被 `core/ask_gpt.py` 使用：仅当 `api.model in llm_support_json` 时才给请求加 `response_format={"type": "json_object"}`。也就是说，模型名必须与模板里的字符串**逐字一致**（如 `deepseek-flash`、`qwen-plus`、`qwen3:30b-a3b`），否则模型仍能用，但会退化为「提示词里要求 JSON + `json_repair` 兜底解析」的路径。
 
@@ -325,7 +343,7 @@ Streamlit 1.38.0 的控件 ID 是对参数做 md5（`streamlit/runtime/state/com
 
 1. **写回是收敛的**：`config_input` 写盘后 `load_key` 变了 → 下一次 rerun 控件 ID 也变了 → 用新默认值重建 → `val == load_key(key)` 成立 → 不会反复写。所以「控件默认值把 config.yaml 覆盖回去」在单进程单会话下不会发生。
 2. **真正的风险在并发写者**：batch/AudioExtract/手改文件与 UI 同时写 `config.yaml` 时（§7.1），胜出者取决于写入顺序，UI 并不知道自己的值已被覆盖。
-3. **副作用是焦点与未提交输入丢失**：任何一次配置值变化都会让控件重建（输入框失焦、光标归位）；同理，`#13 Burn-in Subtitles`（`sidebar_setting.py`）这类「无 key、默认值派生自 config」的控件，其显示状态完全由 `resolution` 决定——它不是一个独立的开关状态。
+3. **副作用是焦点与未提交输入丢失**：任何一次配置值变化都会让控件重建（输入框失焦、光标归位）；同理，`#13 烧录字幕（压进成片）`（`sidebar_setting.py`）这类「无 key、默认值派生自 config」的控件，其显示状态完全由 `resolution` 决定——它不是一个独立的开关状态。
 
 ### 7.3 一批控件会因为「配置值不在硬编码列表里」直接崩掉整页
 
@@ -388,7 +406,7 @@ Streamlit 1.38.0 的控件 ID 是对参数做 md5（`streamlit/runtime/state/com
 > ⚠️ 旧版本用 `dub_volume` 举例，该键已随配音链路删除，改用一个仍然存在的键。
 
 1. `config.example.yaml` 里确认键已存在（`subtitle.target_multiplier: 1.2`）；新键要新增时**必须**同时让所有读它的代码不出 `KeyError`（或对该键使用 `load_key_or`）。
-2. 在 `page_setting` 合适的位置加（例如「Subtitles Settings」`sidebar_setting.py` 之后）：
+2. 在 `page_setting` 合适的位置加（例如「字幕设置」`sidebar_setting.py` 之后）：
 
 ```python
 multiplier = st.number_input("字幕长度折算系数", min_value=0.5, max_value=3.0,
@@ -420,14 +438,14 @@ openrouter_api:
 
 | 想暴露的键 | 建议控件 | 插入位置 | 下游 |
 | --- | --- | --- | --- |
-| `whisper.model`（`medium`/`large-v3`/`large-v3-turbo`） | `st.selectbox` | 「Subtitles Settings」`sidebar_setting.py` 之后 | `core/step2_whisperX.py` |
+| `whisper.model`（`medium`/`large-v3`/`large-v3-turbo`） | `st.selectbox` | 「字幕设置」`sidebar_setting.py` 之后 | `core/step2_whisperX.py` |
 | `whisper.cache`（转录缓存开关，默认 true） | `st.toggle` | 同上 | `core/step2_whisperX.py` |
 | `max_workers`（LLM 并发，默认 1000） | `st.number_input` | 「LLM 配置」`sidebar_setting.py` 之后 | `core/step4_2_translate_all.py`、`core/step5_splitforsub.py` |
 | `summary_length` | `st.number_input` | 同上 | `core/step4_1_summarize.py` |
-| `pause_before_translate` | `st.toggle` | 「Subtitles Settings」 | `st.py`（术语确认暂停，见 [`../01-entrypoints/01-Streamlit主应用入口.md`](../01-entrypoints/01-Streamlit主应用入口.md) §7.1） |
+| `pause_before_translate` | `st.toggle` | 「字幕设置」 | `st.py`（术语确认暂停，见 [`../01-entrypoints/01-Streamlit主应用入口.md`](../01-entrypoints/01-Streamlit主应用入口.md) §7.1） |
 | `youtube.cookies_path` / `youtube.proxy` | `config_input` / `st.text_input` + `st.toggle` | 新增一个 expander | `core/step1_ytdlp.py` |
 
-> 📌 `max_split_length` 与 `subtitle.max_length` **已经在 UI 上**（主区的字幕长度面板，`st.py`）；`subtitle.target_multiplier` 仍只能手改文件。
+> 📌 `max_split_length` 与 `subtitle.max_length` **已经在 UI 上**（侧边栏「✂️ 字幕长度调节」面板，`st_components/sidebar_setting.py::subtitle_length_controls`，2026-09-20 从主区移入）；`subtitle.target_multiplier` 仍只能手改文件。
 
 ### 8.4 其它改进方向
 
@@ -447,13 +465,13 @@ set "PY=.venv\Scripts\python.exe"
 
 | 验证目标 | 操作 | 期望 |
 | --- | --- | --- |
-| 控件 → config 写回 | 在侧边栏改 `MODEL`（搜索框或文本框）后回车，然后 `Select-String -Path config.yaml -Pattern 'model:'` | `api.model` 变成新值，注释与引号保留 |
-| 模型搜索框 | 点「🔄 获取模型列表」，再在 MODEL 里输入片段（如 `qwen`） | `streamlit-searchbox` 已在 `requirements.txt` 里，装完环境即生效；候选来自服务端列表 |
+| 控件 → config 写回 | 在侧边栏改 `模型`（搜索框或文本框）后回车，然后 `Select-String -Path config.yaml -Pattern 'model:'` | `api.model` 变成新值，注释与引号保留 |
+| 模型搜索框 | 点「🔄 获取模型列表」，再在 `模型` 里输入片段（如 `qwen`） | `streamlit-searchbox` 已在 `requirements.txt` 里，装完环境即生效；候选来自服务端列表 |
 | 预设切换 | 选「千问」→ 点「应用配置」，再看 `api.key` / `api.base_url` / `api.model` 三行 | 三个值都等于 `qwen_api.*`；`qwen_api.*` 原块不变 |
 | 只读确认（不写文件） | `python -c "from core.config_utils import load_key; print(load_key('api.model'), load_key('asr_engine'), load_key('whisper.language'), load_key('transcription_only'), load_key('resolution'))"` | 打印当前配置值（该命令不修改文件） |
 | 写回确认（⚠️ 会真实改写 config.yaml） | 先备份 `copy config.yaml config.yaml.bak`，再跑 `python -c "from core.config_utils import assign_key; assign_key('api.model','deepseek_api.model')"`，之后 `move /y config.yaml.bak config.yaml` 还原 | 验证 `assign_key` 的语义 |
 | 条件渲染 | 把 `asr_engine` 改成 `volcano` 刷新页面 | 「火山引擎ASR配置」expander 出现；改回 `whisper` 后消失 |
-| 自动检测联动 | 把 Recog Lang 选成「🌐 自动检测」并选 `asr_engine = volcano` | `whisper.language` 写成 `auto`、`volcano_asr.language` 写成 `""`；`whisper.detected_language` **不变** |
+| 自动检测联动 | 把 识别语言 选成「🌐 自动检测」并选 `asr_engine = volcano` | `whisper.language` 写成 `auto`、`volcano_asr.language` 写成 `""`；`whisper.detected_language` **不变** |
 | 下载区块分支 | 在 `output/` 放 2 个视频文件后刷新 | `find_video_files` 告警并返回最新一个，页面显示该视频的预览（不再静默回到上传界面；只有 0 个素材才是「还没上传」） |
 | 上传幂等 | 上传一个文件后刷新页面（不删除） | 显示「该文件已导入过。如需重新导入，请先在上方删除，或换一个文件。」，不重复清空 `output/` |
 | ~~TTS 子控件 / `tts_method` 崩溃点复现~~ | 已随 Dubbing Settings 删除而消失（`tts_method` 不再是合法 config 键，`load_key('tts_method')` 会 `KeyError`） | — |

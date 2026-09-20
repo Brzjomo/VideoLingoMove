@@ -338,7 +338,7 @@ transcribe core/step2_whisperX.py
 
 **中文检测不一致会硬报错**：`save_language` 先执行（`core/step2_whisperX.py`），紧接着 `result['language'] == 'zh' and WHISPER_LANGUAGE != 'zh'` 就抛 `ValueError("Please specify the transcription language as zh and try again!")`。也就是说报错时 `config.yaml` 已经被改写。
 
-UI 的「Recog Lang」下拉框现在**有**「🌐 自动检测」选项（写入 `whisper.language: 'auto'`，`st_components/sidebar_setting.py`）；选 auto 且引擎是火山时，`volcano_asr.language` 会同步为空串，让服务端自行检测。
+UI 的「识别语言」下拉框现在**有**「🌐 自动检测」选项（写入 `whisper.language: 'auto'`，`st_components/sidebar_setting.py`）；选 auto 且引擎是火山时，`volcano_asr.language` 会同步为空串，让服务端自行检测。
 
 ### 5.11 `volcano_asr.py` 类结构与请求流程
 
@@ -572,7 +572,7 @@ Get-ChildItem output\log\asr_results -ErrorAction SilentlyContinue # 火山引�
 - [`../03-subsystems/03-ASR引擎适配层.md`](../03-subsystems/03-ASR引擎适配层.md) — ASR 适配层的横向对比
 - [`../05-guides/02-如何新增一个ASR引擎.md`](../05-guides/02-如何新增一个ASR引擎.md) — 新增引擎的完整操作手册
 - [`../04-interfaces/01-配置文件与参数.md`](../04-interfaces/01-配置文件与参数.md) — `whisper` / `volcano_asr` / `tos` 全部键位
-- [`../04-interfaces/02-Streamlit界面组件.md`](../04-interfaces/02-Streamlit界面组件.md) — ASR Engine 下拉框与引擎配置面板
+- [`../04-interfaces/02-Streamlit界面组件.md`](../04-interfaces/02-Streamlit界面组件.md) — ASR 引擎下拉框与引擎配置面板
 - [`../04-interfaces/03-批处理任务系统.md`](../04-interfaces/03-批处理任务系统.md) — 批量模式对预处理产物的复用
 - 仓库外的参考资料（**不在本仓库中，故不写成链接**）：`参考文档/火山引擎ASR使用说明.md`（火山引擎 ASR + TOS 的原始接入说明）、`参考文档/大模型录音文件识别标准版API.md`（状态码、字段与错误码权威定义）、`参考文档/tos.md`（TOS Python SDK `TosClientV2` 参考）。
  说明：这些文件既不在本 clone 里，也进不了库 —— 根 `.gitignore:208` 的 `*.md` 规则会忽略它们（只为 `devdocs/` 开了例外）。正文里引用它们的两处（`tos` 的 `file://` 协议限制、`tos.retention_time` 未被读取）已用文字说明结论，不依赖这些文件也能读懂。

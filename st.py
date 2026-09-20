@@ -296,63 +296,6 @@ def cache_maintenance_section():
                     st.rerun(scope="app")
 
 
-def subtitle_length_controls():
-    """字幕长度调节面板。
-
-    这两个键是最常被调的质量旋钮，此前只能手改 config.yaml。
-    ⚠️ 控件宽度一律用新写法 `width="stretch"` / `width="content"`：
-    `use_container_width` 自 streamlit 1.49 起弃用、2025-12-31 后移除（实测
-    1.64 会往控制台打弃用警告）。本分支钉的是 `streamlit>=1.49.1`，所以
-    `number_input` 也已经支持 `width=`，不必再为"1.38 不认 width"写兼容代码。
-    """
-    with st.expander("✂️ 字幕长度调节", expanded=False):
-        st.caption("影响断行粒度与单行字数。改完立即写入 config.yaml。")
-
-        c1, c2 = st.columns(2)
-        with c1:
-            max_split_length = st.number_input(
-                "首次粗切词数上限 (max_split_length)",
-                min_value=8, max_value=60,
-                value=int(load_key_or("max_split_length", 20)),
-                help="低于 18 会切得过碎影响翻译，高于 22 会让后续字幕对齐变难。默认 20。",
-            )
-        with c2:
-            subtitle_cfg = load_key_or("subtitle", {}) or {}
-            max_length = st.number_input(
-                "单行最大字符数 (subtitle.max_length)",
-                min_value=20, max_value=200,
-                value=int(subtitle_cfg.get("max_length", 75)),
-                help="每行字幕的字符上限。默认 75。",
-            )
-
-        c3, c4 = st.columns([1, 1])
-        with c3:
-            if st.button("保存", key="save_subtitle_length", type="primary",
-                         width="stretch"):
-                from core.config_utils import update_key
-                changed = []
-                if int(max_split_length) != int(load_key_or("max_split_length", 20)):
-                    update_key("max_split_length", int(max_split_length))
-                    changed.append("max_split_length")
-                current_max_length = (load_key_or("subtitle", {}) or {}).get("max_length", 75)
-                if int(max_length) != int(current_max_length):
-                    update_key("subtitle.max_length", int(max_length))
-                    changed.append("subtitle.max_length")
-                if changed:
-                    st.success("已更新：" + "、".join(changed))
-                    st.rerun(scope="app")
-                else:
-                    st.info("没有变化。")
-        with c4:
-            if st.button("恢复默认 (20 / 75)", key="reset_subtitle_length",
-                         width="stretch"):
-                from core.config_utils import update_key
-                update_key("max_split_length", 20)
-                update_key("subtitle.max_length", 75)
-                st.success("已恢复默认值")
-                st.rerun(scope="app")
-
-
 def main():
     st.set_page_config(page_title="VideoLingo", page_icon="assets/logo.svg")
     logo_col, _ = st.columns([1,1])
@@ -371,7 +314,6 @@ def main():
     # 点下去只会在 step1 抛 FileNotFoundError，用户看不出该做什么。
     if download_video_section():
         text_processing_section()
-        subtitle_length_controls()
     else:
         st.info("请先在上方下载或上传一个视频/音频文件，然后再开始处理。")
     # 缓存清理入口与是否有素材无关，始终可用

@@ -1024,7 +1024,7 @@ class TestUvNativePath(unittest.TestCase):
 
 
 class TestSearchboxDependency(unittest.TestCase):
-    """`streamlit-searchbox` 是侧边栏 MODEL 搜索框的依赖，已进主依赖清单。
+    """`streamlit-searchbox` 是侧边栏「模型」搜索框的依赖，已进主依赖清单。
 
     历史：它原本只是「装了更好」的可选包，侧边栏会提示 `pip install
     streamlit-searchbox`。既然有用就别让用户自己装 —— 现在写进 requirements.txt，
@@ -1065,7 +1065,7 @@ class TestSearchboxDependency(unittest.TestCase):
         src = pathlib.Path("st_components/sidebar_setting.py").read_text(encoding="utf-8")
         self.assertIn("from streamlit_searchbox import st_searchbox", src)
         self.assertIn("except ImportError:", src)
-        self.assertIn("config_input(\"MODEL\", \"api.model\"", src)
+        self.assertIn("config_input(\"模型\", \"api.model\"", src)
 
 
 class TestBareModeImportQuiet(unittest.TestCase):

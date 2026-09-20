@@ -38,7 +38,7 @@ last_verified: 2026-09-19
 
 | 文件路径 | 规模 | 主要职责 |
 | --- | --- | --- |
-| `st.py` | ~13K | 页面骨架、下载/上传区块、字幕区块、字幕长度面板、缓存清理入口、`build_task_steps` 步骤组装、`task_control_panel` 控制面板、阶段判据 |
+| `st.py` | ~13K | 页面骨架、下载/上传区块、字幕区块、缓存清理入口、`build_task_steps` 步骤组装、`task_control_panel` 控制面板、阶段判据（字幕长度面板 2026-09-20 已移到侧边栏，见 `st_components/sidebar_setting.py`） |
 | `st_components/task_runner.py` | ~6K | `StopTask` + `TaskRunner`：后台线程顺序执行步骤，状态机 idle/running/paused/stopped/completed/error，类方法 `check_cancel` / `request_review_pause` |
 | `easy_util.py` | ~7K | 进程级全局状态：开始/结束时间、token 计数、费用估算、`original_name`、进度接口、`check_cancel`（core 侧取消钩子） |
 | `st_components/imports_and_utils.py` | ~7K | 聚合导入 core 的字幕链路 step 模块；`subtitle_zip_name`；`pick_default_subtitle`；`download_subtitle_zip_button`；`button_style` / `give_star_button` 两段 HTML/CSS |
@@ -72,7 +72,7 @@ flowchart TD
  I --> J["st.py logo + button_style + 欢迎语"]
  J --> K["st.py st.sidebar: page_setting + give_star_button"]
  K --> L{"st.py download_video_section"}
- L -- "True（已有素材）" --> M["st.py text_processing_section<br/>st.py subtitle_length_controls"]
+ L -- "True（已有素材）" --> M["st.py text_processing_section"]
  L -- "False（无素材/检测异常）" --> M2["st.py st.info('请先在上方下载或上传…')"]
  M --> N["st.py cache_maintenance_section（与是否有素材无关）"]
  M2 --> N
@@ -103,7 +103,7 @@ flowchart TD
 | 5 | `st.py` | `with st.sidebar:` → `page_setting` + `st.markdown(give_star_button, ...)` | 侧边栏 |
 | 6 | `st.py` | `if download_video_section:` —— **区块门控**：无素材时不渲染处理区块 | 主区区块 1 |
 | 7 | `st.py` | `text_processing_section`（仅第 6 步返回 `True` 时） | 主区区块 2 |
-| 8 | `st.py` | `subtitle_length_controls`（同上） | 主区区块 2 内 |
+| 8 | `st_components/sidebar_setting.py` | `subtitle_length_controls`（2026-09-20 从主区移入） | 侧边栏「✂️ 字幕长度调节」 |
 | 9 | `st.py` | `st.info("请先在上方下载或上传一个视频/音频文件，然后再开始处理。")`（第 6 步为 `False` 时） | 主区 |
 | 10 | `st.py` | `cache_maintenance_section`——**无条件渲染**，与是否有素材无关 | 主区区块 3 |
 
@@ -287,7 +287,7 @@ stateDiagram-v2
 | `task_control_panel` | `st.py` | 进度条 + 暂停/继续/停止 + 术语确认界面 | `@st.fragment(run_every=1)` 每秒重跑本片段；状态分支见 §3.5 |
 | `text_processing_section` | `st.py` | 渲染「翻译和生成字幕」/「音频转录和生成原语言字幕」区块 | 读 `transcription_only` 决定标题、步骤文案、按钮文案与成功文案；`runner.state != "idle"` 时只画控制面板并 `return`；**无返回值**（返回值在 `st.py` 被忽略） |
 | `cache_maintenance_section` | `st.py` | 缓存清理入口，**与是否有素材无关** | 两个 expander：火山二级缓存 `output/log/asr_results/*.json`、内容寻址转录缓存 `.cache/asr`（，调 `transcription_cache.clear_cache`） |
-| `subtitle_length_controls` | `st.py` | 字幕长度面板 | 两个 `st.number_input` 写 `max_split_length`与 `subtitle.max_length`，「保存」按需 `update_key`、「恢复默认 (20 / 75)」；按钮宽度用官方新写法 `width="stretch"`（`use_container_width` 自 streamlit 1.49 弃用，见 §5.1 下方「宽度参数」） |
+| `subtitle_length_controls` | `st_components/sidebar_setting.py`（2026-09-20 从 `st.py` 主区**移到侧边栏**） | 字幕长度面板 expander「✂️ 字幕长度调节」 | ① 开关「按语言自动设置（切换语言即覆盖）」→ `subtitle.auto_length_by_language`，打开时立刻按当前语言下发一次档位并 `st.rerun`；② caption 显示 `📐 当前：<档位说明>`；③ 两个 `st.number_input`（`max_split_length` / `subtitle.max_length`）在自动模式或"仅转录+关断句"时**置灰**；④「保存手填值」（自动模式禁用）与「恢复当前语言推荐值」（`apply_language_profile(force=True)`，开关关着也能一键套用）；宽度用官方新写法 `width="stretch"` |
 | `main` | `st.py` | 组装页面 | `st.set_page_config` 必须在最前；`download_video_section` 的返回值决定是否渲染处理区块；`cache_maintenance_section` 无条件调用 |
 
 ### 5.2 `st_components/imports_and_utils.py`
@@ -325,8 +325,9 @@ stateDiagram-v2
 | `transcription_only` | `st.py`、`st.py` | 决定区块标题/步骤文案/按钮文案/成功文案，以及 `build_task_steps` 是否插入「术语提取」步骤（直通模式为 3 步、翻译模式为 4 步） |
 | `resolution` | `st.py` | `!= "0x0"` 且 `output_sub.mp4` 存在时才内嵌播放；`"0x0"` 时 `step7` 静默跳过压制（真实视频不产出成片，纯音频只交字幕） |
 | `pause_before_translate` | `st.py` | 为 `True` 时 `step_summarize` 调 `TaskRunner.request_review_pause`，页面进入术语确认态（见 §3.5） |
-| `max_split_length` | `st.py` | 字幕长度面板的「首次粗切词数上限」，用 `load_key_or(..., 20)` 读取（旧 `config.yaml` 缺该键也能跑） |
-| `subtitle.max_length` | `st.py` | 字幕长度面板的「单行最大字符数」，`load_key_or("subtitle", {})` 取默认 75 |
+| `subtitle.auto_length_by_language` | `st_components/sidebar_setting.py`（侧边栏「✂️ 字幕长度调节」） | 字幕长度面板的开关（默认 `true`）：开=切语言即按 `core/subtitle_limits.py` 的档位覆盖下面两个值，step3_2/step5 运行期也按当前语言现算（手改无效）；关=完全按手填值走 |
+| `max_split_length` | `st_components/sidebar_setting.py`；`core/step3_2_splitbymeaning.py`（经 `resolve_limits`） | 字幕长度面板的「首次粗切词数上限」。自动模式由语言档位给出（中日 30 / 韩 28 / 拉丁 26 / 泰 20），只有关闭自动时才读这里的手填值（`load_key_or(..., 20)`） |
+| `subtitle.max_length` | `st_components/sidebar_setting.py`；`core/step5_splitforsub.py`（经 `resolve_limits`） | 字幕长度面板的「单行最大字符数」。自动模式=按语言档位（中日 60 宽度≈34 字 / 韩 48 / 拉丁 70 / 俄与 RTL 65）；手动模式=源文按字符数、译文按宽度×`target_multiplier` |
 
 其他被间接依赖的键：
 
@@ -385,7 +386,7 @@ stateDiagram-v2
 | `st.py` | 点「开始处理字幕/开始生成字幕」→ `runner.start(...)` | 从按钮态切到控制面板态 |
 | `st.py` | 字幕区块「归档到'历史记录'」 | `cleanup` 移走了 `output/*`，需重画为「未处理」 |
 | `st.py` / | 清空火山 ASR 结果缓存 / 清空转录缓存 | 刷新 expander 里的计数 |
-| `st.py` / | 字幕长度面板「保存」/「恢复默认 (20 / 75)」 | 让 `st.number_input` 以新的 `config.yaml` 值重建 |
+| `st_components/sidebar_setting.py`（`subtitle_length_controls`） | 字幕长度面板「保存手填值」/「恢复当前语言推荐值」 | 让 `st.number_input` 以新的 `config.yaml` 值重建 |
 | `st_components/download_video_section.py` | 「清空 output 并重新选择」（素材检测异常时） | 让素材检测重新走一遍 `try` |
 | `st_components/download_video_section.py` | 「删除并重新选择」 | 让 `find_media_file` 抛 `FileNotFoundError`，回到上传/下载 UI |
 | `st_components/download_video_section.py` / | 下载视频成功 / 上传写盘完成 | 让预览分支显示新素材 |

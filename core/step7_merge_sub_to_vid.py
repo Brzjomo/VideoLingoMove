@@ -69,7 +69,7 @@ def merge_subtitles_to_video():
 
     video_file = media_file
 
-    # resolution 为 0x0 等价于侧边栏的 "Burn-in Subtitles" 开关处于关闭状态：
+    # resolution 为 0x0 等价于侧边栏的「烧录字幕（压进成片）」开关处于关闭状态：
     # 只出字幕、不做压制，静默跳过（不打印提示）。侧边栏那个 toggle 就是通过
     # 把 resolution 写成 '0x0' / 具体值来表达开关的，见 st_components/sidebar_setting.py。
     if RESOLUTION == '0x0':

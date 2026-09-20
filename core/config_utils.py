@@ -129,7 +129,7 @@ def update_key(key: str, new_value: Any) -> bool:
             current[keys[-1]] = new_value
             # 手动改识别语言时，原子地把 detected_language 一起对齐。
             # 否则切换语言后残留的旧检测值会继续影响提示词与 spaCy 模型
-            # （见 devdocs 已知问题：Recog Lang 切换后提示词仍用旧语言）。
+            # （见 devdocs 已知问题：侧边栏「识别语言」切换后提示词仍用旧语言）。
             # 选择 "auto" 时不覆盖：此时应交给下一次转录写入真实检测结果。
             if key == "whisper.language" and new_value != "auto" and "detected_language" in current:
                 current["detected_language"] = new_value
@@ -207,6 +207,23 @@ def llm_split_disabled_reason() -> str:
                 "不做按意群断句会影响双语对齐与单行长度）。"
                 "如需关闭，请先打开「只生成原语言字幕 (跳过翻译)」。")
     return ""
+
+
+def auto_length_by_language() -> bool:
+    """字幕长度是否**按语言自动取档**（单一判定点，UI 与 step3_2/step5 共用）。
+
+    打开（默认）：切语言即按档位覆盖 `subtitle.max_length` / `max_split_length`，
+    且**运行期按当前语言现算** —— config 里那两个值只是"当前语言的落盘副本"，
+    手改无效（要手填请先关掉这个开关）。
+    关闭：完全按手填值走（单一 `max_length`：源文按字符数、译文按宽度 × multiplier），
+    切换语言不改动。
+
+    档位表与取档规则见 `core/subtitle_limits.py`。
+    """
+    try:
+        return bool(load_key("subtitle.auto_length_by_language"))
+    except KeyError:
+        return True
 
 
 if __name__ == "__main__":

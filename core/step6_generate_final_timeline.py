@@ -5,7 +5,7 @@ import re
 import time
 from difflib import SequenceMatcher
 import easy_util as eu
-from core.config_utils import load_key, get_joiner
+from core.config_utils import load_key, load_key_or, get_joiner
 from rich.panel import Panel
 from rich.console import Console
 import autocorrect_py as autocorrect
@@ -227,6 +227,11 @@ def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output
     # Polish subtitles: replace punctuation in Translation if for_display
     if for_display:
         df_trans_time['Translation'] = df_trans_time['Translation'].apply(lambda x: re.sub(r'[，。]', ' ', x).strip())
+        # 原文行**默认保留**标点（日语字幕本来就用 、。）；标点只在 step3/step5 用于断句，
+        # 去标点是纯显示层的事（见 core/subtitle_split.py）。要"干净"显示就打开这个键。
+        if load_key_or("subtitle.strip_punctuation_in_source", False):
+            df_trans_time['Source'] = df_trans_time['Source'].apply(
+                lambda x: re.sub(r'[、。，！？]', ' ', str(x)).strip())
 
     # Output subtitles 📜
     def generate_subtitle_string(df, columns):

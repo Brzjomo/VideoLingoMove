@@ -42,6 +42,11 @@ whisper:
   # Whisper specified recognition language [en, zh, ...] (empty or 'auto' for automatic detection)
   language: 'zh'
   detected_language: 'zh'
+  # 留空 = 按语种自动给一句**中性**、带标点的示例（ja「こんにちは。今日はいい天気ですね。」等）。
+  # 目的只是让 Whisper 输出**带标点**：实测留空时日语 6 分钟只出 27 个「。」，
+  # 下游断句没有边界可用 → 只能按宽度硬切，一句话被劈成两条（见 core/subtitle_split.py）。
+  # 想让 ASR 完全不受影响就把它设成 "none"（= 旧行为，输出不带标点）。
+  initial_prompt: ''
 
 # Volcano Engine ASR configuration
 volcano_asr:
@@ -103,16 +108,47 @@ youtube:
   proxy: null
 
 subtitle:
+  # 按语言自动设置字幕长度（推荐开启）：
+  #   开 = 切「识别语言」/改「目标语言」时按语言档位覆盖下面两个值，且**运行期按当前语言现算**
+  #        —— 下面两个值只是"当前语言的落盘副本"，手改无效（要手填请先关掉本开关）
+  #   关 = 完全按手填值走（单一 max_length：源文按字符数、译文按宽度×target_multiplier），切换语言不改动
+  # 档位表（单行上限按显示宽度：中日 1.75/韩 1.5/其余 1；粗切单位=词）见 core/subtitle_limits.py：
+  #   中文/日文 60 宽度（≈34 字/行）、韩文 48（32 字）、英文等拉丁 70（70 字符）、俄语/RTL 65、泰语 65；兜底 70
+  #   另留 15% 宽容量：只超一点点不切（为 1~2 个字符把一句话拆成两条字幕，观感更差）
+  #   ⚠️ 这几个值是"**整句优先**"校准出来的（2026-09-20 两次实战回修：
+  #      按 Netflix 的 12–16 字/行取 26 → 一句话被切 2~3 条；取 42 → 45~80 宽度的句子仍在切）
+  #   想更松/更严：用下面的 length_profiles 覆盖，或干脆关掉本开关手填
+  auto_length_by_language: true
   # *Maximum length of each subtitle line in characters
-  max_length: 75
+  # 自动模式下由档位表决定（这里显示的是当前语言的值）；手动模式下才真正生效
+  max_length: 60
   # *Translated subtitles are slightly larger than source subtitles, affecting the reference length for subtitle splitting
+  # 仅手动模式使用；自动模式两侧各按自己语言的档位，不再乘这个系数
   target_multiplier: 1.2
   # *字幕对齐兜底策略：warn=精确匹配失败时模糊兜底并告警（推荐）；strict=精确匹配失败即报错
   align_on_mismatch: warn
+  # 可选：覆盖内置档位表（键=语言码，只认下面两个字段），单位=显示宽度/词
+  # length_profiles:
+  #   zh: {max_length: 52, max_split_length: 28}   # 想让中文一行更长
+  #   en: {max_length: 70, max_split_length: 24}
+  # 切点允许偏离"理想宽度位置"的比例：在这窗口内**优先挑句法边界**（标点 → 日语接续/助词），
+  # 让一条字幕是完整意群而不是"半句"。0.15 与宽容量一致（更大反而会在下一轮被再切一刀）。
+  boundary_window: 0.15
+  # 极短字幕合并：停留时间短到看不清（默认 < 0.8 s；Netflix 规定最短 5/6 s ≈ 0.83 s）
+  # 就并入相邻字幕 —— "哦 / 是的 / 原来如此"这类一闪而过的短句（2026-09-20 用户要求）。
+  # 护栏：合并后不许超过 上限×1.15、两条间隔不许超过 merge_max_gap，否则保持原样。
+  merge_short_cues: true
+  short_cue_min_duration: 0.8
+  merge_max_gap: 0.35
+  # 原文行是否也去掉标点（默认 false = 保留，日语字幕本来就用 、。；标点只影响显示，
+  # 断句在 step3/step5 早就用过了）
+  strip_punctuation_in_source: false
 
 # * Summary length, set low to 2k if using local LLM
 summary_length: 8000
 max_workers: 1000
+# 首次粗切的词数上限（spaCy token ≈ 词，同时作为 LLM 提示词里的 "each less than N words"）：
+# 自动模式由语言档位表决定（中日 30 / 韩 28 / 拉丁 26 / 泰 20）；手动模式才读这里的值
 max_split_length: 20
 reflect_translate: true
 pause_before_translate: false

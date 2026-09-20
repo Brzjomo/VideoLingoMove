@@ -7,6 +7,7 @@ from difflib import SequenceMatcher
 import math
 from core.spacy_utils.load_nlp_model import init_nlp
 from core.config_utils import load_key, get_joiner, get_source_language, use_llm_sentence_split
+from core.subtitle_limits import resolve_limits
 import easy_util as eu
 from rich.console import Console
 from rich.table import Table
@@ -209,9 +210,13 @@ def split_sentences_by_meaning():
         return
 
     nlp = init_nlp()
+    # 粗切词数由"按语言自动档位"给出（含"关闭自动 → 用手填值"的手动模式），
+    # 见 core/subtitle_limits.py。这里打印出来，出问题时第一眼就能看到生效值。
+    limits = resolve_limits()
+    console.print(f"[cyan]📐 字幕长度档位：[/cyan]{limits.label}")
     # 🔄 process sentences multiple times to ensure all are split
     for retry_attempt in range(3):
-        sentences = parallel_split_sentences(sentences, max_length=load_key("max_split_length"), max_workers=load_key("max_workers"), nlp=nlp, retry_attempt=retry_attempt)
+        sentences = parallel_split_sentences(sentences, max_length=limits.max_split_length, max_workers=load_key("max_workers"), nlp=nlp, retry_attempt=retry_attempt)
 
     # 💾 save results
     with open('output/log/sentence_splitbymeaning.txt', 'w', encoding='utf-8') as f:

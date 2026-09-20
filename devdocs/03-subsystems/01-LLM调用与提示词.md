@@ -287,7 +287,7 @@ def fix_base_url(base_url: str) -> str:
 **仍然存在的坑**：
 
 1. **子串误判**：`'ark' in base_url` 与 `'v1' not in base_url` 都是**子串**判断。域名或路径里恰好含 `ark`（如自建网关 `https://ark-proxy.example.com/v1`）会被无条件改写成火山官方地址；含 `v1` 的其它写法（`https://gw.example.com/openai/v1beta`、`https://v1-proxy.example.com`）则不会补 `/v1`。正确做法是按 path 段判断（`urlparse(...).path.rstrip('/').endswith('/v1')`）并把方舟做成可配置项。
-2. **与 UI 提示文案冲突**：`st_components/sidebar_setting.py` 的 help 写的是 "Openai format, will add /v1/chat/completions automatically"，会诱导用户粘贴**已经是完整 endpoint** 的 URL，从而踩中上一条。
+2. **与 UI 提示文案的关系**：`st_components/sidebar_setting.py` 的 help 现在写的是「OpenAI 兼容格式；会自动补上 /v1/chat/completions」（2026-09-20 前是英文 "Openai format, will add /v1/chat/completions automatically"）。**注意这话只对"base_url 指向模型服务根"成立**：若用户按提示粘贴的其实是**已经是完整 endpoint** 的 URL（含 `/chat/completions`、或火山方舟的 `/api/v3/...`），就会踩中上一条。
 3. **UI 的模型列表拉取没有同步这条规则**：`st_components/sidebar_setting.py` 的 `_fetch_model_list` 自己判了一次 `if 'v1' not in url: url += '/v1'`，**没有 `ark` 分支**。因此方舟用户点「拉取模型列表」会请求 `https://ark.cn-beijing.volces.com/v1/models` 而不是 `/api/v3/models`。改 `fix_base_url` 时记得同步这里，或直接复用它。
 3. **`.strip('/')` 语义过宽**：它去掉的是首尾所有 `/`，不是只去尾斜杠；对 `//host/` 这类输入会削掉协议相对前缀（实际配置不会这么写，但属于隐藏假设）。
 4. 拼接结果**不回写 config**（每次调用重新算），所以文件里看到的永远是你手填的那个值。
@@ -388,7 +388,7 @@ response_format = {"type": "json_object"} if response_json and model in llm_supp
 | `whisper.detected_language` | `'zh'` | ASR 写回的真实检测语言（`core/all_whisper_methods/whisperX_utils.py` 的 `save_language`）；`update_key("whisper.language", ...)` 时会被原子同步（`core/config_utils.py`） |
 | `summary_length` | `8000` | `core/step4_1_summarize.py` 截断送入总结的字符数；改它=改 prompt=缓存失效 |
 | `max_workers` | `1000` | 并发线程数：`core/step3_2_splitbymeaning.py`（`parallel_split_sentences` 的调用处）、`core/step4_2_translate_all.py`、`core/step5_splitforsub.py` |
-| `max_split_length` | `20` | step3_2 判断"这一行是否需要 LLM 再切"的 token 上限（`core/step3_2_splitbymeaning.py`） |
+| `max_split_length` | 自动档位（中日 30 / 韩 28 / 拉丁 26 / 泰 20） | step3_2 判断"这一行是否需要 LLM 再切"的 token 上限（`core/step3_2_splitbymeaning.py`），同时作为 `get_split_prompt` 的 `word_limit`。取哪个数由 `core/subtitle_limits.py` 按语言决定；关闭"按语言自动设置"后才读 config 里的手填值 |
 | `reflect_translate` | `true` | `core/translate_once.py` 决定是否执行「反思+意译」第二步；关闭可省约一半翻译 token，但字幕自然度下降 |
 | `transcription_only` | `false` | `core/step4_2_translate_all.py`：为真时**完全跳过所有翻译 LLM 调用**，直接把源文复制成译文 |
 | `min_trim_duration` | `3.5` | `core/step4_2_translate_all.py`：只有 `duration` 超过它才调 `check_len_then_trim`（即 `subtitle_trim` 提示词） |

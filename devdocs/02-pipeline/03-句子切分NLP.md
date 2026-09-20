@@ -164,7 +164,7 @@ flowchart TD
 | 输入 | `output/log/sentence_splitbynlp.txt` 的每一行（-，`line.strip` 后丢弃空行） |
 | LLM 开关 | `core.config_utils.use_llm_sentence_split`（`core/config_utils.py`）：翻译模式强制 `True`；仅转录模式读 `llm_sentence_split`。为假时把 spaCy 结果原样写出并 `return`（，**零 LLM 调用**） |
 | 模型 | `nlp = init_nlp`——**本阶段第二次加载 spaCy 模型**（阶段一已加载过一次） |
-| 主循环 | `for retry_attempt in range(3):`→ `parallel_split_sentences(sentences, max_length=load_key("max_split_length"), max_workers=load_key("max_workers"), nlp=nlp, retry_attempt=retry_attempt)` |
+| 主循环 | `limits = resolve_limits()`（`core/subtitle_limits.py`）→ 打印 `📐 字幕长度档位：…` → `for retry_attempt in range(3):`→ `parallel_split_sentences(sentences, max_length=limits.max_split_length, max_workers=load_key("max_workers"), nlp=nlp, retry_attempt=retry_attempt)`。**2026-09-20 起**：粗切上限不再直接读 `max_split_length`，而是按语言档位解析（关闭"按语言自动设置"时才是 config 里的手填值） |
 | 输出 | `'\n'.join(sentences)` 写入 `output/log/sentence_splitbymeaning.txt`（-） |
 | 幂等 | **没有**文件存在检查：本函数每次调用都重跑（见七.1） |
 
@@ -188,7 +188,7 @@ flowchart TD
 | 收集 | 按提交顺序 `future.result`，成功则 `split_result.strip.split('\n')` 并逐行 `strip`，空则回退为原句 |
 | 返回 | 展平：`[sentence for sublist in new_sentences for sentence in sublist]` |
 
-`len(tokens)` 是 **spaCy 的 token 数（≈词数）**，不是字符数：`tokenize_sentence` 返回 `[token.text for token in doc]`。因此 `max_split_length: 20`（`config.yaml`）对中文是"约 20 个词"，对英文就是 20 个词。
+`len(tokens)` 是 **spaCy 的 token 数（≈词数）**，不是字符数：`tokenize_sentence` 返回 `[token.text for token in doc]`。因此上限对中文是"约 N 个词"，对英文就是 N 个词。**2026-09-20 起**这个 N 由 `core/subtitle_limits.py` 按语言给出：中日 30 / 韩 28 / 拉丁 26 / 泰 20（兜底 26）；只有关闭「按语言自动设置」时才用 `config.yaml` 里的 `max_split_length`（历史默认 20）。
 
 `max_workers: 1000` 意味着一个视频里所有超长句会在同一瞬间被并发提交给 LLM API（的 `for` 循环不阻塞地连续 submit）。用本地 LLM 时必须把它设为 1，`config.yaml` 的注释即为此意。
 
@@ -248,7 +248,7 @@ flowchart TD
 | --- | --- | --- | --- |
 | `whisper.language` | | `'zh'` | 语言来源之一；等于 `'auto'` 时才改用 `detected_language`（判定集中在 `core/config_utils.py` `get_source_language`） |
 | `whisper.detected_language` | | `'zh'` | 由 step2 写入（`core/step2_whisperX.py` / → `save_language` → `update_key`，`core/all_whisper_methods/whisperX_utils.py`）；决定 joiner、spaCy 模型、提示词语言 |
-| `max_split_length` | | `20` | 阶段二的目标句长（spaCy token 数）；也是 `num_parts = math.ceil(len(tokens)/max_length)` 的分母；同时也是传给 LLM 的 `word_limit` |
+| `max_split_length` | | 自动档位（中日 30 / 韩 28 / 拉丁 26；关闭自动时为 config 值，历史默认 20） | 阶段二的目标句长（spaCy token 数）；也是 `num_parts = math.ceil(len(tokens)/max_length)` 的分母；同时也是传给 LLM 的 `word_limit`。取值来源见 `core/subtitle_limits.py` |
 | `max_workers` | | `1000` | `ThreadPoolExecutor(max_workers=...)`；被 step4/step5 共用同一个键 |
 | `llm_sentence_split` | | `true` | 只在 `transcription_only: true` 时生效（`core/config_utils.py`）；为 `false` 时阶段二直接复制 spaCy 结果，零 LLM 调用 |
 | `spacy_model_map` | - | 10 种语言 → `*_core_news_md` / `en_core_web_md` / `zh_core_web_md` | 语言 → 模型名映射，见 `03-subsystems/04-NLP切分工具.md` |
@@ -278,7 +278,7 @@ flowchart TD
 
 | 需求 | 改哪里 | 注意 |
 | --- | --- | --- |
-| 改变"粗切"的粒度（让每个句子更长/更短） | `config.yaml` `max_split_length`；配置注释建议 18~22 区间 | 它同时是 LLM 的 `word_limit` 和 `num_parts` 的分母；调小会让 step4 的翻译上下文变碎，调大会让 step5/step6 的对齐变难 |
+| 改变"粗切"的粒度（让每个句子更长/更短） | 自动档位见 `core/subtitle_limits.py`（中日 30 / 韩 28 / 拉丁 26 / 泰 20）；要手调得先在**侧边栏**的「✂️ 字幕长度调节」（`st_components/sidebar_setting.py`）里**关掉「按语言自动设置」**，再改 `config.yaml` 的 `max_split_length` | 它同时是 LLM 的 `word_limit` 和 `num_parts` 的分母；调小会让 step4 的翻译上下文变碎，调大会让 step5/step6 的对齐变难。⚠️ 仅转录模式关掉 LLM 断句时它不参与 |
 | 换 spaCy 模型 / 加语言 | `config.yaml`- `spacy_model_map` | 细节见 `../03-subsystems/04-NLP切分工具.md` 第八节 |
 | 加语言但不想改 py 代码 | `config.yaml`- 两个 joiner 列表 | 不在任一列表里的语言会在 `get_joiner` 抛 `ValueError`（`core/config_utils.py`） |
 | 让 LLM 切分更守规矩（减少三轮重试） | `core/prompts_storage.py`- `get_split_prompt` | 不要改动 JSON 键名 `split1`/`split2`/`choice` 与 `[br]` 约定，二者是 `valid_split`（`step3_2_splitbymeaning.py`）与 `find_split_positions` 的硬契约；改动后要同步 `tests/test_prompt_contract.py` |

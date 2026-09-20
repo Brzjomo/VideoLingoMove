@@ -372,7 +372,7 @@ DP 的真实参数（-）：
 
 | 想要的效果 | 动哪里 | 代价 |
 | --- | --- | --- |
-| 整体少切一点（行长变长） | `config.example.yaml` `max_split_length`（只影响阶段二 LLM） | 太大 → step5/step6 对齐变难 |
+| 整体少切一点（行长变长） | 先在**侧边栏**的「✂️ 字幕长度调节」（`st_components/sidebar_setting.py`）里**关掉「按语言自动设置」**，再改 `config.example.yaml` 的 `max_split_length`（只影响阶段二 LLM） | 太大 → step5/step6 对齐变难；开着自动时该值由语言档位决定（中日 30 / 韩 28 / 拉丁 26），手改无效 |
 | 逗号处更少切 | `split_by_comma.py` 的 `<= 3` 门槛（改成 `<= 5` 等） | 硬编码，改后需回归 |
 | 连接词处更少切 | `split_by_connector.py` 的 `context_words` 默认值；或 的 `>= context_words` | 调用处 未显式传参，改默认值即可全局生效 |
 | root 切分更积极 | `split_long_by_root.py` 的 `> 60`、 的 `100`、 的 `30` | 段数目标是最少段数，调窗口比调目标更有效 |

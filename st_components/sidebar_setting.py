@@ -1,7 +1,15 @@
 import os, sys
 import streamlit as st
-from core.config_utils import update_key, load_key, assign_key, _to_env_name
-from st_components.imports_and_utils import ask_gpt
+from core.config_utils import (update_key, load_key, load_key_or, assign_key, _to_env_name,
+                               auto_length_by_language, use_llm_sentence_split)
+from core import subtitle_limits
+
+# 注意：**不要**在这里 `from st_components.imports_and_utils import ask_gpt`。
+# `imports_and_utils` 反过来要 re-export 本模块的 `page_setting`（它第 26 行），
+# 于是两个模块互为顶层依赖 —— 只有"先 import imports_and_utils"这一种顺序能过，
+# 反过来（`import st_components.sidebar_setting` 打头，测试/新入口很容易这么写）
+# 会报 `cannot import name 'page_setting' from partially initialized module`。
+# `ask_gpt` 只在 check_api() 里用，改成函数内惰性导入，两条顺序都能过。
 
 def config_input(label, key, help=None):
     """Generic config input handler
@@ -63,6 +71,17 @@ def _search_models(search_term, model_list):
     return [term]
 
 
+def sync_subtitle_lengths():
+    """语言变化后按档位刷新 `subtitle.max_length` / `max_split_length`。
+
+    只在 `subtitle.auto_length_by_language` 打开时生效（关闭则一个字节都不动）。
+    覆盖是**无条件**的：想手填就关开关 —— 这是刻意设计，避免"忘了自己手改过"。
+    """
+    limits, changed = subtitle_limits.apply_language_profile()
+    if limits.auto and changed:
+        st.toast("📐 " + limits.label, icon="✅")
+
+
 def model_input():
     """模型选择控件。
 
@@ -76,7 +95,7 @@ def model_input():
     try:
         from streamlit_searchbox import st_searchbox
     except ImportError:
-        config_input("MODEL", "api.model", help="click to check API validity 👉")
+        config_input("模型", "api.model", help="点右侧 📡 可检测 API 是否可用 👉")
         st.caption("ℹ️ 未安装 `streamlit-searchbox`，这里先用普通输入框。"
                    "重跑 `python installer.py`（或 `Install.bat`）即可获得带搜索的下拉框。")
         return
@@ -84,7 +103,7 @@ def model_input():
     model_list = st.session_state.get('_model_list', [])
     selected = st_searchbox(
         lambda term: _search_models(term, st.session_state.get('_model_list', [])),
-        label="MODEL",
+        label="模型",
         default=load_key("api.model"),
         default_searchterm=load_key("api.model"),
         clear_on_submit=False,
@@ -102,6 +121,8 @@ def check_api():
     从而在密钥已失效时仍然显示"有效"（见 devdocs 已知问题 P1-8）。
     """
     try:
+        from st_components.imports_and_utils import ask_gpt  # 惰性导入，见文件头注释
+
         resp = ask_gpt("This is a test, response 'message':'success' in json format.",
                       response_json=True, log_title=None, use_cache=False)
         return resp.get('message') == 'success'
@@ -130,6 +151,86 @@ def apply_config(config_name):
     # 清除之前的API状态，强制重新检查
     if 'api_status' in st.session_state:
         del st.session_state.api_status
+
+def subtitle_length_controls():
+    """字幕长度面板（2026-09-20 从主区移到侧边栏，和"字幕设置"挨着）。
+
+    两个旋钮 + 「按语言自动设置」开关：
+      * 开关打开（默认）：切「识别语言」/改「目标语言」即按 `core/subtitle_limits.py`
+        的档位覆盖这两个值，且 step3_2/step5 运行期按当前语言现算 —— 手改无效；
+      * 开关关闭：完全按手填值走（单一 max_length：源文按字符数、译文按宽度×multiplier），
+        切换语言不改动。
+    """
+    with st.expander("✂️ 字幕长度调节", expanded=False):
+        auto_length = st.toggle(
+            "按语言自动设置（切换语言即覆盖）",
+            value=auto_length_by_language(),
+            key="auto_length_by_language",
+            help="打开：切「识别语言」/改「目标语言」时按该语言的推荐档位自动改写下面两个值，"
+                 "运行期也按当前语言现算 —— 手改无效（要手填请关掉本开关）。"
+                 "关闭：完全按下面手填的值走，切换语言不改动。",
+        )
+        if auto_length != auto_length_by_language():
+            update_key("subtitle.auto_length_by_language", bool(auto_length))
+            if auto_length:
+                # 打开时立刻按当前语言下发一次，避免"显示的还是手填值"
+                limits, _changed = subtitle_limits.apply_language_profile()
+                st.toast("📐 " + limits.label, icon="✅")
+            st.rerun(scope="app")
+
+        limits = subtitle_limits.resolve_limits()
+        st.caption(f"📐 当前：{limits.label}")
+        if auto_length:
+            st.caption("ℹ️ 自动档位已开启 —— 下面两个值由语言档位决定（手改无效，"
+                       "要手填请先关掉上面的开关）。")
+
+        # 仅转录模式 + 关闭 LLM 断句时，粗切参数根本不参与（step3_2 直接用 spaCy 结果）
+        split_inactive = load_key_or("transcription_only", False) and not use_llm_sentence_split()
+        if split_inactive:
+            st.caption("ℹ️ 当前是「只生成原语言字幕」且已关闭「使用 LLM 优化断句」，"
+                       "粗切词数上限不参与切分（step3_2 直接采用 spaCy 结果）。")
+
+        max_split_length = st.number_input(
+            "首次粗切词数上限 (max_split_length)",
+            min_value=8, max_value=60,
+            value=int(load_key_or("max_split_length", 20)),
+            disabled=bool(auto_length) or bool(split_inactive),
+            help="单位是「词」（spaCy token，也是提示词里的 word_limit）："
+                 "一句大约切到 2 行字幕的量。自动模式按语言取（中日 18 / 韩 16 / 拉丁 14）。",
+        )
+        subtitle_cfg = load_key_or("subtitle", {}) or {}
+        max_length = st.number_input(
+            "单行最大字符数 (subtitle.max_length)",
+            min_value=10, max_value=200,
+            value=int(subtitle_cfg.get("max_length", 75)),
+            disabled=bool(auto_length),
+            help="自动模式下按语言取（中日 26≈15 字 / 韩 24 / 拉丁 40 / 俄与 RTL 38）；"
+                 "手动模式下源文按字符数、译文按显示宽度×target_multiplier 比较。",
+        )
+
+        if st.button("保存手填值", key="save_subtitle_length", type="primary",
+                     width="stretch", disabled=bool(auto_length)):
+            changed = []
+            if int(max_split_length) != int(load_key_or("max_split_length", 20)):
+                update_key("max_split_length", int(max_split_length))
+                changed.append("max_split_length")
+            current_max_length = (load_key_or("subtitle", {}) or {}).get("max_length", 75)
+            if int(max_length) != int(current_max_length):
+                update_key("subtitle.max_length", int(max_length))
+                changed.append("subtitle.max_length")
+            if changed:
+                st.success("已更新：" + "、".join(changed))
+                st.rerun(scope="app")
+            else:
+                st.info("没有变化。")
+        if st.button("恢复当前语言推荐值", key="reset_subtitle_length", width="stretch"):
+            applied, changed = subtitle_limits.apply_language_profile(force=True)
+            if changed:
+                st.success("已按档位写入：" + "、".join(f"{k}={v}" for k, v in changed.items()))
+                st.rerun(scope="app")
+            else:
+                st.info(f"已经是推荐值（{applied.label}）")
+
 
 def page_setting():
     with st.expander("一键切换配置", expanded=False):
@@ -167,15 +268,15 @@ def page_setting():
             apply_config(selected_config)
 
     with st.expander("LLM 配置", expanded=False):
-        config_input("API_KEY", "api.key")
-        config_input("BASE_URL", "api.base_url", help="Openai format, will add /v1/chat/completions automatically")
+        config_input("API 密钥 (API_KEY)", "api.key")
+        config_input("接口地址 (BASE_URL)", "api.base_url", help="OpenAI 兼容格式；会自动补上 /v1/chat/completions")
         
         c1, c2 = st.columns([5, 1])
         with c1:
             model_input()
         with c2:
             st.markdown('<div style="margin-top: 25px; margin-right: 10px;"></div>', unsafe_allow_html=True)
-            if st.button("📡", key="api", help="Check API connection"):
+            if st.button("📡", key="api", help="检测 API 连接是否可用"):
                 # 只调用一次：check_api() 刻意绕过了缓存，双调用=两次真实请求
                 is_valid = check_api()
                 st.toast("API密钥有效" if is_valid else "API密钥无效",
@@ -192,14 +293,14 @@ def page_setting():
             except Exception as e:
                 st.toast(f"获取失败：{e}", icon="❌")
     
-    with st.expander("Subtitles Settings", expanded=False):
-        # ASR Engine Selection
+    with st.expander("字幕设置", expanded=False):
+        # ASR 引擎选择
         asr_engines = {
             "Whisper": "whisper",
             "火山引擎ASR": "volcano"
         }
         selected_asr_engine = st.selectbox(
-            "ASR Engine",
+            "ASR 引擎",
             options=list(asr_engines.keys()),
             index=list(asr_engines.values()).index(load_key("asr_engine")) if load_key("asr_engine") in asr_engines.values() else 0
         )
@@ -257,6 +358,9 @@ def page_setting():
                         if new_volcano_lang is not None and new_volcano_lang != current_volcano_lang:
                             update_key("volcano_asr.language", new_volcano_lang)
 
+                    # 5. 按新语言刷新字幕长度档位（开关打开时无条件下发；见 sync_subtitle_lengths）
+                    sync_subtitle_lengths()
+
             # --- UI 组件 ---
             # 计算当前的 index
             try:
@@ -265,7 +369,7 @@ def page_setting():
                 current_index = 0
 
             st.selectbox(
-                "Recog Lang",
+                "识别语言",
                 options=list(langs.keys()),
                 index=current_index,
                 key="_recog_lang_select",  # 必须设置 key，以便在回调中通过 session_state 访问
@@ -273,17 +377,21 @@ def page_setting():
             )
 
         with c2:
-            target_language = st.text_input("Target Lang", value=load_key("target_language"))
+            target_language = st.text_input("目标语言", value=load_key("target_language"))
             if target_language != load_key("target_language"):
                 update_key("target_language", target_language)
+                # 目标语言也决定档位（双语字幕以译文侧为准），同样按开关刷新
+                sync_subtitle_lengths()
 
-        demucs = st.toggle("Vocal separation enhance", value=load_key("demucs"), help="Recommended for videos with loud background noise, but will increase processing time")
+        demucs = st.toggle("人声分离增强（Demucs）", value=load_key("demucs"), help="先用 Demucs 把人声分离出来再识别：背景音乐/噪声大的视频效果更好，但会明显增加处理时间")
         if demucs != load_key("demucs"):
             update_key("demucs", demucs)
 
         transcription_only = st.toggle("只生成原语言字幕 (跳过翻译)", value=load_key("transcription_only"), help="只生成原语言字幕，跳过翻译步骤")
         if transcription_only != load_key("transcription_only"):
             update_key("transcription_only", transcription_only)
+            # 仅转录只有一种语言，档位要按识别语言重算（见 core/subtitle_limits.py）
+            sync_subtitle_lengths()
 
         # 断句优化开关。
         # 规则：翻译模式下**强制开启**（译文与源文长度差异大，不做按意群断句会影响
@@ -304,7 +412,7 @@ def page_setting():
             if not load_key("llm_sentence_split"):
                 update_key("llm_sentence_split", True)
 
-        burn_subtitles = st.toggle("Burn-in Subtitles", value=load_key("resolution") != "0x0", help="takes longer time")
+        burn_subtitles = st.toggle("烧录字幕（压进成片）", value=load_key("resolution") != "0x0", help="开启后把字幕压进成片，需要重新编码、耗时更长；关闭则只产出字幕文件")
         
         resolution_options = {
             "1080p": "1920x1080",
@@ -313,7 +421,7 @@ def page_setting():
         
         if burn_subtitles:
             selected_resolution = st.selectbox(
-                "Video Resolution",
+                "视频分辨率",
                 options=list(resolution_options.keys()),
                 index=list(resolution_options.values()).index(load_key("resolution")) if load_key("resolution") != "0x0" else 0
             )
@@ -324,16 +432,20 @@ def page_setting():
         if resolution != load_key("resolution"):
             update_key("resolution", resolution)
 
+    # 字幕长度面板（原来在主区，2026-09-20 移到侧边栏：它和上面的语言/字幕设置强相关 ——
+    # 档位是按"识别语言/目标语言"取的，切语言就在上面那几行里发生）
+    subtitle_length_controls()
+
     # Volcano Engine ASR Settings (only show when selected)
     if load_key("asr_engine") == "volcano":
         with st.expander("火山引擎ASR配置", expanded=False):
 
             # Required configuration
-            config_input("App ID", "volcano_asr.app_id", help="火山引擎控制台获取的APP ID")
-            config_input("Access Token", "volcano_asr.access_token", help="火山引擎控制台获取的Access Token")
+            config_input("应用 ID (App ID)", "volcano_asr.app_id", help="火山引擎控制台获取的 App ID")
+            config_input("访问令牌 (Access Token)", "volcano_asr.access_token", help="火山引擎控制台获取的 Access Token")
 
             # Optional configuration
-            config_input("Resource ID", "volcano_asr.resource_id", help="资源ID，默认: volc.bigasr.auc")
+            config_input("资源 ID (Resource ID)", "volcano_asr.resource_id", help="资源 ID，默认：volc.bigasr.auc")
 
             # Language selection for volcano
             volcano_langs = {
@@ -351,7 +463,7 @@ def page_setting():
                 "🇸🇦 阿拉伯语": "ar-SA"
             }
             selected_volcano_lang = st.selectbox(
-                "识别语言",
+                "识别语言（火山）",
                 options=list(volcano_langs.keys()),
                 index=list(volcano_langs.values()).index(load_key("volcano_asr.language")) if load_key("volcano_asr.language") in volcano_langs.values() else 0
             )
@@ -422,13 +534,13 @@ def page_setting():
                 update_key("tos.enabled", tos_enabled)
 
             if tos_enabled:
-                config_input("Access Key", "tos.access_key", help="火山引擎控制台获取的Access Key，或设置环境变量TOS_ACCESS_KEY")
-                config_input("Secret Key", "tos.secret_key", help="火山引擎控制台获取的Secret Key，或设置环境变量TOS_SECRET_KEY")
+                config_input("访问密钥 (Access Key)", "tos.access_key", help="火山引擎控制台获取的 Access Key，或设置环境变量 TOS_ACCESS_KEY")
+                config_input("私钥 (Secret Key)", "tos.secret_key", help="火山引擎控制台获取的 Secret Key，或设置环境变量 TOS_SECRET_KEY")
 
                 # Bucket info
-                config_input("Bucket名称", "tos.bucket_name", help="火山引擎TOS的Bucket名称")
-                config_input("Endpoint", "tos.endpoint", help="火山引擎TOS的Endpoint地址")
-                config_input("Region", "tos.region", help="火山引擎TOS的Region区域")
+                config_input("存储桶 (Bucket)", "tos.bucket_name", help="火山引擎 TOS 的 Bucket 名称")
+                config_input("接入地址 (Endpoint)", "tos.endpoint", help="火山引擎 TOS 的 Endpoint 地址")
+                config_input("区域 (Region)", "tos.region", help="火山引擎 TOS 的 Region 区域")
 
                 # Advanced TOS settings - using columns instead of nested expander
                 st.markdown("---")

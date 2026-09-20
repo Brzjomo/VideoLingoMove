@@ -62,7 +62,7 @@ def process_video(video_storage_folder, file, is_retry=False, save_to_video_stor
         ("⚡ Processing and aligning subtitles", process_and_align_subtitles),
     ]
 
-    # 是否烧录字幕只取决于 preprocess_only 与 "Burn-in Subtitles" 开关。
+    # 是否烧录字幕只取决于 preprocess_only 与侧边栏「烧录字幕（压进成片）」开关。
     # 该开关在侧边栏以 resolution 表达：开启=具体分辨率，关闭='0x0'。
     # 曾经这里的条件是 `not preprocess_only and not skip_preprocess`，导致勾选
     # "优先进行本地计算"（skip_preprocess=True）时被静默跳过烧录，不产出 output_sub.mp4。

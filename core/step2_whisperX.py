@@ -21,6 +21,27 @@ import torch
 #
 # 只包一层、只改默认值：调用方显式传 weights_only=True 时依然尊重，
 # 所以并不会削弱"我们主动要求安全加载"的路径。
+#: 按语种给 Whisper 的中性 initial_prompt —— 目的只是让输出**带标点**。
+#: 句子必须与视频内容无关，否则模型会"顺着提示词续写"。
+_INITIAL_PROMPTS = {
+    "ja": "こんにちは。今日はいい天気ですね。",
+    "zh": "大家好，今天我们来讲一个话题。",
+    "en": "Hello, and welcome. Today we are going to talk about something.",
+    "ko": "안녕하세요. 오늘은 날씨가 좋네요.",
+    "es": "Hola, ¿qué tal? Hoy hace buen tiempo.",
+    "fr": "Bonjour. Aujourd'hui, il fait beau.",
+    "de": "Hallo. Heute ist das Wetter schön.",
+    "it": "Ciao. Oggi il tempo è bello.",
+    "pt": "Olá. Hoje o tempo está bom.",
+    "ru": "Здравствуйте. Сегодня хорошая погода.",
+}
+
+
+def default_initial_prompt(language) -> str:
+    """按语种取中性的 initial_prompt；未知语种返回空串（＝历史行为）。"""
+    return _INITIAL_PROMPTS.get(str(language or "").strip().lower(), "")
+
+
 def _patch_torch_load_weights_only():
     original = torch.load
     if getattr(original, "_videolingo_weights_only_shim", False):
@@ -210,7 +231,14 @@ def transcribe_audio_with_whisper(audio_file: str, start: float, end: float) -> 
         model_name = resolve_whisper_model(model_name, MODEL_DIR)
 
         vad_options = {"vad_onset": 0.500,"vad_offset": 0.363}
-        asr_options = {"temperatures": [0],"initial_prompt": "",}
+        # Whisper 的标点风格高度依赖 initial_prompt：留空时日语几乎不出「、」「。」
+        # （2026-09-20 实测：一支 6 分钟视频只有 27 个「。」、50 个「、」）→ 下游 step3 的
+        # 标点/接续切分几乎没有边界可用，最后只能按显示宽度硬切，出现"一句话被切成两半、
+        # 前半接上一条后半接下一条"。这里按语种给一句**中性**示例（与视频内容无关，
+        # 避免模型顺着提示词续写）。要关掉/自定义：`whisper.initial_prompt`（留空=旧行为）。
+        asr_options = {"temperatures": [0],
+                       "initial_prompt": (load_key_or("whisper.initial_prompt", "")
+                                          or default_initial_prompt(WHISPER_LANGUAGE)),}
         whisper_language = None if 'auto' in WHISPER_LANGUAGE else WHISPER_LANGUAGE
         rprint("[bold yellow]**You can ignore warning of `Model was trained with torch 1.10.0+cu102, yours is 2.0.0+cu118...`**[/bold yellow]")
         model = whisperx.load_model(model_name, device, compute_type=compute_type, language=whisper_language, vad_options=vad_options, asr_options=asr_options, download_root=MODEL_DIR)

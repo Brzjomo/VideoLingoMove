@@ -18,6 +18,11 @@ Split the given subtitle text into {num_parts} parts, each less than {word_limit
 2. MOST IMPORTANT: Keep parts roughly equal in length (minimum 3 words each)
 3. Split at natural points like punctuation marks or conjunctions
 4. If provided text is repeated words, simply split at the middle of the repeated words.
+5. STRONGLY prefer clause/sentence boundaries: punctuation first, then connectives
+   (Japanese て-form / が / ので / から / けど; English and/but/so/because/which/when).
+   NEVER cut in the middle of a word or right after a bare particle. Unequal part lengths
+   are acceptable when that keeps each part syntactically whole — a clean clause boundary
+   matters more than equal lengths.
 
 ### Steps
 1. Analyze the sentence structure, complexity, and key splitting challenges
