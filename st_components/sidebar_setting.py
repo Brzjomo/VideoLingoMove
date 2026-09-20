@@ -170,12 +170,9 @@ def subtitle_length_controls():
             update_key("subtitle.auto_length_by_language", bool(auto_length))
             if auto_length:
                 # 打开时立刻按当前语言下发一次，避免"显示的还是手填值"
-                limits, _changed = subtitle_limits.apply_language_profile()
-                st.toast("📐 " + limits.label, icon="✅")
+                subtitle_limits.apply_language_profile()
+                st.toast("📐 已按当前语言套用档位", icon="✅")
             st.rerun(scope="app")
-
-        limits = subtitle_limits.resolve_limits()
-        st.caption(f"📐 {limits.label}")
 
         # 仅转录模式 + 关闭 LLM 断句时，粗切参数根本不参与（step3_2 直接用 spaCy 结果）
         split_inactive = load_key_or("transcription_only", False) and not use_llm_sentence_split()
@@ -229,7 +226,7 @@ def polish_controls():
     润色结果另存为 `output/log/translation_results_polished.xlsx`，step6 只在开关打开且行数一致时
     才用它 —— 关掉开关重跑一次即可恢复未润色字幕。
     """
-    with st.expander("✨ 字幕润色（可选）", expanded=False):
+    with st.expander("✨ 字幕润色", expanded=False):
         current = bool(load_key_or("subtitle.polish_translation", False))
         enabled = st.toggle(
             "翻译后润色字幕措辞",
@@ -248,7 +245,7 @@ def polish_controls():
             value=thinking,
             key="polish_thinking",
             disabled=not enabled,
-            help="关掉省约 90% 润色 token，但更容易丢词（回退的行更多）。审校不受影响。",
+            help="关掉节约大量 token，但更容易丢词（回退的行更多）。",
         )
         if allow_thinking != thinking:
             update_key("subtitle.polish_thinking", bool(allow_thinking))
@@ -260,7 +257,7 @@ def polish_controls():
             value=long_only,
             key="polish_long_lines_only",
             disabled=not enabled,
-            help="短句与无分句的行原样保留，省 token。",
+            help="短句与无分句的行原样保留。",
         )
         if only_long != long_only:
             update_key("subtitle.polish_long_lines_only", bool(only_long))
