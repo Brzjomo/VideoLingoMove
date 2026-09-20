@@ -33,6 +33,7 @@ PIPELINE_MODULES = (
     "core.step4_1_summarize",
     "core.step4_2_translate_all",
     "core.step5_splitforsub",
+    "core.step5_2_polish_subs",
     "core.step6_generate_final_timeline",
     "core.step7_merge_sub_to_vid",
     "core.subtitle_trim",
