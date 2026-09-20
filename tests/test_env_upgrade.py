@@ -22,7 +22,71 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import installer  # noqa: E402
+import easy_util  # noqa: E402
 import setup_env  # noqa: E402
+
+
+class TestPackageVersion(unittest.TestCase):
+    """`easy_util.package_version()`：先看 `__version__`，再看发行元数据。
+
+    2026-09-20 实测：控制台那行 `🔧 whisperx 未知版本 | torch 2.8.0+cu128 | …` 里的
+    "未知版本"不是环境坏了 —— 上游 whisperx **不定义** `whisperx.__version__`
+    （`getattr` 拿不到），而版本一直在发行元数据里（`whisperx-3.8.6.dist-info`）。
+    回归点就是那行日志：它必须走这个两层兜底的取版本函数。
+    """
+
+    def test_module_attribute_wins(self):
+        """torch 这类包只把版本写在属性上 —— 有属性就用属性。"""
+
+        class FakeModule:
+            __version__ = "1.2.3"
+
+        self.assertEqual(easy_util.package_version("whatever", FakeModule()), "1.2.3")
+
+    def test_falls_back_to_distribution_metadata(self):
+        """模块没有 `__version__` 时靠元数据取（whisperx 就属于这种）。"""
+        import importlib.metadata
+
+        class NoVersion:
+            pass
+
+        try:
+            expected = importlib.metadata.version("whisperx")
+        except importlib.metadata.PackageNotFoundError:
+            self.skipTest("当前解释器未安装 whisperx")
+        self.assertEqual(easy_util.package_version("whisperx", NoVersion()), expected)
+        self.assertRegex(expected, r"^\d+\.", "元数据里应当是正常版本号")
+
+    def test_empty_attribute_falls_through(self):
+        class EmptyVersion:
+            __version__ = ""
+
+        self.assertIsNone(easy_util.package_version("no-such-dist-xyz", EmptyVersion()))
+
+    def test_unknown_distribution_returns_none(self):
+        self.assertIsNone(easy_util.package_version("no-such-dist-xyz"))
+
+    def test_step2_log_line_uses_the_helper(self):
+        """静态守住那行日志：不许再退回"只 getattr 属性"的写法。
+
+        用 `ast` 精确定位那条 `rprint` 调用，而不是全文找字符串 —— 注释里提到旧写法
+        不算数（否则本条会被自己的注释绊倒），失败信息也不会把整个文件吐出来。
+        """
+        import ast as _ast
+
+        src = pathlib.Path("core/step2_whisperX.py").read_text(encoding="utf-8")
+        for node in _ast.walk(_ast.parse(src)):
+            if not isinstance(node, _ast.Call):
+                continue
+            segment = _ast.get_source_segment(src, node) or ""
+            if "🔧 whisperx" not in segment:
+                continue
+            self.assertIn("package_version('whisperx', whisperx)", segment,
+                          "那行日志必须用 easy_util.package_version 取版本")
+            self.assertNotIn("getattr(whisperx", segment,
+                             "上游 whisperx 没有 __version__ 属性，getattr 一定拿不到")
+            return
+        self.fail("core/step2_whisperX.py 里找不到那行 🔧 whisperx 日志")
 
 
 class TestParseFfmpegVersion(unittest.TestCase):
@@ -1004,6 +1068,61 @@ class TestSearchboxDependency(unittest.TestCase):
         self.assertIn("config_input(\"MODEL\", \"api.model\"", src)
 
 
+class TestBareModeImportQuiet(unittest.TestCase):
+    """体检里的裸 import 不许把 streamlit 的告警漏进控制台。
+
+    2026-09-20 实测：`OneKeyStart.bat` 第 1 步（`installer.py --check --quiet`）
+    会在控制台多打一行
+
+        2026-09-20 12:02:25.668 Thread 'MainThread': missing ScriptRunContext!
+        This warning can be ignored when running in bare mode.
+
+    真身：`streamlit_searchbox` 在**模块级**调 `components.declare_component()`
+    → `streamlit/components/v1/component_registry.py` 的 `get_script_run_ctx()`
+    （那里没有传 `suppress_warning=True`）→ 裸进程没有会话上下文 → streamlit
+    自己打的 WARNING（production 下 `logger.messageFormat` 只有时间戳，看着像报错）。
+    危害为零：declare_component 里是 `if ctx is not None: register_component(...)`。
+    `installer.check_import()` 负责把它压掉，本类守住这条行为。
+
+    ⚠️ 必须用**子进程**：同进程里 streamlit 的 console handler 在 `import streamlit`
+    时就把 `sys.stderr` 绑死了（`logging.StreamHandler` 构造时取流），之后再
+    `contextlib.redirect_stderr` 根本收不走 —— 那样写出来的用例，即使修复被删掉
+    也照样是绿的（`test_importable_when_installed` 的 redirect 之所以有效，只是因为
+    它在 streamlit 首次 import **之前**就把 stderr 换成了 StringIO）。
+    """
+
+    def _run_bare(self, code):
+        """在项目根目录跑一段裸进程代码，返回 (退出码, stdout, stderr)。"""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                              cwd=root, timeout=300)
+        return (proc.returncode,
+                (proc.stdout or b"").decode("utf-8", "replace"),
+                (proc.stderr or b"").decode("utf-8", "replace"))
+
+    def test_health_check_import_is_quiet(self):
+        import importlib.util
+        if importlib.util.find_spec("streamlit_searchbox") is None:
+            self.skipTest("当前解释器未安装 streamlit-searchbox")
+        code, out, err = self._run_bare(
+            "import installer\n"
+            "print('RESULT:', installer.check_import('streamlit_searchbox',"
+            " 'streamlit-searchbox'))\n")
+        self.assertEqual(code, 0, err[-400:])
+        self.assertIn("RESULT: None", out, f"streamlit_searchbox 应当能 import：{err[-400:]}")
+        self.assertNotIn("ScriptRunContext", out + err,
+                         "裸 import 时 streamlit 的告警漏进了控制台")
+
+    def test_import_error_is_still_reported(self):
+        """压掉的是那一条告警，不是错误：缺包照样要报出来。"""
+        code, out, err = self._run_bare(
+            "import installer\n"
+            "print('RESULT:', installer.check_import('no_such_module_xyz',"
+            " 'no-such-package'))\n")
+        self.assertEqual(code, 0, err[-400:])
+        self.assertIn("无法 import no_such_module_xyz", out)
+
+
 class TestTorchBackend(unittest.TestCase):
     """算力 → 后端映射。这是本次升级最关键的一条：cu128/cu129 已移除 Pascal。"""
 
@@ -1336,6 +1455,112 @@ class TestUtf8ConsoleGuard(unittest.TestCase):
         self.assertIn("utf-8", out.lower())
         self.assertIn("\U0001f527", out,
                       "emoji 应当原样打出来（errors='replace' 也不该吃掉它）")
+
+
+class TestAsyncioResetNoiseMuted(unittest.TestCase):
+    """关/刷新网页时 Windows asyncio 假报的那段 ConnectionResetError 必须被压掉。
+
+    2026-09-20 实测：关一次 http://localhost:8501/ 的标签页，控制台就多一段
+
+        Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+        handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+        Traceback (most recent call last):
+          File "...\\asyncio\\proactor_events.py", line 165, in _call_connection_lost
+            self._sock.shutdown(socket.SHUT_RDWR)
+        ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+
+    真身：浏览器关标签页是**直接 RST** 掉 WebSocket。Windows 的 Proactor 事件循环随后
+    做连接清理时，`_ProactorBasePipeTransport._call_connection_lost()` 仍会对这个已被
+    reset 的 socket 调 `sock.shutdown(socket.SHUT_RDWR)`（CPython 3.11
+    `Lib/asyncio/proactor_events.py:165`，那行没有 try/except）→ 抛 ConnectionResetError；
+    这个回调是 loop 自己 `call_soon` 排的，异常没人接 → `default_exception_handler` 经
+    `logging.getLogger('asyncio')` 打 ERROR。控制台里没有时间戳/前缀，是因为该 logger
+    没有 handler、root 也没有，最后落到 `logging.lastResort` 只打消息。
+    处理见 `easy_util.mute_windows_asyncio_reset_noise()`（不能用 setLevel：那是 loop
+    的日志；也不能靠 redirect：lastResort 的流才是 stderr）。
+
+    本用例不走网络，而是驱动**真的**事件循环 + **真的** default_exception_handler：
+    造一个 qualname 恰好等于 `_ProactorBasePipeTransport._call_connection_lost` 的回调，
+    让它在 loop 里抛 ConnectionResetError —— 于是 asyncio 打出的记录与线上那条逐字一致。
+    """
+
+    _SCRIPT = '''
+import asyncio
+
+
+if __FIX__:
+    from easy_util import mute_windows_asyncio_reset_noise
+
+    mute_windows_asyncio_reset_noise()
+
+
+class _ProactorBasePipeTransport:
+    """只为让 Handle 的 repr 长得和线上那条一模一样。"""
+
+    def _call_connection_lost(self, exc):
+        raise ConnectionResetError(10054, "远程主机强迫关闭了一个现有的连接。")
+
+
+class _SomethingElse:
+    def unrelated_callback(self):
+        raise ConnectionResetError(10054, "另一个回调抛的同一个错误")
+
+
+async def main():
+    loop = asyncio.get_running_loop()
+    loop.call_soon(_ProactorBasePipeTransport()._call_connection_lost, None)
+    loop.call_soon(_SomethingElse().unrelated_callback)
+    await asyncio.sleep(0.3)
+
+
+asyncio.run(main())
+'''
+
+    def _run(self, with_fix):
+        """子进程跑（只有子进程里 asyncio logger 才像应用那样"没 handler"）。"""
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        code = self._SCRIPT.replace("__FIX__", "True" if with_fix else "False")
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                              cwd=root, timeout=120)
+        return ((proc.stdout or b"").decode("utf-8", "replace"),
+                (proc.stderr or b"").decode("utf-8", "replace"))
+
+    def test_noise_is_dropped(self):
+        out, err = self._run(with_fix=True)
+        text = out + err
+        self.assertNotIn("_call_connection_lost", text,
+                         f"关网页的那段假报错又漏出来了：{text[-400:]}")
+        self.assertIn("unrelated_callback", text,
+                      "过滤器误伤了别的 asyncio 异常（应当只丢 _call_connection_lost 那条）")
+
+    def test_control_without_fix_really_prints_it(self):
+        """对照组：不装过滤器时这段确实会打到 stderr。
+
+        没有这条对照，上面那个 assertNotIn 在"过滤器根本没生效"时也会绿
+        （例如 CPython 改了 default_exception_handler 的日志格式）。
+        """
+        out, err = self._run(with_fix=False)
+        text = out + err
+        self.assertIn("_call_connection_lost", text)
+        self.assertIn("ConnectionResetError", text)
+
+    def test_entrypoints_install_the_filter(self):
+        """入口接线：`import core` 就要装好过滤器（st.py 与 batch GUI 都先 import core）。
+
+        st.py 自己也在 `eu.ensure_utf8_console()` 旁边显式调了一次；这里查的是
+        "包入口兜底"那一路 —— 少了它，批量界面（batch/utils/gui.py）关网页照样刷屏。
+        """
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.run(
+            [sys.executable, "-c",
+             "import logging, core; "
+             "print('FILTERS:', [type(f).__name__ "
+             "for f in logging.getLogger('asyncio').filters])"],
+            capture_output=True, cwd=root, timeout=300)
+        out = (proc.stdout or b"").decode("utf-8", "replace")
+        err = (proc.stderr or b"").decode("utf-8", "replace")
+        self.assertEqual(proc.returncode, 0, err[-400:])
+        self.assertIn("_DropProactorResetNoise", out, err[-400:])
 
 
 if __name__ == "__main__":

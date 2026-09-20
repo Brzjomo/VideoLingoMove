@@ -1,4 +1,4 @@
-import threading, os, sys
+import logging, threading, os, sys
 
 # 线程锁
 lock = threading.Lock()
@@ -20,6 +20,95 @@ def ensure_utf8_console():
             reconfigure(encoding='utf-8', errors='replace')
         except Exception:
             pass
+
+
+def package_version(dist_name, module=None):
+    """尽力取到某个包**实际生效**的版本号；查不到返回 None。
+
+    为什么要有它（2026-09-20 实测）：控制台那行
+    `🔧 whisperx 未知版本 | torch 2.8.0+cu128 | weights_only 垫片：已启用` 里的
+    "未知版本"不是环境坏了 —— 上游 whisperx **不定义** `whisperx.__version__`
+    （`getattr(whisperx, '__version__', …)` 拿不到），可它的发行元数据一直都在
+    （`whisperx-3.8.6.dist-info`）。所以取版本要**先看属性、再看发行元数据**，
+    两层都拿不到才认输。
+
+    Args:
+        dist_name: 发行版名字（`importlib.metadata` 用的那个，如 "whisperx"）。
+        module: 已导入的模块对象（可选）。它自己带 `__version__` 时优先用 ——
+            torch 这类包只把版本写在属性上，元数据反而可能对不上。
+
+    Returns:
+        版本字符串；拿不到返回 None（显示成什么由调用方决定）。
+    """
+    if module is not None:
+        version = getattr(module, "__version__", None)
+        if version:
+            return str(version)
+    try:
+        from importlib.metadata import version as _dist_version
+
+        return _dist_version(dist_name)
+    except Exception:
+        return None
+
+
+class _DropProactorResetNoise(logging.Filter):
+    """只丢 Windows proactor「清理一条已被对端 reset 的连接」时那一条假报错。
+
+    ⚠️ 判定必须看 `record.exc_info`，不能只看消息文本：asyncio 的
+    `default_exception_handler` 打的日志消息只有
+
+        Exception in callback <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+        handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+
+    —— `ConnectionResetError` 只出现在 exc_info 渲染出来的 traceback 里，消息里没有。
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != 'asyncio':
+            return True
+        message = record.getMessage()
+        if 'Exception in callback' not in message or '_call_connection_lost' not in message:
+            return True  # 别的 asyncio 异常照旧打印
+        exc = record.exc_info[1] if record.exc_info else None
+        return not isinstance(exc, (ConnectionResetError, ConnectionAbortedError))
+
+
+def mute_windows_asyncio_reset_noise():
+    """压掉 Windows 上「关掉网页/刷新页面」时 asyncio 假报的那段 ConnectionResetError。
+
+    现象（2026-09-20 实测：关几次 http://localhost:8501/ 的标签页就报几次）：
+
+        Exception in callback _ProactorBasePipeTransport._call_connection_lost(None)
+        handle: <Handle _ProactorBasePipeTransport._call_connection_lost(None)>
+        Traceback (most recent call last):
+          File "...\\python\\Lib\\asyncio\\proactor_events.py", line 165, in _call_connection_lost
+            self._sock.shutdown(socket.SHUT_RDWR)
+        ConnectionResetError: [WinError 10054] 远程主机强迫关闭了一个现有的连接。
+
+    真身：浏览器关标签页是**直接 RST**（而不是四次挥手）。Windows 的 Proactor 事件
+    循环随后做连接清理时，`_ProactorBasePipeTransport._call_connection_lost()` 仍会对
+    这个已经被对端 reset 的 socket 调 `sock.shutdown(socket.SHUT_RDWR)`（CPython 3.11
+    `Lib/asyncio/proactor_events.py:165`，那行外面没有 try/except）→ 抛
+    ConnectionResetError。这个回调是 loop 自己 `call_soon` 排的，异常没人接，于是走
+    asyncio 的 `default_exception_handler` → `logging.getLogger('asyncio')` 打 ERROR。
+
+    为什么控制台里既没有时间戳、也没有 "ERROR asyncio:" 前缀：Streamlit 只配置自己的
+    logger（`streamlit/logger.py` 只把 `streamlit*` / uvicorn 那几个设成 propagate=False），
+    `asyncio` logger 没有 handler 且 propagate=True，root 也没有 handler —— 最后落到
+    `logging.lastResort`，只打消息本身。
+
+    危害：**零**。连接本来就断了，这是清理期的假报错；会话照常结束、服务照常继续，
+    不影响任何一次转录/翻译。唯一的问题是"关几次网页报几次"，乍看像程序崩了。
+
+    做法：给 `asyncio` logger 挂一个 Filter，只丢「回调是 `_call_connection_lost`
+    且异常是 ConnectionResetError/ConnectionAbortedError」这一条 —— 同一个回调抛别的
+    异常、或别的回调抛 ConnectionResetError，都照旧打印。幂等，重复调用无害。
+    """
+    logger = logging.getLogger('asyncio')
+    if any(isinstance(f, _DropProactorResetNoise) for f in logger.filters):
+        return
+    logger.addFilter(_DropProactorResetNoise())
 
 
 # 时间记录

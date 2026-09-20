@@ -32,6 +32,17 @@ try:
 except Exception:  # pragma: no cover - 极端环境下不该拖垮主流程
     pass
 
+# 再关掉 Windows 上「关网页」时 asyncio 假报的那段 ConnectionResetError。
+# 同样必须早于会话建立：那段 traceback 是**服务端事件循环**打的，只要进程里装了
+# Filter 就会被拦下，而任何界面入口（st.py / batch/utils/gui.py）都会先 import core。
+# 详见 easy_util.mute_windows_asyncio_reset_noise()。
+try:
+    from easy_util import mute_windows_asyncio_reset_noise as _mute_async_reset_noise
+
+    _mute_async_reset_noise()
+except Exception:  # pragma: no cover - 极端环境下不该拖垮主流程
+    pass
+
 try:
     from runtime_libraries import setup as _setup_runtime_libraries
 

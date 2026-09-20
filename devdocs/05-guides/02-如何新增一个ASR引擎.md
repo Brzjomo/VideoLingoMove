@@ -191,7 +191,7 @@ my_asr:
 | 语言回写 | 检查 `config.yaml: whisper.detected_language` 是否被正确更新 |
 | 缓存身份 | 缓存条目在 `.cache/asr/<key>/<part>.json`。改一个引擎参数后重跑，控制台**不应**再打印 `♻️ 复用缓存分段 ...`；若仍复用，说明该参数没进 `_asr_cache_settings` |
 | 缓存单测 | `python -m unittest tests.test_transcription_cache -v`（12 例；其中 `test_engine_is_part_of_identity` / `test_volcano_params_are_part_of_identity` 正是这条契约的回归保护） |
-| 整体回归 | `python -m unittest discover -s tests -v`（**174 例**，标准库 unittest，不需 pytest；实测约 45 秒） |
+| 整体回归 | `python -m unittest discover -s tests -v`（**242 例**，标准库 unittest，不需 pytest；实测约 86 秒） |
 
 清理手段：UI 侧边栏底部的「♻️ 转录缓存」折叠区有「清空转录缓存」按钮
 （`st.py` 的 `cache_maintenance_section` → `transcription_cache.clear_cache`）。

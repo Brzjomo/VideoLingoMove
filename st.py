@@ -3,6 +3,9 @@ import os, sys, time
 import easy_util as eu
 
 eu.ensure_utf8_console()
+# 关掉/刷新网页时 Windows 的 asyncio 会假报一段 ConnectionResetError（看着像崩了，
+# 实际是清理已断连接时的假报错）。详见 easy_util.mute_windows_asyncio_reset_noise。
+eu.mute_windows_asyncio_reset_noise()
 
 from st_components.imports_and_utils import *
 from st_components.task_runner import TaskRunner, StopTask

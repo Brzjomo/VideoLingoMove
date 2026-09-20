@@ -547,7 +547,7 @@ set "PY=.venv\Scripts\python.exe"
 | `cost.txt` | 跑完字幕阶段后 `Get-Content output\cost.txt` | 有「消耗时长 / prompt tokens / completion tokens / 共消耗tokens / 预计花费」五行 |
 | 归档 | 点「归档到'历史记录'」后 `Get-ChildItem history` | `history/<video_name>/{,log,gpt_log}` 出现，`output/` 被清空（页面回到下载/上传 UI） |
 | zip 命名 | `python -c "import sys;sys.path.insert(0,'.');from st_components.imports_and_utils import subtitle_zip_name as f;print([f(n,'v') for n in ('src.srt','trans.srt','src_trans.srt','trans_src.srt','dub.srt')])"` | `['v_src.srt', 'v_trans.srt', 'v_src_trans.srt', 'v_trans_src.srt', 'dub.srt']`（完整 stem 匹配，无子串误判） |
-| 回归测试 | `python -m unittest discover -s tests -v` | **174 例通过**（9 个文件；多数不依赖 torch/spacy，见 `05-guides/07-症状速查.md`） |
+| 回归测试 | `python -m unittest discover -s tests -v` | **242 例通过**（12 个文件；多数不依赖 torch/spacy，见 `05-guides/07-症状速查.md`） |
 
 ## 十、相关文档
 

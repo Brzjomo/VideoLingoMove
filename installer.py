@@ -45,8 +45,10 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
+import logging
 import os
 import platform
 import re
@@ -199,6 +201,66 @@ REQUIRED_IMPORTS = {
 # 因为它依赖 FFmpeg 共享库，是 Windows 上最容易失败的一个。
 SMOKE_IMPORTS_CORE = ("whisperx", "ctranslate2", "faster_whisper", "pyannote.audio")
 SMOKE_IMPORTS_OPTIONAL = ("demucs.api", "torchcodec.decoders")
+
+#: 裸 import（`python xxx.py`，没有 Streamlit 会话）时，streamlit 会往 stderr 打一行
+#: 「时间戳 + Thread 'MainThread': missing ScriptRunContext! This warning can be
+#: ignored when running in bare mode.」。production 下 `logger.messageFormat` 就是
+#: `"%(asctime)s %(message)s"`（见 streamlit/config.py 的 logger.messageFormat 默认
+#: 值 + streamlit/logger.py 的 `default_msec_format = "%s.%03d"`），所以控制台上看不到
+#: level 与 logger 名，只有这一句，看着像报错。
+#:
+#: 触发链（2026-09-20 实测，栈取自 logging 层）：
+#:   health_check() 裸 import `streamlit_searchbox`
+#:   → streamlit_searchbox/__init__.py 在**模块级**调 components.declare_component()
+#:   → streamlit/components/v1/component_registry.py 里 get_script_run_ctx()
+#:     （此处没有 `suppress_warning=True`）
+#:   → 裸进程没有 ScriptRunContext → WARNING。
+#: 危害为零：declare_component() 里是 `if ctx is not None: register_component(...)`，
+#: 没上下文就只是不注册。真正 `streamlit run` 起来时 import 发生在脚本线程内
+#: （st_components/sidebar_setting.py 的 `from streamlit_searchbox import st_searchbox`），
+#: 上下文存在 —— logs/ 里的运行日志实测 0 条。所以这行只可能出现在体检/安装/单测
+#: 这类裸进程里，纯噪声，压掉。
+BARE_MODE_WARNING_LOGGER = "streamlit.runtime.scriptrunner_utils.script_run_context"
+
+
+class _DropBareModeWarning(logging.Filter):
+    """只丢掉「裸模式缺 ScriptRunContext」那一条，别的日志照旧放行。"""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "missing ScriptRunContext" not in record.getMessage()
+
+
+@contextlib.contextmanager
+def mute_bare_mode_warning():
+    """在裸 import 期间压掉上面那行告警。
+
+    ⚠️ 不能用 `logger.setLevel()`：streamlit 首次解析 config 时会走
+    `streamlit/__init__.py::_update_logger` → `logger.set_log_level()`，把 `_loggers`
+    里每个 logger 的级别**重置**回配置值（实测 `import streamlit_searchbox` 内部读
+    `server.customComponentBaseUrlPath` 就会解析 config，setLevel 刚设完就被刷回去）；
+    Filter 不会被重置。
+    """
+    logger = logging.getLogger(BARE_MODE_WARNING_LOGGER)
+    filt = _DropBareModeWarning()
+    logger.addFilter(filt)
+    try:
+        yield
+    finally:
+        logger.removeFilter(filt)
+
+
+def check_import(module, pip_name):
+    """体检单个包：能 import 返回 None，否则返回错误文案。
+
+    错误文案与原来的 `health_check()` 内联版本逐字一致；差别只是 import 期间
+    压掉 streamlit 的裸模式告警（见上）。
+    """
+    try:
+        with mute_bare_mode_warning():
+            __import__(module)
+    except Exception as e:
+        return f"无法 import {module}（pip: {pip_name}）：{e}"
+    return None
 
 
 # ---------------------------------------------------------------- 输出
@@ -1916,10 +1978,9 @@ def health_check(quiet=False, smoke=False):
              f"（Windows 上 av 17/18 只发 cp310/cp311 轮子）", style="bright_black")
 
     for module, pip_name in REQUIRED_IMPORTS.items():
-        try:
-            __import__(module)
-        except Exception as e:
-            errors.append(f"无法 import {module}（pip: {pip_name}）：{e}")
+        error = check_import(module, pip_name)
+        if error:
+            errors.append(error)
 
     # torch / torchaudio / torchvision 必须同版本同构建来源，否则运行期会报符号错
     try:

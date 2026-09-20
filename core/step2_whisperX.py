@@ -51,6 +51,7 @@ import numpy as np
 
 from core.config_utils import load_key, load_key_or
 import easy_util as eu
+from core import align_model as align_model_utils
 from core.all_whisper_methods import transcription_cache
 from core.all_whisper_methods.demucs_vl import demucs_main, RAW_AUDIO_FILE, VOCAL_AUDIO_FILE
 from core.all_whisper_methods.whisperX_utils import process_transcription, convert_video_to_audio, split_audio, save_results, save_language, compress_audio, compute_normalization_gain, CLEANED_CHUNKS_EXCEL_PATH, RAW_AUDIO_WAV_FILE
@@ -71,7 +72,12 @@ ENHANCED_VOCAL_PATH = "output/audio/enhanced_vocals.mp3"
 
 # 把实际生效的 whisperx 版本打进日志：升级到 3.8 之后，出问题时第一件要
 # 确认的就是"跑的到底是哪一版"（旧环境的 3.2 与 3.8 的 API/行为都不同）。
-rprint(f"[cyan]🔧 whisperx {getattr(whisperx, '__version__', '未知版本')} | "
+#
+# ⚠️ 别写 `getattr(whisperx, '__version__', '未知版本')`：上游 whisperx **不定义**
+# 这个属性（2026-09-20 实测 3.8.6：属性缺失），那样写这行日志永远显示"未知版本"，
+# 而版本其实一直在发行元数据里（`whisperx-3.8.6.dist-info`）。
+# easy_util.package_version 先看属性、再看 importlib.metadata，见其 docstring。
+rprint(f"[cyan]🔧 whisperx {eu.package_version('whisperx', whisperx) or '未知版本'} | "
        f"torch {torch.__version__} | "
        f"weights_only 垫片：{'已启用' if getattr(torch.load, '_videolingo_weights_only_shim', False) else '未启用'}[/cyan]")
 
@@ -291,9 +297,16 @@ def transcribe_audio_with_whisper(audio_file: str, start: float, end: float) -> 
         # 两者都传项目内路径，才不会下到 C:\Users\<你>\.cache\ 里。
         # （运行期 TORCH_HOME / HF_HOME 已由 runtime_libraries.setup() 指到项目内，
         #   这里再显式传一次，双重保险。）
-        model_a, metadata = whisperx.load_align_model(
-            language_code=result["language"], device=device,
-            model_dir=MODEL_DIR)
+        #
+        # 用 core.align_model 而不是直接调 whisperx：日语/中文/韩语等语种的对齐模型
+        # 要联网从 HuggingFace 下，上游遇到网络问题只会抛一句误导性的
+        # "could not be found in huggingface"（还把 transformers 吞掉网络错误的
+        # "make sure you don't have a local directory with the same name" 一起带上），
+        # 而且只试一个端点就放弃。core.align_model 会：本地目录优先 → 官方/hf-mirror
+        # 逐个试 → 全失败时给出"去哪下、要哪些文件、放到哪个目录"的明确提示。
+        # 见 devdocs/05-guides/05-常见故障排查.md「对齐模型」一节。
+        model_a, metadata = align_model_utils.load_align_model(
+            language_code=result["language"], device=device, model_dir=MODEL_DIR)
         result = whisperx.align(result["segments"], model_a, metadata, audio_tensor, device, return_char_alignments=False)
 
         # Free GPU resources again
