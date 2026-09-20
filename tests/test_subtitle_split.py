@@ -191,6 +191,115 @@ class TestTranslationPartsGuard(unittest.TestCase):
         self.assertFalse(ss.translation_parts_ok(["前半", "   "], "前半"))
 
 
+class TestAlignPartsRewriteGuard(unittest.TestCase):
+    """B 方案（2026-09-20 用户批准）：允许在切点**轻改写**，但仍拦住重复/漏译/长度暴涨/碎片。
+
+    用户原话："就拿'作为自由原型师约6年，一直从事手办造型工作。'为例，翻译的没错啊，只是不够好"，
+    同时要求"按你这方案，重复这个问题应该也不会再发了"。因此这里钉住两件事：
+      * 轻改写必须能过（补/删连接词、补足助词，让一行单独读起来成句）；
+      * 重复照样拦：原文已有的说法在拼接里变多（历史事故"同时"），以及**原文没有、拼接里却出现
+        两次**的说法（`同时同时也…`，旧规则按原文计数会漏掉它）。
+    """
+
+    SENT = "作为自由原型师约6年，一直从事手办造型工作。"
+
+    def test_verbatim_split_passes(self):
+        ok, reason = ss.check_align_parts(["作为自由原型师约6年", "一直从事手办造型工作"], self.SENT)
+        self.assertTrue(ok, reason)
+
+    def test_light_rewrite_is_allowed(self):
+        """补"已经"、删"一直" —— 正是用户想要的顺句，不该被拦。"""
+        ok, reason = ss.check_align_parts(["作为自由原型师已经约6年", "从事手办造型工作"], self.SENT)
+        self.assertTrue(ok, reason)
+
+    def test_connective_added_at_the_join_is_allowed(self):
+        original = "能制作手办和车库套件原型的软件有好几款"
+        ok, reason = ss.check_align_parts(["能制作手办和车库套件原型的软件", "目前有好几款"], original)
+        self.assertTrue(ok, reason)
+
+    def test_repeated_connective_is_still_rejected(self):
+        """历史事故：原文 1 个"同时"、拼接 2 个 → 必须拦，且原因里点名那个词。"""
+        original = "重视能将其魅力发挥到何种程度，同时也看重它作为立体作品本身的魅力"
+        parts = ["重视能将其魅力发挥到何种程度 同时", "同时也看重它作为立体作品本身的魅力"]
+        ok, reason = ss.check_align_parts(parts, original)
+        self.assertFalse(ok)
+        self.assertIn("同时", reason)
+
+    def test_new_phrase_repeated_twice_is_rejected(self):
+        """原文写的是"同样"、改写后冒出两个"同时" —— 按原文计数抓不到，必须靠"新说法出现两次"。"""
+        original = "他同样很重视手办作品本身的魅力，这一点一直没变过"
+        parts = ["他同样很重视手办作品本身的魅力", "同时同时这一点一直没变过"]
+        ok, reason = ss.check_align_parts(parts, original)
+        self.assertFalse(ok)
+        self.assertIn("同时", reason)
+
+    def test_original_own_repetition_is_not_punished(self):
+        """原文本身就重复的词（"东京…东京…"）不算重复，别误伤。"""
+        original = "我们去了东京，东京的街道非常热闹，人也很多"
+        parts = ["我们去了东京", "东京街道非常热闹，人也很多"]
+        ok, reason = ss.check_align_parts(parts, original)
+        self.assertTrue(ok, reason)
+
+    def test_gross_omission_is_rejected(self):
+        original = "能制作手办和车库套件原型的软件有好几款"
+        parts = ["这种软件大家都在用", "评价一直都挺不错"]
+        ok, reason = ss.check_align_parts(parts, original)
+        self.assertFalse(ok)
+        self.assertIn("content", reason)
+
+    def test_length_inflation_is_rejected(self):
+        original = "软件有好几款"
+        parts = ["能制作手办和 GK 原型的软件", "软件有好几款而且都非常好用"]
+        ok, reason = ss.check_align_parts(parts, original)
+        self.assertFalse(ok)
+        self.assertIn("length", reason)
+
+    def test_isolated_fragment_is_rejected(self):
+        ok, reason = ss.check_align_parts(["作为自由原型师约6年", "的"], self.SENT)
+        self.assertFalse(ok)
+        self.assertIn("fragment", reason)
+
+    def test_strict_mode_still_forbids_any_rewrite(self):
+        ok, reason = ss.check_align_parts(["作为自由原型师已经约6年", "从事手办造型工作"],
+                                          self.SENT, allow_rewrite=False)
+        self.assertFalse(ok)
+        self.assertIn("exactly", reason)
+
+    def test_latin_duplicated_word_is_rejected(self):
+        original = "The software that can make figures and garage kits is quite common"
+        parts = ["The software that can make figures and garage kits", "also also is quite common"]
+        ok, reason = ss.check_align_parts(parts, original)
+        self.assertFalse(ok)
+        self.assertIn("also", reason)
+
+    def test_latin_light_rewrite_is_allowed(self):
+        original = "The software that can make figures and garage kits is quite common"
+        parts = ["The software that can make figures and garage kits", "in fact is quite common"]
+        ok, reason = ss.check_align_parts(parts, original)
+        self.assertTrue(ok, reason)
+
+
+class TestAlignStats(unittest.TestCase):
+    """跑完打印的"拦下/回退"计数（判断 B 方案值不值的依据，用户 2026-09-20 要求）。"""
+
+    def test_summary_is_silent_when_nothing_happened(self):
+        s5.reset_align_stats()
+        self.assertEqual(s5.align_stats_summary(), "")
+
+    def test_summary_reports_rewrite_and_fallback(self):
+        s5.reset_align_stats()
+        s5._bump_align_stat("rows")
+        s5._bump_align_stat("rewritten")
+        s5._bump_align_stat("rejected", "'同时' appears 2 times")
+        s5._bump_align_stat("fallback", "第 3 行 Exception")
+        text = s5.align_stats_summary()
+        self.assertIn("轻改写 1 行", text)
+        self.assertIn("拦下 1 次", text)
+        self.assertIn("退回机械切分 1 行", text)
+        self.assertIn("同时", text)
+        s5.reset_align_stats()
+
+
 class TestAlignFallback(unittest.TestCase):
     """LLM 对齐不可用时（校验连续失败/网络失败）退回机械等分，绝不写出重复/碎片。"""
 

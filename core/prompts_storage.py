@@ -253,10 +253,20 @@ We have {src_language} and {target_language} original subtitles for a Netflix pr
 ### Task Description
 1. Analyze the word order and structural correspondence between {src_language} and {target_language} subtitles
 2. Split the {target_language} subtitles according to the pre-processed {src_language} split version
-3. **DO NOT rewrite, add or drop any word.** Concatenating all `target_part_*` in order MUST reproduce
-   the {target_language} Original **character for character** (punctuation aside). In particular never
-   duplicate a connective at the boundary (an extra "同时"/"also"/"そして" in part 2 because part 1
-   already ended with it) — the audience reads both cues in a row, so partial sentences are fine.
+3. **Light rewriting is allowed at the join, nothing more.** A literal split sometimes reads badly
+   as a standalone cue, so you may add or drop a connective (也/还/而/同时, "and"/"but"/"also"), add
+   the auxiliary or particle the sentence needs (已经/了/着), or move one or two words across the
+   boundary — so that **each part reads as a natural cue on its own**. Everything else is forbidden:
+   * never add or drop information, never summarise, never explain;
+   * never repeat what the neighbouring part already says — above all, do not let both parts carry
+     the same connective (an extra "同时"/"also"/"そして" in part 2 because part 1 already ended with
+     it). The audience reads both cues in a row, so partial sentences are fine;
+   * keep the concatenated length close to the {target_language} Original (within about ±20%);
+   * a purely literal, verbatim split is always valid **when each part already reads naturally** —
+     plain sentences should usually be split literally. But never leave a cue that sounds clipped,
+     ungrammatical or like a dangling half-sentence just because a literal split was easier: that
+     is exactly the case where a minimal rewrite at the join is wanted. The audience sees one cue
+     at a time, so a part that only makes sense with its neighbour is a defect.
 4. Never leave empty lines.
 5. **NEVER cut inside a noun phrase — above all never between a modifier (relative clause / adjective)
    and the head noun it modifies**: e.g. Japanese `…作ることができる | ソフト`, Chinese `…的数字 | 软件`,
@@ -265,7 +275,9 @@ We have {src_language} and {target_language} original subtitles for a Netflix pr
    acceptable, a broken phrase is not.
 6. Keep each part reasonably sized: at least ~3 words (3–4 characters in CJK). Never leave a single
    short word alone in a cue unless the corresponding source part is that short too.
-7. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
+7. Every part must be grammatical on its own; a part that starts with a floating particle or
+   connective left over from the previous part is wrong even if the concatenation is correct.
+8. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
 
 ### Subtitle Data
 <subtitles>

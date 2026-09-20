@@ -1,5 +1,6 @@
 import sys, os
 import math
+import threading
 import pandas as pd
 from typing import List, Optional, Tuple
 import concurrent.futures
@@ -94,10 +95,60 @@ def _align_validation_enabled() -> bool:
         return True
 
 
+def _align_rewrite_allowed() -> bool:
+    """是否允许对齐时**轻改写**（`subtitle.align_allow_rewrite`，默认开）。
+
+    开：模型可以在切点处补/删连接词，让每一行单独读起来通顺，护栏见
+    `subtitle_split.check_align_parts`（拦重复、漏译、长度暴涨、孤立碎片）。
+    关：退回"拼接必须逐字等于原译文"的严格模式（2026-09-20 之前的行为）。
+    """
+    try:
+        return bool(load_key("subtitle.align_allow_rewrite"))
+    except Exception:
+        return True
+
+
+#: 对齐统计：跑完汇总打印，用来判断"允许轻改写"的真实拦下率（用户 2026-09-20 批准的 B 方案）。
+#: 多线程（max_workers 个 process 并发）→ 必须加锁。
+_ALIGN_STATS = {"rows": 0, "rewritten": 0, "rejected": 0, "fallback": 0}
+_ALIGN_STATS_LOCK = threading.Lock()
+_ALIGN_STATS_REASONS: List[str] = []
+
+
+def reset_align_stats() -> None:
+    with _ALIGN_STATS_LOCK:
+        for key in _ALIGN_STATS:
+            _ALIGN_STATS[key] = 0
+        _ALIGN_STATS_REASONS.clear()
+
+
+def _bump_align_stat(key: str, reason: str = "") -> None:
+    with _ALIGN_STATS_LOCK:
+        _ALIGN_STATS[key] = _ALIGN_STATS.get(key, 0) + 1
+        if reason and len(_ALIGN_STATS_REASONS) < 5:
+            _ALIGN_STATS_REASONS.append(reason)
+
+
+def align_stats_summary() -> str:
+    """一行汇总；没有改写、没拦下、没回退时返回空串（正常片子不该多出噪音）。"""
+    with _ALIGN_STATS_LOCK:
+        stats = dict(_ALIGN_STATS)
+        reasons = list(_ALIGN_STATS_REASONS)
+    if not (stats["rewritten"] or stats["rejected"] or stats["fallback"]):
+        return ""
+    text = (f"📊 对齐统计：LLM 对齐 {stats['rows']} 行，其中轻改写 {stats['rewritten']} 行 / "
+            f"校验拦下 {stats['rejected']} 次（带原因重试）/ 退回机械切分 {stats['fallback']} 行")
+    if reasons:
+        text += "\n   原因示例：" + "；".join(reasons[:3])
+    return text
+
+
 def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], List[str], str]:
     align_prompt = get_align_prompt(src_sub, tr_sub, src_part)
     num_parts = len([part for part in str(src_part).split('\n') if part.strip()])
     validate = _align_validation_enabled()
+    allow_rewrite = _align_rewrite_allowed()
+    _bump_align_stat("rows")
 
     def valid_align(response_data):
         if 'align' not in response_data:
@@ -106,19 +157,19 @@ def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], Lis
         if len(align) < 2:
             return {"status": "error", "message": "Align does not contain more than 1 part as expected!"}
         if validate:
-            # ① 段数必须与源文一致；② 每段非空、不许有孤立碎片；
-            # ③ **拼接必须逐字等于整句译文** —— 重复连接词（"同时/同时也"）、漏词、改写都在这里拦下。
-            # 校验不过 → ask_gpt 会自动重试并把失败原因回注给模型（同一 prompt，命中缓存不重复付费）。
+            # ① 段数必须与源文一致；② 护栏交给 subtitle_split.check_align_parts：
+            #    严格模式要求拼接逐字等于整句译文；轻改写模式允许在切点顺句，但仍拦住
+            #    重复（"同时同时"/原文已有的说法变多）、漏译、长度暴涨、孤立碎片。
+            # 校验不过 → ask_gpt 会把这段 message 回注给模型重试（同一 prompt，命中缓存不重复付费）。
             parts = [str(item.get(f'target_part_{i+1}', '')) for i, item in enumerate(align)]
             if len(align) != num_parts:
                 return {"status": "error",
                         "message": f"expected exactly {num_parts} parts, got {len(align)}"}
-            if not subtitle_split.translation_parts_ok(parts, tr_sub, min_width=_MIN_PART_WIDTH):
-                return {"status": "error",
-                        "message": ("concatenating target_part_* must reproduce the original "
-                                    "translation exactly: no added/duplicated/dropped words "
-                                    "(e.g. don't repeat a connective like 同时/also), no empty part, "
-                                    "and no isolated 1-word fragment. Re-split without rewriting.")}
+            ok, reason = subtitle_split.check_align_parts(
+                parts, tr_sub, min_width=_MIN_PART_WIDTH, allow_rewrite=allow_rewrite)
+            if not ok:
+                _bump_align_stat("rejected", reason)
+                return {"status": "error", "message": reason}
         return {"status": "success", "message": "Align completed"}
 
     parsed = ask_gpt(align_prompt, response_json=True, valid_def=valid_align, log_title='align_subs')
@@ -130,8 +181,12 @@ def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], Lis
     language = get_source_language()
     joiner = get_joiner(language)
     tr_remerged = joiner.join(tr_parts)
+    rewritten = not subtitle_split.normalized_concat_matches(tr_parts, tr_sub)
+    if rewritten:
+        _bump_align_stat("rewritten")
     
-    table = Table(title="🔗 Aligned parts")
+    table = Table(title="🔗 Aligned parts（含轻改写，已过重复/漏译校验）" if rewritten
+                  else "🔗 Aligned parts")
     table.add_column("Language", style="cyan")
     table.add_column("Parts", style="magenta")
     table.add_row("SRC_LANG", "\n".join(src_parts))
@@ -219,6 +274,7 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str],
                     if tr_parts is None:
                         raise
                     tr_remerged = tr_lines[i]
+                    _bump_align_stat("fallback", f"第 {i} 行 {type(exc).__name__}")
                     console.print(f"[yellow]⚠️ 第 {i} 行 LLM 对齐不可用（{type(exc).__name__}），"
                                   f"已退回机械等分切分[/yellow]")
         except Exception as e:
@@ -295,6 +351,7 @@ def split_for_sub_main():
 
     limits = resolve_limits()
     console.print(f"[cyan]📐 字幕长度档位：[/cyan]{limits.label}")
+    reset_align_stats()
 
     MAX_SPLIT_ATTEMPTS = 3
     for attempt in range(MAX_SPLIT_ATTEMPTS):  # 固定的 3 轮：每轮只把超长行再切一次
@@ -319,6 +376,11 @@ def split_for_sub_main():
     # 极短字幕并入相邻条（"哦/是的/原来如此"一闪而过，看不清）
     stamps = df['timestamp'].tolist() if 'timestamp' in df.columns else None
     split_src, split_trans = merge_short_cues_in_place(split_src, split_trans, stamps, limits)
+
+    # 对齐质量自检：拦下/回退的真实数量，用来判断"允许轻改写"值不值（无异常则不打印）
+    summary = align_stats_summary()
+    if summary:
+        console.print(f"[cyan]{summary}[/cyan]")
 
     pd.DataFrame({'Source': split_src, 'Translation': split_trans}).to_excel(OUTPUT_SPLIT_FILE, index=False)
     # pd.DataFrame({'Source': src, 'Translation': remerged}).to_excel(OUTPUT_REMERGED_FILE, index=False)
