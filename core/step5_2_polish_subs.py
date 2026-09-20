@@ -69,6 +69,16 @@ def _chunks(items: Sequence, size: int) -> List[Sequence]:
     return [items[i:i + size] for i in range(0, len(items), size)]
 
 
+def _log_title(base: str, extra_body: Optional[dict]) -> str:
+    """按"思考开关"给缓存分区改名：开思考 `polish_subs`，关思考 `polish_subs_nothink`。
+
+    为什么要改名：`ask_gpt` 的缓存键只看 `(model, prompt)`（分区内），`extra_body` 既不进键也不进
+    日志。不改名的话，用户切换"允许模型思考"后会**命中上一次档位的缓存**，看起来"开关没反应"。
+    改名让两档各存各的缓存，切换立即生效（代价是两档各花一次钱）。
+    """
+    return base if extra_body is None else f"{base}_nothink"
+
+
 def _parse_polish_response(data, expected_ids: Sequence[int]) -> Optional[Dict[int, Tuple[str, bool]]]:
     """把模型返回解析成 `{id: (polished, changed)}`；结构不对返回 None（该批放弃润色）。"""
     if not isinstance(data, dict) or not isinstance(data.get('lines'), list):
@@ -87,8 +97,14 @@ def _parse_polish_response(data, expected_ids: Sequence[int]) -> Optional[Dict[i
     return parsed if len(parsed) == len(expected_ids) else None
 
 
-def _audit_info_changes(pairs: Sequence[Tuple[int, str, str]], stats: Dict[str, int]) -> set:
-    """批量审校：返回"被判定为增删/篡改了信息"的 id 集合（异常时返回空集 = 全部放行）。"""
+def _audit_info_changes(pairs: Sequence[Tuple[int, str, str]], stats: Dict[str, int],
+                        extra_body: Optional[dict] = None) -> set:
+    """批量审校：返回"被判定为增删/篡改了信息"的 id 集合（异常时返回空集 = 全部放行）。
+
+    `extra_body` 与润色调用共用同一个"思考开关"：用户关掉思考时，审校也一起不思考 ——
+    否则会出现"我明明关了思考，怎么还在花思考 token"的困惑（2026-09-21 用户要求这个开关时
+    的语义就是"控制这一步的思考"）。安全网仍在：机械护栏 + 关思考时自动收紧的覆盖率门槛。
+    """
     if not pairs:
         return set()
     prompt = get_polish_audit_prompt(list(pairs))
@@ -99,7 +115,8 @@ def _audit_info_changes(pairs: Sequence[Tuple[int, str, str]], stats: Dict[str, 
         return {"status": "success", "message": "audit ok"}
 
     try:
-        data = ask_gpt(prompt, response_json=True, valid_def=valid_audit, log_title='polish_audit')
+        data = ask_gpt(prompt, response_json=True, valid_def=valid_audit,
+                       log_title=_log_title('polish_audit', extra_body), extra_body=extra_body)
     except Exception as exc:  # noqa: BLE001 - 审校不可用不能变成"整批丢词"
         console.print(f"[yellow]⚠️ 润色审校不可用（{type(exc).__name__}），本批改动按原样保留[/yellow]")
         stats['audit_failed'] += 1
@@ -174,7 +191,7 @@ def polish_lines(sources: Sequence[str], translations: Sequence[str],
                 return {"status": "success", "message": "polish ok"}
 
             data = ask_gpt(prompt, response_json=True, valid_def=valid_polish,
-                           log_title='polish_subs', extra_body=extra_body)
+                           log_title=_log_title('polish_subs', extra_body), extra_body=extra_body)
             parsed = _parse_polish_response(data, tuple(i for i, _, _ in rows))
             if parsed is None:
                 raise ValueError("响应行数与输入的 id 对不上")
@@ -195,15 +212,18 @@ def polish_lines(sources: Sequence[str], translations: Sequence[str],
                     reject_reasons.append(f"#{row_id} {reason}")
                 continue
             result[row_id] = polished
+            # 只有"归一化后真的不同"的行才需要审校：只改标点（如去掉行尾句号）不算信息改动，
+            # 送审只会白花钱。最终"改动行数"另行从 result 与原列对比得出（见函数末尾）。
             if changed or subtitle_split.normalize_text(polished) != subtitle_split.normalize_text(original):
-                stats['changed'] += 1
                 changed_pairs.append((row_id, original, polished))
 
-        for row_id in _audit_info_changes(changed_pairs, stats):
+        for row_id in _audit_info_changes(changed_pairs, stats, extra_body):
             result[row_id] = current[row_id]
-            stats['changed'] -= 1
             stats['reverted'] = stats.get('reverted', 0) + 1
 
+    # "改动行数"以**最终文本**为准（用户看到的差异），而不是模型自报的 changed 标记 ——
+    # 否则"只改了标点但模型说没改"的行会被漏计，统计行与肉眼所见的差异对不上。
+    stats['changed'] = sum(1 for before, after in zip(current, result) if str(before) != str(after))
     if reject_reasons:
         stats['reasons'] = reject_reasons  # type: ignore[assignment]
     return result, stats

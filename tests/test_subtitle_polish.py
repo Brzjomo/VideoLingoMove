@@ -131,6 +131,57 @@ class TestPolishThinkingAndScopeSwitches(unittest.TestCase):
         self.assertFalse(ss.needs_polish_long_line("由ALTER公司以成品手办形式发售"))  # 够长但无逗号
         self.assertTrue(ss.needs_polish_long_line("大学时我主修雕塑，大三开始制作GK套件，"))
 
+    def test_audit_follows_the_thinking_switch_and_uses_its_own_cache_partition(self):
+        """审校也要跟随思考开关（否则"我关了思考怎么还在花思考 token"），且两档缓存分区不同。"""
+        calls = []
+
+        def fake_ask(prompt, **kwargs):
+            calls.append(kwargs)
+            if kwargs.get('log_title', '').startswith('polish_audit'):
+                return {'audit': [{'id': 0, 'info_changed': False, 'reason': ''}]}
+            return {'lines': [{'id': 0, 'polished': '作为自由原型师，约6年', 'changed': True}]}
+
+        with mock.patch.object(p5, "get_polish_prompt", lambda *a, **k: "P"), \
+                mock.patch.object(p5, "get_polish_audit_prompt", lambda *a, **k: "A"), \
+                mock.patch.object(p5, "ask_gpt", side_effect=fake_ask), \
+                mock.patch.object(p5.eu, "check_cancel", lambda *a, **k: None):
+            p5.polish_lines(["src"], ["作为自由原型师约6年"], use_thinking=False)
+
+        self.assertEqual(len(calls), 2, "一次润色 + 一次审校")
+        polish_call, audit_call = calls
+        self.assertEqual(polish_call['log_title'], 'polish_subs_nothink')
+        self.assertEqual(audit_call['log_title'], 'polish_audit_nothink')
+        self.assertEqual(polish_call['extra_body'], {"thinking": {"type": "disabled"}})
+        self.assertEqual(audit_call['extra_body'], {"thinking": {"type": "disabled"}})
+
+    def test_thinking_on_uses_the_plain_cache_partition(self):
+        calls = []
+
+        def fake_ask(prompt, **kwargs):
+            calls.append(kwargs)
+            return {'lines': [{'id': 0, 'polished': '作为自由原型师，约6年', 'changed': True}]}
+
+        with mock.patch.object(p5, "get_polish_prompt", lambda *a, **k: "P"), \
+                mock.patch.object(p5, "get_polish_audit_prompt", lambda *a, **k: "A"), \
+                mock.patch.object(p5, "ask_gpt", side_effect=fake_ask), \
+                mock.patch.object(p5.eu, "check_cancel", lambda *a, **k: None):
+            p5.polish_lines(["src"], ["作为自由原型师约6年"], use_thinking=True)
+        self.assertEqual(calls[0]['log_title'], 'polish_subs')
+        self.assertIsNone(calls[0]['extra_body'])
+
+    def test_changed_count_reflects_the_final_text(self):
+        """改动行数以最终文本为准：模型自报 changed=false 但只改了标点的行也要算进去。"""
+        response = {'lines': [{'id': 0, 'polished': '作为自由原型师约6年。', 'changed': False},
+                              {'id': 1, 'polished': '我是原型师', 'changed': True}]}
+        with mock.patch.object(p5, "get_polish_prompt", lambda *a, **k: "P"), \
+                mock.patch.object(p5, "get_polish_audit_prompt", lambda *a, **k: "A"), \
+                mock.patch.object(p5, "ask_gpt", return_value=response), \
+                mock.patch.object(p5, "_audit_info_changes", return_value=set()), \
+                mock.patch.object(p5.eu, "check_cancel", lambda *a, **k: None):
+            polished, stats = p5.polish_lines(["s0", "s1"], ["作为自由原型师约6年", "我是原型师"])
+        self.assertEqual(polished, ["作为自由原型师约6年。", "我是原型师"])
+        self.assertEqual(stats['changed'], 1, "第 0 行只是加了句号：模型说没改，但文本确实变了")
+
     def test_thinking_off_passes_disabled_thinking_to_the_api(self):
         """关思考必须真的把 `thinking: disabled` 传给 SDK，否则用户以为省了其实没省。"""
         captured = {}
