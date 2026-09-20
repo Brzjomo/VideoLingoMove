@@ -10,6 +10,7 @@ from core.step3_2_splitbymeaning import split_sentence
 from core.ask_gpt import ask_gpt
 from core.prompts_storage import get_align_prompt
 from core.config_utils import load_key, get_joiner, get_source_language, use_llm_sentence_split
+from core import config_utils
 from core import subtitle_limits
 from core import subtitle_split
 from core.subtitle_limits import resolve_limits
@@ -98,14 +99,13 @@ def _align_validation_enabled() -> bool:
 def _align_rewrite_allowed() -> bool:
     """是否允许对齐时**轻改写**（`subtitle.align_allow_rewrite`，默认开）。
 
-    开：模型可以在切点处补/删连接词，让每一行单独读起来通顺，护栏见
-    `subtitle_split.check_align_parts`（拦重复、漏译、长度暴涨、孤立碎片）。
-    关：退回"拼接必须逐字等于原译文"的严格模式（2026-09-20 之前的行为）。
+    开：模型可以在切点处移动边界/虚词、补一个虚词，让两条字幕各自不悬空，护栏见
+    `subtitle_split.check_align_parts`（拦重复、漏译、长度暴涨、孤立碎片、悬空开头）。
+    关：提示词换成严格模式（`core/prompts_storage._ALIGN_RULE3_STRICT`，一个字都不许动），
+    校验也退回"拼接必须逐字等于原译文"。两处共用 `config_utils.align_allow_rewrite()`，
+    避免"开关只切换校验、提示词还在允许改写"造成的无谓重试。
     """
-    try:
-        return bool(load_key("subtitle.align_allow_rewrite"))
-    except Exception:
-        return True
+    return config_utils.align_allow_rewrite()
 
 
 #: 对齐统计：跑完汇总打印，用来判断"允许轻改写"的真实拦下率（用户 2026-09-20 批准的 B 方案）。

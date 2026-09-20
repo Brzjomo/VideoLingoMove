@@ -1,6 +1,6 @@
 import os,sys,json
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from core.config_utils import load_key, get_source_language
+from core.config_utils import load_key, get_source_language, align_allow_rewrite
 
 ## ================================================================
 # @ step4_splitbymeaning.py
@@ -237,6 +237,39 @@ Please use a two-step thinking process to handle the text line by line:
 
 ## ================================================================
 # @ step6_splitforsub.py
+#: 对齐提示词第 3 条的两种版本（由 `subtitle.align_allow_rewrite` 选择）。
+#: 关键区别只在"允许改什么"：轻改写版允许**移动边界/移动虚词**，严格版一个字都不许动。
+#: 两版都不允许"把裸从句补成完整句" —— 用户 2026-09-20 指出："字幕往往几句连起来看才是
+#: 完整的句子"，要求每行自足会诱发跨行语义重复与凭空增补，所以第 3 条只约束**衔接是否悬空**。
+_ALIGN_RULE3_LIGHT = """**You may only fix how the two cues attach to each other — never complete a cue.**
+   A cue is one breath of a sentence: the audience reads part 1 and part 2 in a row, so a bare clause
+   as a cue is normal and correct (`…作为自由原型师约6年，` followed by `一直从事手办造型工作。` is a
+   good split) — do NOT "improve" it by adding a subject, object or verb. What is wrong is a cue that
+   dangles:
+   * a part must never **start** with a token that depends on the previous part: a floating particle
+     (て/で/に/を/は/が/の), a stranded connective (也/而/但/却/就/还/又/并且/而且/然后), or a bare
+     "and/but/or/so/which/that/who";
+   * a part must never **end** in the middle of a phrase (modifier | head noun, preposition | object,
+     a dangling 的/の).
+   Fix those two cases by **moving the boundary** — or by moving one function word from one side to the
+   other. Beyond that you may only: drop a connective that would otherwise be stranded at a cue edge,
+   and add at most one **function word / auxiliary** (也/已经/了/着, "also"/"already") when the cue is
+   unidiomatic without it. You may NOT add content: no subject, object, verb, tense meaning,
+   explanation or summary that the {target_language} Original does not have — and never restate in
+   part 2 what part 1 already says.
+   * keep the concatenated length close to the {target_language} Original (within about ±20%);
+   * a verbatim split is the default and is always valid: when both cues attach correctly, split
+     literally without changing a single word."""
+
+_ALIGN_RULE3_STRICT = """**DO NOT rewrite, add or drop a single word.** Concatenating all `target_part_*` in order MUST
+   reproduce the {target_language} Original **character for character** (punctuation aside). The
+   audience reads part 1 and part 2 in a row, so partial sentences are fine and a bare clause as a cue
+   is normal. Choose a better boundary if the current one leaves a dangling cue — moving the boundary
+   is not rewriting — but never change, repeat, add or drop words. In particular never duplicate a
+   connective at the boundary (an extra "同时"/"also"/"そして" in part 2 because part 1 already ended
+   with it)."""
+
+
 def get_align_prompt(src_sub, tr_sub, src_part):
     TARGET_LANGUAGE = load_key("target_language")
     src_language = get_source_language()
@@ -253,20 +286,7 @@ We have {src_language} and {target_language} original subtitles for a Netflix pr
 ### Task Description
 1. Analyze the word order and structural correspondence between {src_language} and {target_language} subtitles
 2. Split the {target_language} subtitles according to the pre-processed {src_language} split version
-3. **Light rewriting is allowed at the join, nothing more.** A literal split sometimes reads badly
-   as a standalone cue, so you may add or drop a connective (也/还/而/同时, "and"/"but"/"also"), add
-   the auxiliary or particle the sentence needs (已经/了/着), or move one or two words across the
-   boundary — so that **each part reads as a natural cue on its own**. Everything else is forbidden:
-   * never add or drop information, never summarise, never explain;
-   * never repeat what the neighbouring part already says — above all, do not let both parts carry
-     the same connective (an extra "同时"/"also"/"そして" in part 2 because part 1 already ended with
-     it). The audience reads both cues in a row, so partial sentences are fine;
-   * keep the concatenated length close to the {target_language} Original (within about ±20%);
-   * a purely literal, verbatim split is always valid **when each part already reads naturally** —
-     plain sentences should usually be split literally. But never leave a cue that sounds clipped,
-     ungrammatical or like a dangling half-sentence just because a literal split was easier: that
-     is exactly the case where a minimal rewrite at the join is wanted. The audience sees one cue
-     at a time, so a part that only makes sense with its neighbour is a defect.
+3. {rule3}
 4. Never leave empty lines.
 5. **NEVER cut inside a noun phrase — above all never between a modifier (relative clause / adjective)
    and the head noun it modifies**: e.g. Japanese `…作ることができる | ソフト`, Chinese `…的数字 | 软件`,
@@ -275,8 +295,9 @@ We have {src_language} and {target_language} original subtitles for a Netflix pr
    acceptable, a broken phrase is not.
 6. Keep each part reasonably sized: at least ~3 words (3–4 characters in CJK). Never leave a single
    short word alone in a cue unless the corresponding source part is that short too.
-7. Every part must be grammatical on its own; a part that starts with a floating particle or
-   connective left over from the previous part is wrong even if the concatenation is correct.
+7. Each part must be **parsable** on its own: never start a part with a dependent particle or a
+   stranded connective left over from the previous part, and never end a part mid-phrase. Being an
+   *incomplete sentence* is fine — being unparseable is not.
 8. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
 
 ### Subtitle Data
@@ -305,6 +326,10 @@ Pre-processed {src_language} Subtitles ([br] indicates split points): {src_part}
         }}''' for i in range(num_parts)
     )
 
+    # 第 3 条按开关分支：轻改写版允许"移动边界/移动虚词"，严格版一个字都不许动。
+    # 两个版本都以 {target_language} 为占位符，所以在传进 format 之前先各自 format 一次。
+    rule3 = (_ALIGN_RULE3_LIGHT if align_allow_rewrite() else _ALIGN_RULE3_STRICT)
+
     return align_prompt.format(
         src_language=src_language,
         target_language=TARGET_LANGUAGE,
@@ -312,6 +337,7 @@ Pre-processed {src_language} Subtitles ([br] indicates split points): {src_part}
         tr_sub=tr_sub,
         src_part=src_part,
         align_parts_json=align_parts_json,
+        rule3=rule3.format(target_language=TARGET_LANGUAGE),
     )
 
 ## ================================================================

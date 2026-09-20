@@ -226,6 +226,23 @@ def auto_length_by_language() -> bool:
         return True
 
 
+def align_allow_rewrite() -> bool:
+    """对齐阶段是否允许"轻改写"（单一判定点：提示词与校验共用一个语义）。
+
+    开（默认）：对齐提示词允许在切点做**最小必要**调整，让两条字幕各自"不悬空"；
+    校验按"轻改写护栏"走（拦重复/漏译/长度暴涨/碎片，见 `subtitle_split.check_align_parts`）。
+    关：提示词换成严格模式（**不许改一个字**），校验要求拼接逐字等于整句译文。
+
+    2026-09-20 用户实测发现：开关原先只切换校验严格度，提示词文本恒定写着"允许轻改写"，
+    于是关掉它时模型仍会先改写一次 → 被拦 → 靠回注原因改回逐字切，白多一次往返。现在两处
+    都由本函数判定，语义一致。
+    """
+    try:
+        return bool(load_key("subtitle.align_allow_rewrite"))
+    except Exception:
+        return True
+
+
 if __name__ == "__main__":
     print(load_key('language_split_with_space'))
 

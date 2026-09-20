@@ -75,6 +75,45 @@ class PromptContractTest(unittest.TestCase):
         self.assertIn('"topic"', prompt)
         self.assertNotIn('"theme"', prompt)
 
+    # ---------------- 对齐提示词：第 3 条按 align_allow_rewrite 分支 ----------------
+    #
+    # 2026-09-20 用户纠正过一次措辞：字幕是**跨条连读**的，所以提示词不能要求"每行单独读起来是
+    # 通顺的完整句"——那会诱发跨行语义重复与凭空增补（补主语/宾语/谓语）。第 3 条只约束
+    # **衔接是否悬空**，允许的手段限于"移动边界 / 移动虚词 / 最多补一个虚词"。
+
+    def _align_prompt(self, allow):
+        from unittest import mock
+        with mock.patch.object(self.prompts, "align_allow_rewrite", return_value=allow):
+            return self.prompts.get_align_prompt("src line", "这是译文整句，写得好好的。", "src\nline")
+
+    def test_align_prompt_light_mode_is_attachment_only(self):
+        prompt = self._align_prompt(True)
+        self.assertIn("never complete a cue", prompt)
+        self.assertIn("dangling", prompt)
+        self.assertIn("parsable", prompt)                       # 第 7 条：可解析 ≠ 语法完整
+        self.assertIn("简体中文", prompt)                        # 占位符已替换
+        self.assertNotIn("{rule3}", prompt)
+
+    def test_align_prompt_never_asks_for_self_contained_lines(self):
+        """旧措辞（要求每行自足/语法完整）不得回来。"""
+        for allow in (True, False):
+            prompt = self._align_prompt(allow)
+            self.assertNotIn("reads as a natural cue on its own", prompt)
+            self.assertNotIn("Every part must be grammatical on its own", prompt)
+            self.assertNotIn("so that **each part", prompt)
+
+    def test_align_prompt_strict_mode_forbids_any_change(self):
+        prompt = self._align_prompt(False)
+        self.assertIn("DO NOT rewrite, add or drop a single word", prompt)
+        self.assertNotIn("never complete a cue", prompt)
+        # 严格模式也必须保留"移动边界不算改写"这条许可，否则悬空切点无解
+        self.assertIn("moving the boundary", prompt)
+
+    def test_align_prompt_defaults_to_light_mode_without_the_key(self):
+        """旧 config.yaml 没有这个键时（本测试的临时配置就没有）必须落在轻改写版。"""
+        prompt = self.prompts.get_align_prompt("src line", "这是译文整句，写得好好的。", "src\nline")
+        self.assertIn("never complete a cue", prompt)
+
     def test_summary_prompt_drops_proper_noun_clause(self):
         """该条要求会阻止专有名词翻译（上游 a3b87fe 已删除）。"""
         prompt = self.prompts.get_summary_prompt("some source text")

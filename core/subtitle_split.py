@@ -328,6 +328,29 @@ def _coverage(tokens: Sequence[str], original_tokens: Sequence[str]) -> float:
     return kept / len(original_tokens)
 
 
+#: 目标语 part **开头**不允许出现的"悬空"字符。字幕要的是**可解析**而不是"每行自足"
+#: （用户 2026-09-20 指出："翻译字幕往往几句连起来看才是完整的句子"），所以机械侧只钉住
+#: "这一条以依附上一条的助词开头"这一种确定坏掉的情况，逼模型**移动边界/虚词**而不是补全句子。
+#:
+#: 集合刻意取到极小：只收"几乎不可能作为一个词的开头"的助词 —— を（日语）、の（ので/のに/のち
+#: 除外）、的（的确/的话 除外）。**不收** て/で/に/は/が/も/と/や（`できる`/`でも`/`には`/
+#: `はじめ`/`もちろん`/`として` 都能起头，收进来会误伤），也不收 而/但/就/还/也
+#:（"但是我也……"是合法的字幕开头）。
+_DANGLING_START = set("をの的")
+#: 例外：这些词本身就以上面的字符起头，不算悬空
+_DANGLING_START_OK = ("ので", "のに", "のち", "的确", "的话")
+
+
+def dangling_start(part: str) -> str:
+    """part 若以"悬空"助词开头则返回该字符，否则返回空串。"""
+    text = str(part).lstrip()
+    if not text or text[0] not in _DANGLING_START:
+        return ""
+    if any(text.startswith(ok) for ok in _DANGLING_START_OK):
+        return ""
+    return text[0]
+
+
 def check_align_parts(parts: Sequence[str], original: str, min_width: float = 6.0, *,
                       allow_rewrite: bool = True) -> Tuple[bool, str]:
     """校验 LLM 的译文对齐结果，返回 `(是否可用, 失败原因)`（纯函数，便于单测）。
@@ -336,11 +359,16 @@ def check_align_parts(parts: Sequence[str], original: str, min_width: float = 6.
     指导它"怎么重切"，不要写成用户侧的黑话。
 
     两档严格度（开关 `subtitle.align_allow_rewrite`）：
-      * `allow_rewrite=False`（2026-09-20 之前的旧行为）：拼接必须**逐字等于**原译文；
-      * `allow_rewrite=True`（用户 2026-09-20 批准的 B 方案）：允许在切点处轻改写，让每一行
-        单独看是通顺的句子（补/删连接词、补足助词），但四类"确定坏了"的结果一律拦下：
-        ① 段数 < 2 / 空段 / 孤立碎片；② 长度比越界（增删信息）；③ **原文已有的说法在拼接里
-        变多**（重复，含 `同时同时` 这类相邻重复）；④ 覆盖率 < `REWRITE_COVERAGE_MIN`（漏译）。
+      * `allow_rewrite=False`（严格模式，提示词同档切换）：拼接必须**逐字等于**原译文；
+      * `allow_rewrite=True`（用户 2026-09-20 批准的 B 方案）：允许在切点处**移动边界/虚词、
+        最多补一个虚词**（让两条字幕各自不悬空），但五类"确定坏了"的结果一律拦下：
+        ① 段数 < 2 / 空段 / 孤立碎片；② **以悬空助词开头**（`dangling_start`：を/の/的）；
+        ③ 长度比越界（增删信息）；④ **原文已有的说法在拼接里变多**（重复，含 `同时同时`
+        这类相邻重复）；⑤ 覆盖率 < `REWRITE_COVERAGE_MIN`（漏译）。
+
+    两档共有的底线：**不允许"把裸从句补成完整句"** —— 字幕本来就是跨条连读的，要求每行自足
+    只会诱发跨行语义重复和凭空增补（用户 2026-09-20 的原话："翻译字幕往往几句连起来看才是
+    完整的句子"）。所以这里只拦"悬空"和"增删"，不拦"没把话说完"。
 
     为什么不能只"放开改写"：用户实测旧提示词允许改写后出现过 `…程度 同时` + `同时也…`，
     观众连着两条字幕读到两个"同时"。这里用**计数对比**而不是"是否出现"，因此既能抓住它，
@@ -359,6 +387,12 @@ def check_align_parts(parts: Sequence[str], original: str, min_width: float = 6.
         if width < min_width:
             return False, (f"target_part_{index + 1} ('{part}') is an isolated fragment "
                            f"(only {width:.1f} display columns): merge it with the neighbouring part")
+    for index, part in enumerate(parts):
+        dangling = dangling_start(part)
+        if dangling:
+            return False, (f"target_part_{index + 1} starts with a dangling '{dangling}' — that token "
+                           f"belongs to the previous cue. Move the boundary (or move that token to the "
+                           f"other side); do NOT complete or rephrase the cue to fix it")
 
     concat = join_parts(parts)
     if normalized_concat_matches(parts, original):

@@ -156,8 +156,10 @@ class TestTranslationPartsGuard(unittest.TestCase):
 
     ① 重复连接词：`…程度 同时` + `同时也看重…` → 拼接出现两个"同时"；
     ② 孤立碎片：某段只剩 1~2 个字。
-    ⚠️ 故意**不**拦"数字 | 软件"这种"切开固定短语"：机械校验看不出来（两侧都不算碎片），
-    它由提示词里的黑名单规则负责（见 core/prompts_storage.get_align_prompt 第 5 条）。
+    ⚠️ 仍**不**拦"数字 | 软件"这种"切开固定短语"里"下一段以普通字开头"的情形：机械校验看不出来
+    （两侧都不算碎片），它由提示词里的黑名单规则负责（见 core/prompts_storage.get_align_prompt 第 5 条）。
+    但**以悬空助词开头**的切法（`…原型 | 的软件`、`… | を大切に`）自 2026-09-20 起由
+    `subtitle_split.dangling_start` 拦下 —— 见 TestAlignPartsRewriteGuard。
     """
 
     def test_repeated_connective_is_rejected(self):
@@ -216,6 +218,30 @@ class TestAlignPartsRewriteGuard(unittest.TestCase):
         original = "能制作手办和车库套件原型的软件有好几款"
         ok, reason = ss.check_align_parts(["能制作手办和车库套件原型的软件", "目前有好几款"], original)
         self.assertTrue(ok, reason)
+
+    def test_dangling_particle_start_is_rejected(self):
+        """目标语以悬空助词开头（`…原型 | 的软件`）→ 拦下，且要求"移动边界"而不是"补全句子"。"""
+        original = "能制作手办和车库套件原型的软件有好几款"
+        ok, reason = ss.check_align_parts(["能制作手办和车库套件原型", "的软件有好几款"], original)
+        self.assertFalse(ok)
+        self.assertIn("dangling", reason)
+        self.assertIn("Move the boundary", reason)
+
+    def test_dangling_start_is_rejected_in_strict_mode_too(self):
+        original = "能制作手办和车库套件原型的软件有好几款"
+        ok, reason = ss.check_align_parts(["能制作手办和车库套件原型", "的软件有好几款"],
+                                          original, allow_rewrite=False)
+        self.assertFalse(ok)
+        self.assertIn("dangling", reason)
+
+    def test_dangling_start_helper_stays_narrow(self):
+        """窄集合：只收 を/の/的；能起头的假名与"但是我也……"这类合法开头一律不拦。"""
+        self.assertEqual(ss.dangling_start("を大切にしています"), "を")
+        self.assertEqual(ss.dangling_start("の软件"), "の")
+        self.assertEqual(ss.dangling_start("的软件"), "的")
+        for safe in ("的确如此", "的话，我就去", "ので、そうします", "でも、それは",
+                     "软件有好几款", "但是我也去", "できるようになった", "はじめまして"):
+            self.assertEqual(ss.dangling_start(safe), "", safe)
 
     def test_repeated_connective_is_still_rejected(self):
         """历史事故：原文 1 个"同时"、拼接 2 个 → 必须拦，且原因里点名那个词。"""
