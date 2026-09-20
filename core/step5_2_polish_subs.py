@@ -103,7 +103,8 @@ def _audit_info_changes(pairs: Sequence[Tuple[int, str, str]], stats: Dict[str, 
 
     `extra_body` 与润色调用共用同一个"思考开关"：用户关掉思考时，审校也一起不思考 ——
     否则会出现"我明明关了思考，怎么还在花思考 token"的困惑（2026-09-21 用户要求这个开关时
-    的语义就是"控制这一步的思考"）。安全网仍在：机械护栏 + 关思考时自动收紧的覆盖率门槛。
+    的语义就是"控制这一步的思考"）。安全网仍在：机械护栏 `subtitle_split.polish_ok`
+    （关思考时它自动把覆盖率门槛收紧到 0.85）+ 本审校调用本身。
     """
     if not pairs:
         return set()
@@ -212,9 +213,11 @@ def polish_lines(sources: Sequence[str], translations: Sequence[str],
                     reject_reasons.append(f"#{row_id} {reason}")
                 continue
             result[row_id] = polished
-            # 只有"归一化后真的不同"的行才需要审校：只改标点（如去掉行尾句号）不算信息改动，
-            # 送审只会白花钱。最终"改动行数"另行从 result 与原列对比得出（见函数末尾）。
-            if changed or subtitle_split.normalize_text(polished) != subtitle_split.normalize_text(original):
+            # 只有"归一化后真的不同"的行才送审：只改标点（如去掉行尾句号）不算信息改动，
+            # 送审只会白花钱。这里刻意**不看**模型自报的 `changed` 标记 —— 它既可能虚报（说改了
+            # 其实没改），也可能漏报（说没改其实改了标点），以文本差异为准才和用户所见一致；
+            # 最终"改动行数"再从 result 与原列对比得出（见函数末尾）。
+            if subtitle_split.normalize_text(polished) != subtitle_split.normalize_text(original):
                 changed_pairs.append((row_id, original, polished))
 
         for row_id in _audit_info_changes(changed_pairs, stats, extra_body):

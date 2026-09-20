@@ -139,13 +139,14 @@ class TestPolishThinkingAndScopeSwitches(unittest.TestCase):
             calls.append(kwargs)
             if kwargs.get('log_title', '').startswith('polish_audit'):
                 return {'audit': [{'id': 0, 'info_changed': False, 'reason': ''}]}
-            return {'lines': [{'id': 0, 'polished': '作为自由原型师，约6年', 'changed': True}]}
+            # 关思考档的覆盖率门槛是 0.85，所以这句改写必须保住 ≥85% 的原文用词
+            return {'lines': [{'id': 0, 'polished': '作为自由原型师约6年，一直做手办造型', 'changed': True}]}
 
         with mock.patch.object(p5, "get_polish_prompt", lambda *a, **k: "P"), \
                 mock.patch.object(p5, "get_polish_audit_prompt", lambda *a, **k: "A"), \
                 mock.patch.object(p5, "ask_gpt", side_effect=fake_ask), \
                 mock.patch.object(p5.eu, "check_cancel", lambda *a, **k: None):
-            p5.polish_lines(["src"], ["作为自由原型师约6年"], use_thinking=False)
+            p5.polish_lines(["src"], ["作为自由原型师约6年一直从事手办造型"], use_thinking=False)
 
         self.assertEqual(len(calls), 2, "一次润色 + 一次审校")
         polish_call, audit_call = calls
