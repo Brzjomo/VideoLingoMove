@@ -114,6 +114,27 @@ class PromptContractTest(unittest.TestCase):
         prompt = self.prompts.get_align_prompt("src line", "这是译文整句，写得好好的。", "src\nline")
         self.assertIn("never complete a cue", prompt)
 
+    # ---------------- 润色提示词（step5.2，开关 subtitle.polish_translation） ----------------
+
+    def test_polish_prompt_keeps_the_line_contract(self):
+        rows = [(1, "src one", "译一"), (2, "src two", "译二")]
+        prompt = self.prompts.get_polish_prompt(rows, 60)
+        self.assertIn('"lines"', prompt)
+        self.assertIn('"changed"', prompt)
+        self.assertIn("id: 1", prompt)
+        self.assertIn("id: 2", prompt)
+        self.assertIn("NEVER add, drop or change information", prompt)   # 只改措辞
+        self.assertIn("Never merge or split lines", prompt)              # 行数必须逐行对应
+        self.assertIn("60", prompt)                                     # 长度上限写进提示词
+        self.assertIn("简体中文", prompt)
+
+    def test_polish_audit_prompt_asks_per_id(self):
+        prompt = self.prompts.get_polish_audit_prompt([(1, "原文一行", "润色后一行")])
+        self.assertIn('"audit"', prompt)
+        self.assertIn('"info_changed"', prompt)
+        self.assertIn("original:", prompt)
+        self.assertIn("polished:", prompt)
+
     def test_summary_prompt_drops_proper_noun_clause(self):
         """该条要求会阻止专有名词翻译（上游 a3b87fe 已删除）。"""
         prompt = self.prompts.get_summary_prompt("some source text")

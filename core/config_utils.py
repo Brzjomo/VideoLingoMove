@@ -243,6 +243,20 @@ def align_allow_rewrite() -> bool:
         return True
 
 
+def polish_translation() -> bool:
+    """是否在 step5 之后做"字幕润色"（`subtitle.polish_translation`，**默认关**）。
+
+    2026-09-21 用户要求：这步是额外的 LLM 调用（每批一次），必须由侧边栏开关显式打开才跑。
+    打开后 step5.2 会把最终行逐条润色（只改措辞、不改信息，护栏见 `subtitle_split.polish_ok`），
+    产物落在 `output/log/translation_results_polished.xlsx`；step6 只有在**开关打开且行数一致**
+    时才优先读它 —— 所以关掉开关即恢复未润色字幕，不需要重跑 step5。
+    """
+    try:
+        return bool(load_key("subtitle.polish_translation"))
+    except Exception:
+        return False
+
+
 if __name__ == "__main__":
     print(load_key('language_split_with_space'))
 

@@ -169,6 +169,8 @@ def summarize_and_translate():
 
 def process_and_align_subtitles():
     step5_splitforsub.split_for_sub_main()
+    # step5.2 字幕润色（开关 subtitle.polish_translation，默认关；关着时本步零调用）
+    step5_2_polish_subs.polish_subs_main()
     step6_generate_final_timeline.align_timestamp_main()
 
 def record_start():

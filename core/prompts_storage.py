@@ -345,6 +345,103 @@ Pre-processed {src_language} Subtitles ([br] indicates split points): {src_part}
     )
 
 ## ================================================================
+# @ core/step5_2_polish_subs.py
+def get_polish_prompt(rows, max_width: float, src_language: str = "") -> str:
+    """字幕润色提示词（step5.2，开关 `subtitle.polish_translation`）。
+
+    `rows` 是 `[(id, source, current), …]`（一段字幕的原文行 + 现有译文行）。
+    契约：**逐行对应**（id 数量与顺序都不能变），只改措辞、不改信息 —— 用户 2026-09-21 要求
+    "打开后才做这步润色优化"，因为这是额外的 LLM 调用。
+    """
+    TARGET_LANGUAGE = load_key("target_language")
+    src_language = src_language or get_source_language()
+    lines = "\n".join(
+        f'id: {row_id}\nsource: {source}\ncurrent: {current}\n' for row_id, source, current in rows
+    )
+    prompt = f'''
+### Role Definition
+You are a senior {TARGET_LANGUAGE} subtitle editor. You are NOT translating: the translation already
+exists and is correct. Your job is to make each finished subtitle line read naturally on screen.
+
+### Task Background
+These lines come from a {src_language} video. They were translated as whole sentences and then split
+into cues, so some cues still sound stiff, wordy or literal even though the meaning is right.
+
+### Task Description
+1. Rewrite ONLY the wording of each `current` line so that a native {TARGET_LANGUAGE} speaker reads
+   it effortlessly: natural word order, natural connectives and particles, no translationese.
+2. **NEVER add, drop or change information.** No explaining, no summarising, no extra context, no
+   added subjects or objects that the line does not need, no answering questions the line leaves open.
+3. **Never merge or split lines.** Return exactly one entry per `id`, in the same order, with the
+   same `id` values. A line you cannot improve must be returned unchanged.
+4. Keep every proper noun, product name, brand, and every number with its unit exactly as it is
+   ({TARGET_LANGUAGE} example: `GK`、`Wonder Festival`、`6年`、`100%`). Never turn a number into a
+   vague phrase.
+5. Length: keep each line within {max_width:.0f} display columns (one CJK character counts as 1.75)
+   and do not make it longer than the current line. Cue length is a hard constraint.
+6. Do not put punctuation at the end of a line; commas inside a line are fine and welcome
+   (they are what keeps a long line readable).
+7. Set `"changed": false` when you return a line unchanged.
+
+### Subtitle Lines
+<lines>
+{lines}</lines>
+
+### Output in JSON
+{{
+    "lines": [
+        {{"id": 1, "polished": "rewritten subtitle line", "changed": true}}
+    ]
+}}
+
+### Your Answer, Provide ONLY a valid JSON object:
+'''
+    return prompt.strip()
+
+
+def get_polish_audit_prompt(pairs, src_language: str = "") -> str:
+    """润色审校提示词：只对"润色时确实改动过"的行再问一次是否增删/篡改了信息。
+
+    `pairs` 是 `[(id, original_translation, polished)]`。审校不过的行由 step5.2 回退原译文 ——
+    机械护栏（长度/覆盖率/数字/重复）拦不住"换词式增补"，这一步是用户 2026-09-21 批准的 C 方案里
+    专门补那个缺口的。
+    """
+    TARGET_LANGUAGE = load_key("target_language")
+    src_language = src_language or get_source_language()
+    lines = "\n".join(
+        f'id: {row_id}\noriginal: {original}\npolished: {polished}\n'
+        for row_id, original, polished in pairs
+    )
+    prompt = f'''
+### Role Definition
+You are a strict {TARGET_LANGUAGE} subtitle quality reviewer for a {src_language} video.
+
+### Task Description
+For each pair below, decide whether the `polished` line adds, drops or alters **information** compared
+with the `original` line. Wording changes, reordering, and added or removed function words / particles
+/ connectives are FINE and must be reported as `"info_changed": false`. Report
+`"info_changed": true` only when the polished line:
+  * states something the original does not (added fact, explanation, subject, object, tense meaning);
+  * omits something the original states;
+  * changes a number, unit, name, or the direction of a relation (who does what to whom);
+  * repeats in a second clause what the original says once.
+
+### Pairs
+<pairs>
+{lines}</pairs>
+
+### Output in JSON
+{{
+    "audit": [
+        {{"id": 1, "info_changed": false, "reason": "short reason, empty when nothing changed"}}
+    ]
+}}
+
+### Your Answer, Provide ONLY a valid JSON object:
+'''
+    return prompt.strip()
+
+## ================================================================
 # @ core/subtitle_trim.py（配音链路已移除，此提示词仅服务于字幕压缩）
 def get_subtitle_trim_prompt(text, duration):
  

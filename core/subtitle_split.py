@@ -442,6 +442,89 @@ def check_align_parts(parts: Sequence[str], original: str, min_width: float = 6.
     return True, "rewritten but content preserved"
 
 
+#: 字幕润色（step5.2）的护栏参数。润色与对齐不同：**允许改写措辞**（那就是它的目的），
+#: 所以只能拦"确定坏了"的结果 —— 见 `polish_ok`。
+POLISH_LENGTH_RATIO = (0.7, 1.4)     # 润色后 / 润色前的 token 数比
+POLISH_COVERAGE_MIN = 0.7            # 原译文的 token 至少要保留这么多（润色允许删虚词）
+POLISH_MAX_GROWTH = 1.15             # 润色后不得比原行更长超过 15%（字幕长度是硬约束）
+
+
+def missing_numbers(original, polished) -> List[str]:
+    """原行里的数字（`6`、`8`、`100%`）在润色后是否丢失或改变。
+
+    数字是润色时最容易被"顺手改掉"的信息（`约6年` → `好几年`、`8年` → `多年`），
+    所以单列一条硬校验（多重集计数：原文重复的数字也要重复出现）。
+    """
+    numbers = re.findall(r"\d+(?:[.,]\d+)?%?", str(original))
+    if not numbers:
+        return []
+    available = Counter(re.findall(r"\d+(?:[.,]\d+)?%?", str(polished)))
+    missing = []
+    for number in numbers:
+        if available[number] > 0:
+            available[number] -= 1
+        else:
+            missing.append(number)
+    return missing
+
+
+def polish_ok(original, polished, *, max_width: Optional[float] = None,
+              min_coverage: float = POLISH_COVERAGE_MIN,
+              ratio: Sequence[float] = POLISH_LENGTH_RATIO,
+              max_growth: float = POLISH_MAX_GROWTH) -> Tuple[bool, str]:
+    """校验"润色后的一行"是否可用，返回 `(是否可用, 失败原因)`（纯函数，便于单测）。
+
+    失败原因用于控制台统计（**不**喂回模型：润色是整批调用，逐行纠错成本高，直接回退原行更划算）。
+
+    拦五类"确定坏了"的结果：
+      ① 空行 / 全空白；
+      ② 超过档位上限（`max_width` 显示宽度）或比原行更长超过 `max_growth` —— 字幕长度是硬约束，
+         润色把行撑长会让后面又要重切；
+      ③ 覆盖率 < `min_coverage`（信息大幅消失）；
+      ④ 数字丢失/改变（`missing_numbers`）—— 润色最常见的语义漂移；
+      ⑤ 重复：润色让原文已有的说法变多（`_inflated_ngram`），或引入原文没有、却出现两次的
+         说法（`_spurious_repeat`）。
+    注意：**不**要求与原文逐字一致（那是对齐阶段的规则，不是润色的）。
+    """
+    from core import subtitle_limits as sl
+
+    original, polished = str(original), str(polished)
+    if not polished.strip():
+        return False, "empty line"
+    if max_width is not None and sl.measure(polished) > max_width:
+        return False, (f"polished line is {sl.measure(polished):.1f} display columns wide, "
+                       f"over the {max_width:.1f} limit for this language")
+    if sl.measure(polished) > sl.measure(original) * max_growth:
+        return False, (f"polished line is {sl.measure(polished) / max(sl.measure(original), 0.1):.0%} "
+                       f"of the original width: polishing must not make the cue longer")
+
+    missing = missing_numbers(original, polished)
+    if missing:
+        return False, f"dropped or changed number(s): {', '.join(missing)}"
+
+    tokens, original_tokens = tokenize(polished), tokenize(original)
+    if original_tokens:
+        length_ratio = len(tokens) / len(original_tokens)
+        low, high = ratio
+        if not (low <= length_ratio <= high):
+            return False, (f"polished line is {length_ratio:.0%} of the original length: "
+                           f"polishing must not add or drop information")
+        coverage = _coverage(tokens, original_tokens)
+        if coverage < min_coverage:
+            return False, (f"only {coverage:.0%} of the original wording survives: "
+                           f"polishing must not drop information")
+        sizes = (2, 3) if _CJK_CHAR.search(polished + original) else (1, 2, 3)
+        inflated = _inflated_ngram(tokens, original_tokens, sizes)
+        if inflated:
+            gram, count, seen = inflated
+            return False, f"'{gram}' now appears {count} times (was {seen}): polishing repeated wording"
+        spurious = _spurious_repeat(tokens, original_tokens, sizes)
+        if spurious:
+            gram, count = spurious
+            return False, f"'{gram}' appears {count} times but the original line has no such wording"
+    return True, "polished"
+
+
 #: 行尾要抹掉的标点：句末标点 + 续句逗号（句中一律不动）
 _TERMINAL_MARKS = set("。．.!！?？;；:：…、，,")
 #: 收尾的引号/括号：只有在紧跟标点时才算"句末标点的一部分"（`…です。」` → `…です`），

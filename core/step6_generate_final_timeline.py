@@ -8,6 +8,7 @@ import easy_util as eu
 from core.config_utils import load_key, load_key_or, get_joiner
 from core import subtitle_split
 from core import subtitle_limits
+from core import config_utils
 from rich.panel import Panel
 from rich.console import Console
 import autocorrect_py as autocorrect
@@ -17,6 +18,8 @@ console = Console()
 
 CLEANED_CHUNKS_FILE = 'output/log/cleaned_chunks.xlsx'
 TRANSLATION_RESULTS_FOR_SUBTITLES_FILE = 'output/log/translation_results_for_subtitles.xlsx'
+#: step5.2 的润色产物（只有打开 `subtitle.polish_translation` 才会生成）
+TRANSLATION_POLISHED_FILE = 'output/log/translation_results_polished.xlsx'
 
 OUTPUT_DIR = 'output'
 
@@ -313,10 +316,37 @@ def clean_translation(x):
     cleaned = str(x).strip('。').strip('，')
     return autocorrect.format(cleaned)
 
+def pick_translation_file() -> str:
+    """step6 读哪个字幕表：开关打开 **且** 润色产物存在 **且** 行数一致时用润色版，否则用原版。
+
+    行数必须一致：两个表都按行顺序与时间轴配对，行数不同会让译文整体错位 —— 那种情况下宁可
+    放弃润色（打印一行告警），也不能拿错位的字幕去出片。
+    开关关着时立刻回到未润色字幕，不需要重跑 step5（这是用户 2026-09-21 要的"打开后才做"语义）。
+    """
+    if not config_utils.polish_translation():
+        return TRANSLATION_RESULTS_FOR_SUBTITLES_FILE
+    if not os.path.exists(TRANSLATION_POLISHED_FILE):
+        console.print('[yellow]⚠️ 已开启字幕润色，但没找到 output/log/translation_results_polished.xlsx：'
+                      '使用未润色字幕（请先跑 step5.2）[/yellow]')
+        return TRANSLATION_RESULTS_FOR_SUBTITLES_FILE
+    try:
+        rows_plain = len(pd.read_excel(TRANSLATION_RESULTS_FOR_SUBTITLES_FILE))
+        rows_polished = len(pd.read_excel(TRANSLATION_POLISHED_FILE))
+    except Exception as exc:  # noqa: BLE001 - 读不动就退回原版，别让出片挂在这
+        console.print(f'[yellow]⚠️ 读取润色产物失败（{type(exc).__name__}）：使用未润色字幕[/yellow]')
+        return TRANSLATION_RESULTS_FOR_SUBTITLES_FILE
+    if rows_plain != rows_polished:
+        console.print(f'[yellow]⚠️ 润色产物行数（{rows_polished}）与字幕表（{rows_plain}）不一致：'
+                      f'使用未润色字幕（请重跑 step5.2 或 step5）[/yellow]')
+        return TRANSLATION_RESULTS_FOR_SUBTITLES_FILE
+    console.print('[cyan]✨ 使用润色后的字幕表（subtitle.polish_translation 已开启）[/cyan]')
+    return TRANSLATION_POLISHED_FILE
+
+
 def align_timestamp_main():
     df_text = pd.read_excel(CLEANED_CHUNKS_FILE)
     df_text['text'] = df_text['text'].str.strip('"').str.strip()
-    df_translate = pd.read_excel(TRANSLATION_RESULTS_FOR_SUBTITLES_FILE)
+    df_translate = pd.read_excel(pick_translation_file())
     df_translate['Translation'] = df_translate['Translation'].apply(clean_translation)
 
     align_timestamp(df_text, df_translate, SUBTITLE_OUTPUT_CONFIGS, OUTPUT_DIR)

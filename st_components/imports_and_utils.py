@@ -11,6 +11,7 @@ from core import (
     step4_1_summarize,
     step4_2_translate_all,
     step5_splitforsub,
+    step5_2_polish_subs,
     
     # Subtitle Timeline & Merging 🎬
     step6_generate_final_timeline,

@@ -65,6 +65,8 @@ def step_summarize():
 def step_translate_and_burn():
     step4_2_translate_all.translate_all()
     step5_splitforsub.split_for_sub_main()
+    # step5.2 字幕润色：只有侧边栏打开"翻译后润色字幕措辞"时才真正调用 LLM，关着时本步只打印一行
+    step5_2_polish_subs.polish_subs_main()
     step6_generate_final_timeline.align_timestamp_main()
     step7_merge_sub_to_vid.merge_subtitles_to_video()
 

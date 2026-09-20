@@ -232,6 +232,30 @@ def subtitle_length_controls():
                 st.info(f"已经是推荐值（{applied.label}）")
 
 
+def polish_controls():
+    """字幕润色开关（2026-09-21 用户要求："加个开关，打开后才做这步润色优化"）。
+
+    默认关：打开后 step5.2 才会额外调用 LLM 逐行润色（每 20 行一批，再对改动过的行做一次批量
+    审校）；关着时这一步零调用。润色结果另存为 `output/log/translation_results_polished.xlsx`，
+    step6 只在开关打开且行数一致时才用它 —— 所以关掉开关重跑一次即可恢复未润色字幕。
+    """
+    with st.expander("✨ 字幕润色（可选，会额外调用 LLM）", expanded=False):
+        current = bool(load_key_or("subtitle.polish_translation", False))
+        enabled = st.toggle(
+            "翻译后润色字幕措辞",
+            value=current,
+            key="polish_translation",
+            help="打开：step5.2 把最终字幕逐行润色，让每条读起来更自然（只改措辞 —— 语序、连接词、"
+                 "语气助词；不许增删信息，仍有长度/数字/重复护栏，并对改动过的行做一次批量审校）。"
+                 "关闭：完全不调用 LLM，成片字幕保持翻译原样。",
+        )
+        if enabled != current:
+            update_key("subtitle.polish_translation", bool(enabled))
+            st.rerun(scope="app")
+        st.caption("ℹ️ 大约每 20 行一次调用；润色后行数不变，超长/丢数字/丢信息会被拦下并回退原译文。"
+                   "「只生成原语言字幕」模式下自动跳过。")
+
+
 def page_setting():
     with st.expander("一键切换配置", expanded=False):
         config_options = ["Deepseek", "千问", "硅基流动", "Ollama"]
@@ -435,6 +459,9 @@ def page_setting():
     # 字幕长度面板（原来在主区，2026-09-20 移到侧边栏：它和上面的语言/字幕设置强相关 ——
     # 档位是按"识别语言/目标语言"取的，切语言就在上面那几行里发生）
     subtitle_length_controls()
+
+    # 字幕润色开关（可选步骤，2026-09-21 用户要求"打开后才做"）
+    polish_controls()
 
     # Volcano Engine ASR Settings (only show when selected)
     if load_key("asr_engine") == "volcano":
