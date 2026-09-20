@@ -253,8 +253,19 @@ We have {src_language} and {target_language} original subtitles for a Netflix pr
 ### Task Description
 1. Analyze the word order and structural correspondence between {src_language} and {target_language} subtitles
 2. Split the {target_language} subtitles according to the pre-processed {src_language} split version
-3. Never leave empty lines. If it's difficult to split based on meaning, you may appropriately rewrite the sentences that need to be aligned
-4. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
+3. **DO NOT rewrite, add or drop any word.** Concatenating all `target_part_*` in order MUST reproduce
+   the {target_language} Original **character for character** (punctuation aside). In particular never
+   duplicate a connective at the boundary (an extra "同时"/"also"/"そして" in part 2 because part 1
+   already ended with it) — the audience reads both cues in a row, so partial sentences are fine.
+4. Never leave empty lines.
+5. **NEVER cut inside a noun phrase — above all never between a modifier (relative clause / adjective)
+   and the head noun it modifies**: e.g. Japanese `…作ることができる | ソフト`, Chinese `…的数字 | 软件`,
+   English `…the digital | software`. If the {target_language} word order puts the head noun on the other
+   side of the boundary, move the cut to the nearest whole-phrase boundary; unequal part lengths are
+   acceptable, a broken phrase is not.
+6. Keep each part reasonably sized: at least ~3 words (3–4 characters in CJK). Never leave a single
+   short word alone in a cue unless the corresponding source part is that short too.
+7. Do not add comments or explanations in the translation, as the subtitles are for the audience to read
 
 ### Subtitle Data
 <subtitles>

@@ -81,14 +81,44 @@ def row_overflows(src: str, tr: str, limits: subtitle_limits.SubtitleLimits) -> 
     """这一行是否需要再切：任一侧超过**它自己那一侧**的上限就要切。"""
     return subtitle_limits.exceeds(measure_for(src, limits), calc_len(tr), limits)
 
+#: 孤立碎片阈值（显示宽度）：≈3~4 个汉字。刻意取**小的绝对值**而不是"全行百分比"——
+#: 百分比会把 `软件有好几款`（6 字）这种正常短段也误判成碎片，一误判就被降级成等分切分。
+_MIN_PART_WIDTH = 6.0
+
+
+def _align_validation_enabled() -> bool:
+    """是否校验 LLM 的对齐结果（`subtitle.align_validate`，默认开，见 core/subtitle_split.py）。"""
+    try:
+        return bool(load_key("subtitle.align_validate"))
+    except Exception:
+        return True
+
+
 def align_subs(src_sub: str, tr_sub: str, src_part: str) -> Tuple[List[str], List[str], str]:
     align_prompt = get_align_prompt(src_sub, tr_sub, src_part)
-    
+    num_parts = len([part for part in str(src_part).split('\n') if part.strip()])
+    validate = _align_validation_enabled()
+
     def valid_align(response_data):
         if 'align' not in response_data:
             return {"status": "error", "message": "Missing required key: `align`"}
-        if len(response_data['align']) < 2:
+        align = response_data['align']
+        if len(align) < 2:
             return {"status": "error", "message": "Align does not contain more than 1 part as expected!"}
+        if validate:
+            # ① 段数必须与源文一致；② 每段非空、不许有孤立碎片；
+            # ③ **拼接必须逐字等于整句译文** —— 重复连接词（"同时/同时也"）、漏词、改写都在这里拦下。
+            # 校验不过 → ask_gpt 会自动重试并把失败原因回注给模型（同一 prompt，命中缓存不重复付费）。
+            parts = [str(item.get(f'target_part_{i+1}', '')) for i, item in enumerate(align)]
+            if len(align) != num_parts:
+                return {"status": "error",
+                        "message": f"expected exactly {num_parts} parts, got {len(align)}"}
+            if not subtitle_split.translation_parts_ok(parts, tr_sub, min_width=_MIN_PART_WIDTH):
+                return {"status": "error",
+                        "message": ("concatenating target_part_* must reproduce the original "
+                                    "translation exactly: no added/duplicated/dropped words "
+                                    "(e.g. don't repeat a connective like 同时/also), no empty part, "
+                                    "and no isolated 1-word fragment. Re-split without rewriting.")}
         return {"status": "success", "message": "Align completed"}
 
     parsed = ask_gpt(align_prompt, response_json=True, valid_def=valid_align, log_title='align_subs')
@@ -179,7 +209,18 @@ def split_align_subs(src_lines: List[str], tr_lines: List[str],
                 tr_remerged = tr_lines[i]
             else:
                 split_src = split_sentence(src_lines[i], num_parts=2).strip()
-                src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
+                try:
+                    src_parts, tr_parts, tr_remerged = align_subs(src_lines[i], tr_lines[i], split_src)
+                except Exception as exc:  # noqa: BLE001 - 对齐不可用就降级，别让整行丢内容
+                    # LLM 对齐连续校验失败/网络失败 → 退回**机械等分**：拼接一定等于原译文、
+                    # 无重复、无漏词、无碎片；代价只是那一条的切点不如 LLM 精修漂亮。
+                    src_parts = [p for p in split_src.split('\n') if p.strip()] or [src_lines[i]]
+                    tr_parts = split_text_evenly(tr_lines[i], len(src_parts))
+                    if tr_parts is None:
+                        raise
+                    tr_remerged = tr_lines[i]
+                    console.print(f"[yellow]⚠️ 第 {i} 行 LLM 对齐不可用（{type(exc).__name__}），"
+                                  f"已退回机械等分切分[/yellow]")
         except Exception as e:
             # 单行切分失败不应该让整批静默失败：记录告警并保留原始行
             console.print(f"[yellow]⚠️ 第 {i} 行切分失败（保留原行）: {type(e).__name__}: {e}[/yellow]")

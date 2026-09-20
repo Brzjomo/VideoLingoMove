@@ -176,6 +176,120 @@ def merge_short_cues(rows: Sequence[dict], limits, *, min_duration: float = 0.8,
     return merged
 
 
+def translation_parts_ok(parts: Sequence[str], original: str, min_width: float = 6.0) -> bool:
+    """校验 LLM 把整句译文切成若干段的结果是否可用（纯函数，便于单测）。
+
+    只拦**确定坏了**的结果：
+      * 段数少于 2 或与源文段数不符（调用方负责传对齐后的 parts）；
+      * 任一段为空；
+      * **归一化后拼接 ≠ 原译文**：重复连接词（用户实测：`…程度 同时` + `同时也…`，
+        拼接出现两个"同时"）、漏词、改写，全都在这里被拦下；
+      * 出现**孤立碎片**：某段宽度 < `min_width`（默认 6 ≈ 3~4 个汉字）。
+        阈值刻意取"小绝对值"而**不是**"全行的百分比" —— 百分比会把
+        `软件有好几款`（6 字）这种正常短段也误判，一误判就被降级成等分切分，反而更差。
+
+    归一化：去掉空白与标点（`\\w` 之外全删），与 step6 的对齐口径一致。
+    """
+    import re as _re
+
+    from core import subtitle_limits as sl
+
+    parts = [str(part).strip() for part in parts]
+    if len(parts) < 2 or any(not part for part in parts):
+        return False
+    if any(sl.measure(part) < min_width for part in parts):
+        return False
+
+    def normalize(text: str) -> str:
+        return _re.sub(r"[^\w]", "", str(text))
+
+    return normalize("".join(parts)) == normalize(original)
+
+
+#: 行尾要抹掉的标点：句末标点 + 续句逗号（句中一律不动）
+_TERMINAL_MARKS = set("。．.!！?？;；:：…、，,")
+#: 收尾的引号/括号：只有在紧跟标点时才算"句末标点的一部分"（`…です。」` → `…です`），
+#: 单独出现时保留（`「はい」` 不该被削成 `「はい`）
+_CLOSING_MARKS = set("」』】）)〉》”’")
+
+
+def strip_terminal_punctuation(text) -> str:
+    """去掉**行尾**的句末标点，句中/行首的标点保持原样。
+
+    2026-09-20 用户要求：最终字幕的原文与译文都不要行尾标点，句中维持现状。
+    反复剥离直到稳定（`…です。」` / `…です！！` 都能一次到位）。
+    """
+    if text is None:
+        return ""
+    if isinstance(text, float) and text != text:      # NaN：别把它变成字符串 "nan" 写进字幕
+        return ""
+    value = str(text).rstrip()
+    while value:
+        last = value[-1]
+        if last in _TERMINAL_MARKS:
+            value = value[:-1].rstrip()
+            continue
+        if (last in _CLOSING_MARKS and len(value) > 1
+                and (value[-2] in _TERMINAL_MARKS or value[-2] in _CLOSING_MARKS)):
+            value = value[:-1].rstrip()
+            continue
+        break
+    return value
+
+
+def merge_broken_cuts(lines: Iterable[str], boundary_offsets, *,
+                      join_leading_particles: bool = True) -> List[str]:
+    """把"切在词中"的相邻行并回去（2026-09-20 实测事故的**治本**守卫）。
+
+    事故链条：`step3_1`（纯规则切分，**没有提示词可管**）把
+    `…そのキャラクターやイラストの魅力を探り、フィギュアとし | てその…`
+    从「として」中间劈开 → step4 只能把两个半句**各自翻译完整** → 出现
+    "…同时注重这一点" 与下一条"同时也注重…"的重复。提示词改不动这一层。
+
+    判定：相邻两行 `a + b` 的拼接点上，`len(a)` 必须是**合法切点**
+    （`boundary_offsets(combined)` 给出；调用方用 spaCy 的 `token.idx` 实现，
+    测试可注入假实现）—— 否则说明切在词里，合并回去。
+    辅助信号：下一行以日语助词/接续（`て/で/に/を/は/が/と/も/…`）开头时，即使
+    看似在 token 边界上也判为坏切点（"…とし | て…" 这种正是如此）。
+    """
+    result: List[str] = []
+    for raw in lines:
+        line = str(raw).strip()
+        if not line:
+            continue
+        if not result:
+            result.append(line)
+            continue
+        previous = result[-1]
+        combined = previous + line
+        cut = len(previous)
+        try:
+            ok = cut in set(boundary_offsets(combined))
+        except Exception:
+            ok = True                       # 拿不到边界信息就不动（宁可少并）
+        if ok and join_leading_particles and _starts_with_particle(line):
+            ok = False
+        if ok:
+            result.append(line)
+        else:
+            result[-1] = combined
+    return result
+
+
+#: 日语里"以此开头的行 = 从词中间被劈开"的字符（助词/接续/促音/长音/小假名）
+_LEADING_PARTICLES = set("てでにをはがともへのやかねよなずせさりっーゃゅょぁぃぅぇぉ")
+
+
+def _starts_with_particle(line: str) -> bool:
+    first = line[:1]
+    return bool(first) and first in _LEADING_PARTICLES
+
+
+def spaCy_boundaries(nlp, text: str) -> set:
+    """用 spaCy 的 token 起始偏移构造"合法切点"集合（供 step3_1 / step3_2 调用）。"""
+    return {token.idx for token in nlp(text)} | {len(text)}
+
+
 def rows_from_pairs(sources: Iterable[str], translations: Iterable[str],
                     timestamps: Optional[Iterable] = None) -> List[dict]:
     """把 step5 的三列拼成 `merge_short_cues` 需要的行结构（时间戳缺失时给 0）。"""

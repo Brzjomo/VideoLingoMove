@@ -1,4 +1,4 @@
-version: "2.1.2"
+version: "3.0.4"
 api:
   key: 'YOUR_API_KEY'
   base_url: 'https://api.deepseek.com'
@@ -143,6 +143,15 @@ subtitle:
   # 原文行是否也去掉标点（默认 false = 保留，日语字幕本来就用 、。；标点只影响显示，
   # 断句在 step3/step5 早就用过了）
   strip_punctuation_in_source: false
+  # 校验 LLM 的"译文对齐"结果（默认 true）：段数必须与源文一致、每段非空、**拼接必须逐字等于
+  # 整句译文**（重复连接词/漏词/改写一律拦下）、不许留孤立碎片。校验不过会让模型自纠重试，
+  # 仍不过就退回机械等分（拼接一定等于原文）。关掉 = 回到"允许模型对齐时改写"的旧行为。
+  align_validate: true
+  # 出口守卫（默认 true）：不许把词切开。step3_1 是**纯规则切分、没有提示词**，
+  # 2026-09-20 实测它把 `…フィギュアとし | てその…` 从「として」中间劈开，
+  # 于是 step4 把两个半句各自翻译完整 → "…同时注重这一点" / "同时也注重…" 重复。
+  # 现在在 step3_1 与 step3_2 的出口用 spaCy token 边界校验，坏切点就地并回相邻行。
+  merge_broken_lines: true
 
 # * Summary length, set low to 2k if using local LLM
 summary_length: 8000

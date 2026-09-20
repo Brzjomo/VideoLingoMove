@@ -15,11 +15,13 @@
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from core import subtitle_limits as sl  # noqa: E402
 from core import subtitle_split as ss  # noqa: E402
+from core import step5_splitforsub as s5  # noqa: E402
 
 
 def limits_for(src="ja", tgt="简体中文", mono=False):
@@ -147,6 +149,150 @@ class TestMergeShortCues(unittest.TestCase):
                          "也能在一定程度上把造型做出来", 214.4, 217.0)]
         merged = ss.merge_short_cues(rows, self.limits, min_duration=0.8, max_gap=0.35)
         self.assertEqual(len(merged), 1)
+
+
+class TestTranslationPartsGuard(unittest.TestCase):
+    """译文对齐结果的机械校验：只拦"确定坏了"的结果（2026-09-20 用户实测两类问题）。
+
+    ① 重复连接词：`…程度 同时` + `同时也看重…` → 拼接出现两个"同时"；
+    ② 孤立碎片：某段只剩 1~2 个字。
+    ⚠️ 故意**不**拦"数字 | 软件"这种"切开固定短语"：机械校验看不出来（两侧都不算碎片），
+    它由提示词里的黑名单规则负责（见 core/prompts_storage.get_align_prompt 第 5 条）。
+    """
+
+    def test_repeated_connective_is_rejected(self):
+        parts = ["重视能将其魅力发挥到何种程度 同时", "同时也看重它作为立体作品本身的魅力"]
+        self.assertFalse(ss.translation_parts_ok(parts, "重视能将其魅力发挥到何种程度，同时也看重它作为立体作品本身的魅力"))
+
+    def test_dropped_words_are_rejected(self):
+        self.assertFalse(ss.translation_parts_ok(["能制作手办", "原型的软件有好几款"],
+                                                 "能制作手办和车库套件原型的软件有好几款"))
+
+    def test_rewritten_part_is_rejected(self):
+        self.assertFalse(ss.translation_parts_ok(["能制作手办和 GK 原型的软件", "大约有好几款"],
+                                                 "能制作手办和 GK 原型的软件有好几款"))
+
+    def test_isolated_fragment_is_rejected(self):
+        self.assertFalse(ss.translation_parts_ok(["能制作手办和 GK 原型的", "软件"],
+                                                 "能制作手办和 GK 原型的软件"))
+
+    def test_clean_split_is_accepted(self):
+        parts = ["能制作手办和车库套件（GK）原型的数字", "软件有好几款"]
+        self.assertTrue(ss.translation_parts_ok(parts, "能制作手办和车库套件（GK）原型的数字软件有好几款"),
+                        "两侧都不算碎片时不该被拦（这类交给提示词黑名单，不是机械能判的）")
+
+    def test_punctuation_and_spacing_are_normalized(self):
+        self.assertTrue(ss.translation_parts_ok(["你好，世界有多大", "欢迎回来看看"],
+                                                "你好，世界有多大 欢迎回来看看"))
+
+    def test_empty_or_single_part_is_rejected(self):
+        self.assertFalse(ss.translation_parts_ok([], "任意"))
+        self.assertFalse(ss.translation_parts_ok(["只有一段"], "只有一段"))
+        self.assertFalse(ss.translation_parts_ok(["前半", "   "], "前半"))
+
+
+class TestAlignFallback(unittest.TestCase):
+    """LLM 对齐不可用时（校验连续失败/网络失败）退回机械等分，绝不写出重复/碎片。"""
+
+    def test_falls_back_to_even_split_when_align_raises(self):
+        limits = limits_for()
+        src = ["デジタルでフィギュアやガレージキットの原型を作ることができるソフトは複数存在しますが、"]
+        tr = ["能制作手办和车库套装（GK）原型的数字软件有好几款"]
+        with mock.patch.object(s5, "resolve_limits", return_value=limits), \
+                mock.patch.object(s5, "use_llm_sentence_split", return_value=True), \
+                mock.patch.object(s5, "get_source_language", return_value="ja"), \
+                mock.patch.object(s5, "_boundary_window", return_value=0.15), \
+                mock.patch.object(s5, "split_sentence", return_value="前半\n后半"), \
+                mock.patch.object(s5, "ask_gpt", side_effect=ValueError("validation failed")), \
+                mock.patch.object(s5, "load_key", return_value=1):
+            out_src, out_tr, _ = s5.split_align_subs(list(src), list(tr))
+        self.assertEqual(len(out_src), len(out_tr))
+        self.assertGreaterEqual(len(out_tr), 2, "应当退回等分切分而不是放弃切分")
+        self.assertEqual("".join(out_tr), tr[0], "等分切分必须拼接回原译文（无重复/漏词）")
+
+
+class TestMergeBrokenCuts(unittest.TestCase):
+    """出口守卫：不许把词切开（2026-09-20 事故 —— step3_1 把「として」劈成两行）。"""
+
+    def test_cut_inside_a_word_is_merged(self):
+        lines = ["そのキャラクターやイラストの魅力を探り、フィギュアとし",
+                 "てそのキャラクターやイラストの魅力をどこまで引き出せるかを重視しつつ、"]
+        merged = ss.merge_broken_cuts(lines, lambda text: set())   # 没有任何合法切点
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0], lines[0] + lines[1])
+
+    def test_legal_boundary_is_kept(self):
+        lines = ["最初の文です。", "次の文です。"]
+        merged = ss.merge_broken_cuts(lines, lambda text: set(range(len(text) + 1)))
+        self.assertEqual(merged, lines)
+
+    def test_leading_particle_is_always_merged(self):
+        """即使看似在 token 边界上，下一行以助词/接续开头也判为坏切点。"""
+        lines = ["これはテスト", "ですが、続きます。"]      # 以助词「で」开头
+        merged = ss.merge_broken_cuts(lines, lambda text: set(range(len(text) + 1)))
+        self.assertEqual(len(merged), 1)
+
+    def test_particle_rule_can_be_disabled(self):
+        lines = ["これはテスト", "ですが、続きます。"]
+        merged = ss.merge_broken_cuts(lines, lambda text: set(range(len(text) + 1)),
+                                      join_leading_particles=False)
+        self.assertEqual(len(merged), 2)
+
+    def test_blank_lines_are_skipped(self):
+        merged = ss.merge_broken_cuts(["A文です。", "  ", "B文です。"],
+                                      lambda text: set(range(len(text) + 1)))
+        self.assertEqual(merged, ["A文です。", "B文です。"])
+
+    def test_boundary_function_failure_keeps_lines(self):
+        """拿不到边界信息时不乱并（宁可少并，也不要把正常句子缝在一起）。"""
+        def boom(_text):
+            raise RuntimeError("nlp 不可用")
+
+        lines = ["A文です。", "B文です。"]
+        self.assertEqual(ss.merge_broken_cuts(lines, boom), lines)
+
+
+class TestStripTerminalPunctuation(unittest.TestCase):
+    """只去**行尾**句末标点（原文/译文都去），句中一律保持现状（2026-09-20 用户要求）。"""
+
+    def test_cjk_terminal_marks_removed(self):
+        for text, expected in (("これは文です。", "これは文です"),
+                               ("本当に？", "本当に"),
+                               ("すごい！", "すごい"),
+                               ("そうですね…", "そうですね"),
+                               ("続きます、", "続きます"),
+                               ("也看重它作为立体作品本身的魅力。", "也看重它作为立体作品本身的魅力")):
+            with self.subTest(text=text):
+                self.assertEqual(ss.strip_terminal_punctuation(text), expected)
+
+    def test_latin_terminal_marks_removed(self):
+        self.assertEqual(ss.strip_terminal_punctuation("Hello world."), "Hello world")
+        self.assertEqual(ss.strip_terminal_punctuation("Really?!"), "Really")
+
+    def test_closing_quote_removed_only_after_punctuation(self):
+        self.assertEqual(ss.strip_terminal_punctuation("これは文です。」"), "これは文です")
+        self.assertEqual(ss.strip_terminal_punctuation("「はい」"), "「はい」",
+                         "单独出现（前面不是标点）的收尾引号要保留")
+
+    def test_mid_sentence_punctuation_is_kept(self):
+        for text in ("そのキャラクターやイラストの魅力を探り、フィギュアとして",
+                     "重视能将其魅力发挥到何种程度 同时",
+                     "Hello, and welcome"):
+            with self.subTest(text=text):
+                self.assertEqual(ss.strip_terminal_punctuation(text), text)
+
+    def test_no_punctuation_is_unchanged(self):
+        self.assertEqual(ss.strip_terminal_punctuation("短句"), "短句")
+        self.assertEqual(ss.strip_terminal_punctuation(""), "")
+
+    def test_none_and_nan_become_empty_not_the_string_nan(self):
+        """空单元不能变成字符串 "nan"/"None" 写进字幕。"""
+        self.assertEqual(ss.strip_terminal_punctuation(None), "")
+        self.assertEqual(ss.strip_terminal_punctuation(float("nan")), "")
+
+    def test_repeated_marks_are_all_removed(self):
+        self.assertEqual(ss.strip_terminal_punctuation("本当に！！"), "本当に")
+        self.assertEqual(ss.strip_terminal_punctuation("本当に。」  "), "本当に")
 
 
 if __name__ == "__main__":

@@ -218,6 +218,19 @@ def split_sentences_by_meaning():
     for retry_attempt in range(3):
         sentences = parallel_split_sentences(sentences, max_length=limits.max_split_length, max_workers=load_key("max_workers"), nlp=nlp, retry_attempt=retry_attempt)
 
+    # 出口守卫：LLM 也可能把切点插在词中间（"…とし / て…"），同样并回去
+    try:
+        if load_key("subtitle.merge_broken_lines"):
+            from core.subtitle_split import merge_broken_cuts, spaCy_boundaries
+
+            before = len(sentences)
+            sentences = merge_broken_cuts(
+                sentences, lambda text: spaCy_boundaries(nlp, text))
+            if len(sentences) != before:
+                console.print(f"[cyan]🧩 合并被切在词中的行：{before} → {len(sentences)}[/cyan]")
+    except KeyError:
+        pass
+
     # 💾 save results
     with open('output/log/sentence_splitbymeaning.txt', 'w', encoding='utf-8') as f:
         f.write('\n'.join(sentences))

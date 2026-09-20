@@ -6,6 +6,7 @@ import time
 from difflib import SequenceMatcher
 import easy_util as eu
 from core.config_utils import load_key, load_key_or, get_joiner
+from core import subtitle_split
 from rich.panel import Panel
 from rich.console import Console
 import autocorrect_py as autocorrect
@@ -232,6 +233,11 @@ def align_timestamp(df_text, df_translate, subtitle_output_configs: list, output
         if load_key_or("subtitle.strip_punctuation_in_source", False):
             df_trans_time['Source'] = df_trans_time['Source'].apply(
                 lambda x: re.sub(r'[、。，！？]', ' ', str(x)).strip())
+        # 行尾句末标点一律去掉（原文 + 译文都去；**句中保持现状**，见用户 2026-09-20 要求）
+        for column in ('Source', 'Translation'):
+            if column in df_trans_time.columns:
+                df_trans_time[column] = df_trans_time[column].apply(
+                    subtitle_split.strip_terminal_punctuation)
 
     # Output subtitles 📜
     def generate_subtitle_string(df, columns):

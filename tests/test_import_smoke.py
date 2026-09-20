@@ -58,12 +58,20 @@ class TestPipelineModulesImport(unittest.TestCase):
         self.assertEqual(failures, [], "以下模块 import 失败：\n" + "\n".join(failures))
 
     def test_step6_exposes_the_keys_it_uses(self):
-        """step6 用到 `load_key_or`（原文行去标点的开关）—— 光 import 不够，这里点名。"""
+        """step6 用到 `load_key_or` 与 `subtitle_split` —— 光 import 模块不够，这里点名。
+
+        （2026-09-20 曾因漏 import `load_key_or` 而 NameError：函数体内的名字 import 时查不出来，
+        所以这条必须显式断言属性存在。）
+        """
         step6 = importlib.import_module("core.step6_generate_final_timeline")
         self.assertTrue(hasattr(step6, "load_key_or"),
                         "step6 必须 import load_key_or（2026-09-20 曾因此 NameError）")
+        self.assertTrue(hasattr(step6, "subtitle_split"),
+                        "step6 必须 import core.subtitle_split（去行尾标点要用它的纯函数）")
         self.assertFalse(step6.load_key_or("subtitle.strip_punctuation_in_source", False),
                          "默认应当是「原文行保留标点」")
+        self.assertEqual(step6.subtitle_split.strip_terminal_punctuation("これは文です。"),
+                         "これは文です")
 
 
 if __name__ == "__main__":
