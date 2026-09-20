@@ -170,8 +170,8 @@ def subtitle_length_controls():
             update_key("subtitle.auto_length_by_language", bool(auto_length))
             if auto_length:
                 # 打开时立刻按当前语言下发一次，避免"显示的还是手填值"
+                # （不再弹 toast：用户 2026-09-21 要求这块文案全部去掉）
                 subtitle_limits.apply_language_profile()
-                st.toast("📐 已按当前语言套用档位", icon="✅")
             st.rerun(scope="app")
 
         # 仅转录模式 + 关闭 LLM 断句时，粗切参数根本不参与（step3_2 直接用 spaCy 结果）
