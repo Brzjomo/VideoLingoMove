@@ -183,7 +183,7 @@ ask_gpt(prompt, response_json=True, valid_def=None, core/ask_gpt.py
 | `'sentence_splitbymeaning'` | `output/gpt_log/sentence_splitbymeaning.json` | `core/step3_2_splitbymeaning.py` | 调用量最大（每句一次） |
 | `'align_subs'` | `output/gpt_log/align_subs.json` | `core/step5_splitforsub.py` | 字幕对齐切分 |
 | `'polish_subs'` | `output/gpt_log/polish_subs.json` | `core/step5_2_polish_subs.py`（`polish_lines`，**每 20 行一次**） | 字幕润色（step5.2，可选，默认关）。**关思考时分区名改成 `polish_subs_nothink`**（见 §5.1） |
-| `'polish_audit'` | `output/gpt_log/polish_audit.json` | `core/step5_2_polish_subs.py`（`_audit_info_changes`，**对确实改动过的行每个批次一次**） | 润色审校：逐 id 判定 `info_changed`。同样有 `polish_audit_nothink` 分区 |
+| `'polish_audit'` | `output/gpt_log/polish_audit.json` | `core/step5_2_polish_subs.py`（`_audit_info_changes`，**对确实改动过的行每个批次一次**） | 润色审校：逐 id 判定 `info_changed`。**固定按模型默认档（思考开）跑，不随 `subtitle.polish_thinking` 换分区**，所以只有 `polish_audit` 一个分区（见 §5.1） |
 | `'subtitle_trim'` | `output/gpt_log/subtitle_trim.json` | `core/subtitle_trim.py` | 超长字幕压缩（由 step4_2 在 `duration > min_trim_duration` 时触发，`core/step4_2_translate_all.py`） |
 | `'translate_faithfulness'` | `output/gpt_log/translate_faithfulness.json` | `core/translate_once.py`（`f'translate_{step_name}'`，`step_name='faithfulness'`） | 直译阶段 |
 | `'translate_expressiveness'` | `output/gpt_log/translate_expressiveness.json` | `core/translate_once.py`（`step_name='expressiveness'`） | 反思+意译阶段 |
@@ -262,7 +262,7 @@ ask_gpt(prompt, response_json=True, valid_def=None, core/ask_gpt.py
 | `bypass_cache=True` | 只跳过**读取**，结果仍会写入日志。`core/translate_once.py` 与 `core/step3_2_splitbymeaning.py` 在重试轮次用它替代了历史上的 `prompt + ' ' * retry` |
 | 改 prompt 字符串 | 历史做法，会污染日志且语义晦涩；现仓库内已无此写法 |
 
-**第四个参数 `extra_body`（2026-09-21 新增）**：原样透传给 OpenAI SDK 的额外请求体，`None`（默认）时**连键都不加**，所以老调用方的请求体一个字节都没变。当前**唯一**使用它的是 `core/step5_2_polish_subs.py`，`subtitle.polish_thinking` 关掉时传 `{"thinking": {"type": "disabled"}}` 关掉推理模型的思考（实测 20 行/批 ≈ 20,600 → 1,788 tokens），**同一个值同时传给两个调用点**：润色调用 `polish_lines` 与审校调用 `_audit_info_changes`（该函数的 docstring 写明理由：用户在 2026-09-21 要的这个开关，语义就是"控制这一步的思考"，只关一半会让人以为"关了还在花思考 token"）。
+**第四个参数 `extra_body`（2026-09-21 新增）**：原样透传给 OpenAI SDK 的额外请求体，`None`（默认）时**连键都不加**，所以老调用方的请求体一个字节都没变。当前**唯一**使用它的是 `core/step5_2_polish_subs.py::polish_lines`，`subtitle.polish_thinking` 关掉时传 `{"thinking": {"type": "disabled"}}` 关掉推理模型的思考（实测 20 行/批 ≈ 20,600 → 1,788 tokens）。**只有润色调用带它**：审校调用 `_audit_info_changes` 没有 `extra_body` 形参，永远按模型默认档（思考开）跑 —— 用户 2026-09-21 定下的规则是"思考开关只管润色，其他包括审校默认都开思考"，该函数 docstring 写明两条理由：审校是这一步的安全网（兜住机械护栏拦不住的"换词式增补"），保持默认档更可靠；而且它很便宜（实测一次 3 行审校 ≈ 860 tokens，相比润色那一次的 1,788~20,600 tokens 可以忽略）。
 
 它**不是**一个"绕过缓存"的手段，也**不参与缓存键**：
 
@@ -270,8 +270,8 @@ ask_gpt(prompt, response_json=True, valid_def=None, core/ask_gpt.py
 | --- | --- |
 | 缓存匹配只看 `(model, prompt)`，按 `log_title` 分区 | `check_ask_gpt_history(prompt, model, log_title, allow_cache=…)`（`core/ask_gpt.py`）；`extra_body` 不参与比较 |
 | 缓存条目也不记录它 | `save_log` 只写 `model` / `prompt` / `response` / `message` 四个字段（`core/ask_gpt.py`，见 §4.1） |
-| **调用方自己按档位分区** | `core/step5_2_polish_subs.py::_log_title(base, extra_body)`：`extra_body is None`（开思考）返回 `base`，否则返回 `f"{base}_nothink"`。step5.2 的**两个**调用都经它取名，于是落盘是 `polish_subs.json` / `polish_subs_nothink.json`、`polish_audit.json` / `polish_audit_nothink.json` 四个文件，两档各存各的缓存 |
-| 后果 | **切换 `extra_body` 不会命中另一档的缓存**：分区名变了，旧档位的条目在新分区里根本看不到（改名逻辑见上一行的 `_log_title`；代价是两档各花一次钱）。所以在 step5.2 里**切思考开关立即生效**，不需要为了它删 json；只有**改提示词文本**（同一分区内换 prompt）才要删对应的 `output/gpt_log/polish_subs*.json` / `polish_audit*.json`（重跑成本见 [`../02-pipeline/05-字幕切分与时间轴.md`](../02-pipeline/05-字幕切分与时间轴.md) §7.8）。反过来，同一档位重跑命中自己的分区时也**不重复付费** |
+| **调用方自己按档位分区** | `core/step5_2_polish_subs.py::_log_title(base, extra_body)`：`extra_body is None`（开思考）返回 `base`，否则返回 `f"{base}_nothink"`。**只给润色调用取名**（`_log_title('polish_subs', extra_body)`），于是润色有 `polish_subs.json` / `polish_subs_nothink.json` 两个文件、两档各存各的缓存；审校调用不带 `extra_body`，`log_title` 恒为 `'polish_audit'`（只有这一个分区） |
+| 后果 | **切换 `extra_body` 不会命中另一档的缓存**：润色的分区名变了，旧档位的条目在新分区里根本看不到（改名逻辑见上一行的 `_log_title`；代价是两档各花一次钱）。所以在 step5.2 里**切思考开关立即生效**，不需要为了它删 json；只有**改提示词文本**（同一分区内换 prompt）才要删对应的 `output/gpt_log/polish_subs*.json` / `polish_audit.json`（重跑成本见 [`../02-pipeline/05-字幕切分与时间轴.md`](../02-pipeline/05-字幕切分与时间轴.md) §7.8）。反过来，同一档位重跑命中自己的分区时也**不重复付费** |
 | 配套语义 | `use_cache=False` / `bypass_cache=True` 的含义不变（见上表）；`extra_body` 本身仍然**没有**参数维度的缓存键 —— 今天靠"调用方换 `log_title` 分区"，新调用方要"换参数即重算"，要么照抄 `_log_title` 这个做法，要么改 prompt 或删对应 json |
 
 **`LOCK` 的作用与粒度**（`core/ask_gpt.py`）：这是一个模块级 `threading.Lock`，**只**保护 `save_log` 的读-改-写。缓存读取 `check_ask_gpt_history`与真正的 HTTP 请求都**不在**锁内。含义是：
@@ -354,8 +354,8 @@ response_format = {"type": "json_object"} if response_json and model in llm_supp
 | `get_prompt_expressiveness(faithfulness_result, lines, shared_prompt)` | 反思 + 意译（Step 2）：对直译结果逐行挑毛病再改写 | JSON 每项含 `origin/direct/reflection/free` 四键，并显式要求 `free` 不许留空 | `core/translate_once.py` | 遍历 `faithfulness_result.items` 生成样例，因此输出 key 与直译结果绑定；`free` 的空值会污染最终字幕（`core/translate_once.py`）；**反思清单里"译文过于啰嗦"的后半句已删除**（现为 "Check the conciseness of the subtitles, point out where the translation is too wordy"），长度约束改由 `core/subtitle_trim.py` 与 `subtitle.max_length`/`target_multiplier` 在 step5/step4_2 强制 |
 | `get_align_prompt(src_sub, tr_sub, src_part)` | 依据源语已切分版本，对目标语字幕做对齐切分 | JSON `{"analysis": str, "align":[{"src_part_i":..., "target_part_i":...}]}` | `core/step5_splitforsub.py` | 用 `.format` 渲染（**不是 f-string**，）；提示词里新增裸 `{}` 会抛 `KeyError`；`num_parts = len(src_part.split('\n'))`，当 `src_part` 无换行时 `num_parts=1`，与 `valid_align` 的 `len>=2` 要求冲突（`core/step5_splitforsub.py`）；第 3 条有**两版**（`_ALIGN_RULE3_LIGHT` / `_ALIGN_RULE3_STRICT`，由 `core.config_utils.align_allow_rewrite()` 选择，两版都允许**移动边界**），两版都只约束"衔接是否悬空"、**都不要求每行自足**（第 7 条要的是**可解析**：不以悬空助词/孤零零的连接词开头、不切在短语中间）——改措辞时不要写回"每行单独读起来是通顺的句子"（`tests/test_prompt_contract.py::PromptContractTest::test_align_prompt_never_asks_for_self_contained_lines` 会拦） |
 | `get_subtitle_trim_prompt(text, duration)` | 字幕朗读时长不够时压缩字幕文本 | JSON `{"analysis": str, "result": str}`；`result` 需保持原语言 | `core/subtitle_trim.py`（经 `check_len_then_trim` → 调 `ask_gpt`） | 同为 `.format` 渲染；`duration` 单位是**秒**（`core/subtitle_trim.py` 算出可用时长、 与它比较）；`rule` 变量在函数内定义，`.format` 只填 `text`/`duration`/`rule` 三个占位符 |
-| `get_polish_prompt(rows, max_width, src_language="")` | step5.2 字幕润色：把**已译好的**逐条字幕改成更自然的措辞（`rows` 是 `[(id, source, current), …]`，`current` 是现有译文） | JSON `{"lines":[{"id": int, "polished": str, "changed": bool}]}`；**一 id 一条、顺序不变**，不许合并/拆分行，不许增删信息、不许补主语/宾语，专名与带单位数字原样保留，宽度上限写进提示词（`{max_width:.0f}` 显示宽度，中文 1 字 = 1.75）、**不许比当前行更长**、行尾不加标点、未改动要写 `"changed": false` | `core/step5_2_polish_subs.py`（经 `ask_gpt(log_title='polish_subs')`；关思考时分区名是 `polish_subs_nothink`） | ⚠️ 它**不是**翻译步骤（译文本就已存在），所以**不能**把提示词改成"要求每行自足/补全成完整句子"——那正是 step5 的 B 方案明确禁止的（见上一条 `get_align_prompt` 的说明与 `tests/test_prompt_contract.py::PromptContractTest::test_polish_prompt_keeps_the_line_contract`）；改文字即成新缓存键，同一视频重跑会重新付费 |
-| `get_polish_audit_prompt(pairs, src_language="")` | 润色审校：对**确实改动过**的行逐一判断是否增删/篡改了**信息**（`pairs` 是 `[(id, original, polished), …]`） | JSON `{"audit":[{"id": int, "info_changed": bool, "reason": str}]}`；提示词明确"只改措辞、换语序、增删虚词/助词/连接词都算 `false`"，只有补事实、漏信息、改数字与单位、改施受关系、把一次说的说两遍才算 `true` | `core/step5_2_polish_subs.py`（经 `ask_gpt(log_title='polish_audit')`，由 `_audit_info_changes(pairs, stats, extra_body)` 带**与润色调用相同**的 `extra_body`；关思考时分区名是 `polish_audit_nothink`） | 机械护栏（覆盖率/长度/数字/重复）拦不住"换词式增补"，这一步是补那个缺口的；**调用本身失败时 step5.2 会放行全部改动**（只告警，不回退），见 [`../02-pipeline/05-字幕切分与时间轴.md`](../02-pipeline/05-字幕切分与时间轴.md) §7.8 |
+| `get_polish_prompt(rows, max_width, src_language="")` | step5.2 字幕润色：把**已译好的**逐条字幕改成更自然的措辞（`rows` 是 `[(id, source, current), …]`，`current` 是现有译文） | JSON `{"lines":[{"id": int, "polished": str, "changed": bool}]}`；**一 id 一条、顺序不变**，不许合并/拆分行，不许增删信息、不许补主语/宾语，专名与带单位数字原样保留，宽度上限写进提示词（`{max_width:.0f}` 显示宽度，中文 1 字 = 1.75）、**不许比当前行更长**、行尾不加标点、未改动要写 `"changed": false` | `core/step5_2_polish_subs.py`（经 `ask_gpt(log_title='polish_subs')`；关思考时分区名是 `polish_subs_nothink`，`extra_body` 只由这一次调用携带） | ⚠️ 它**不是**翻译步骤（译文本就已存在），所以**不能**把提示词改成"要求每行自足/补全成完整句子"——那正是 step5 的 B 方案明确禁止的（见上一条 `get_align_prompt` 的说明与 `tests/test_prompt_contract.py::PromptContractTest::test_polish_prompt_keeps_the_line_contract`）；改文字即成新缓存键，同一视频重跑会重新付费 |
+| `get_polish_audit_prompt(pairs, src_language="")` | 润色审校：对**确实改动过**的行逐一判断是否增删/篡改了**信息**（`pairs` 是 `[(id, original, polished), …]`） | JSON `{"audit":[{"id": int, "info_changed": bool, "reason": str}]}`；提示词明确"只改措辞、换语序、增删虚词/助词/连接词都算 `false`"，只有补事实、漏信息、改数字与单位、改施受关系、把一次说的说两遍才算 `true` | `core/step5_2_polish_subs.py`（经 `ask_gpt(log_title='polish_audit')`，由 `_audit_info_changes(pairs, stats)` 调起 —— 该函数**没有 `extra_body` 形参**，所以审校**不跟随** `subtitle.polish_thinking`，恒按模型默认档（思考开）跑，分区也恒为 `polish_audit`） | 机械护栏（覆盖率/长度/数字/重复）拦不住"换词式增补"，这一步是补那个缺口的（因此保持默认档更可靠；实测一次 3 行审校 ≈ 860 tokens，相对润色调用的 1,788~20,600 tokens 可以忽略）；**调用本身失败时 step5.2 会放行全部改动**（只告警，不回退），见 [`../02-pipeline/05-字幕切分与时间轴.md`](../02-pipeline/05-字幕切分与时间轴.md) §7.8 |
 
 > ⚠️ 函数名核实结论：`core/prompts_storage.py` 里**没有** `get_translate_prompt`，也**没有** `get_reflect_prompt`。翻译相关的两个函数真名是 `get_prompt_faithfulness`（直译）与 `get_prompt_expressiveness`（含义译，**反思步骤写在它的提示词正文里**，对应 JSON 字段 `reflection`）。同理也没有 `get_summary` 之类的提示词函数——`get_summary` 是步骤函数，在 `core/step4_1_summarize.py`。此外 `get_correct_text_prompt` 属于**已删除的 TTS 链路**，已不存在。
 
@@ -419,7 +419,7 @@ response_format = {"type": "json_object"} if response_json and model in llm_supp
 | `transcription_only` | `false` | `core/step4_2_translate_all.py`：为真时**完全跳过所有翻译 LLM 调用**，直接把源文复制成译文 |
 | `min_trim_duration` | `3.5` | `core/step4_2_translate_all.py`：只有 `duration` 超过它才调 `check_len_then_trim`（即 `subtitle_trim` 提示词） |
 | `pause_before_translate` | `false` | `st.py`：为真时在翻译前 `input` 阻塞等待人工改 `output/log/terminology.json` |
-| `subtitle.polish_thinking` | `true` | **2026-09-21 新增**。决定 step5.2 两个调用（润色 `polish_lines` 与审校 `_audit_info_changes`）是否带 `extra_body={"thinking": {"type": "disabled"}}`（关掉思考；实测 20 行/批 −91% tokens），并顺带让 step5.2 把覆盖率门槛收紧到 0.85；关思考时两个调用还各自换到 `_nothink` 缓存分区（见 §5.1），所以**切换立即生效** |
+| `subtitle.polish_thinking` | `true` | **2026-09-21 新增**。**只管润色调用**：决定 `polish_lines` 是否带 `extra_body={"thinking": {"type": "disabled"}}`（关掉思考；实测 20 行/批 −91% tokens），并顺带让 step5.2 把覆盖率门槛收紧到 0.85；关思考时润色换到 `_nothink` 缓存分区（见 §5.1，所以**切换立即生效**）。审校调用 `_audit_info_changes` **不跟随**这个开关（无 `extra_body` 形参，恒按默认档、恒落 `polish_audit` 分区），见 §5.1 |
 
 ## 七、技术要点与坑
 
@@ -437,7 +437,7 @@ response_format = {"type": "json_object"} if response_json and model in llm_supp
 
 - **缓存有 model 维度，但没有 `target_language` 维度**：`check_ask_gpt_history(prompt, model, log_title)` 会同时比 `model`（`core/ask_gpt.py`），所以换供应商不会串味；但**只改目标语言、不改 prompt 之外的任何东西**时，prompt 字符串本身变了（语言被写进正文），仍会正常失效——真正没有覆盖的是"同名同 prompt、换了 `log_title` 之外的语义"这类情况。
 - **缓存检查早于 API key 校验**（在 之前），所以把 `api.key` 清空后重跑，仍可能全程「成功」——直到遇到一个未缓存的 prompt 才报 `API_KEY is missing`。
-- **"调用参数"本身不进键，但调用方可以自己造一层**：`extra_body` 不参与匹配（`core/ask_gpt.py`），所以 step5.2 用 `core/step5_2_polish_subs.py::_log_title` 把思考档位写进**分区名**（§5.1 的表），于是"切思考开关"表现为"换了一个 `log_title`"、立即生效。反过来说：**只有"提示词文本变了"与"`log_title` 变了"会让缓存失效** —— 其余旋钮里，凡会改动 prompt 内容的（如 `BATCH_SIZE` 改了每批的行集合、`polish_long_lines_only` 改了送哪些行）都会重新付费，而纯粹改"请求参数"的（如 `extra_body`）只有靠 `log_title` 分区才生效。
+- **"调用参数"本身不进键，但调用方可以自己造一层**：`extra_body` 不参与匹配（`core/ask_gpt.py`），所以 step5.2 用 `core/step5_2_polish_subs.py::_log_title` 把思考档位写进**润色调用的**分区名（§5.1 的表；审校不带 `extra_body`，不参与这层分区），于是"切思考开关"表现为"换了一个 `log_title`"、立即生效。反过来说：**只有"提示词文本变了"与"`log_title` 变了"会让缓存失效** —— 其余旋钮里，凡会改动 prompt 内容的（如 `BATCH_SIZE` 改了每批的行集合、`polish_long_lines_only` 改了送哪些行）都会重新付费，而纯粹改"请求参数"的（如 `extra_body`）只有靠 `log_title` 分区才生效。
 
 **清理方法（PowerShell，在项目根目录执行）**：
 
@@ -590,7 +590,7 @@ Get-Content output\cost.txt
 | 缓存带 model 维度 | 修改 `api.model` 指向另一个模型后重跑同一 prompt——会**重新请求**，而不是命中旧模型的答案（`core/ask_gpt.py`） |
 | 校验失败只影响最后一次日志 | 临时把 `core/step4_1_summarize.py` 的 `required_keys` 改成不存在的键，观察 `error.json` **只新增 1 条**，且 `message` 是校验器返回的真实原因 |
 | `bypass_cache` 生效 | 把 `core/translate_once.py` 的 `bypass_cache=retry > 0` 临时改成 `False`，重跑同一个块——重试会命中缓存而不再发请求 |
-| `extra_body` **本身不进缓存键**，但 step5.2 按档位分区 | 关掉 `subtitle.polish_thinking` 后重跑 `python -m core.step5_2_polish_subs`：调用走的是 `_log_title` 给出的新分区名，条目写进 `output/gpt_log/polish_subs_nothink.json`（审校同理 `polish_audit_nothink.json`），**不会**增加 `polish_subs.json` 的条目数、也不会命中里面开思考那条响应 —— 结果立即按关思考档位重算，不需要删任何 json |
+| `extra_body` **本身不进缓存键**，但 step5.2 按档位分区 | 关掉 `subtitle.polish_thinking` 后重跑 `python -m core.step5_2_polish_subs`：**润色**调用走的是 `_log_title('polish_subs', extra_body)` 给出的新分区名，条目写进 `output/gpt_log/polish_subs_nothink.json`，**不会**增加 `polish_subs.json` 的条目数、也不会命中里面开思考那条响应 —— 结果立即按关思考档位重算，不需要删任何 json。审校两次都写 `polish_audit.json`（它不带 `extra_body`，两档共用同一分区） |
 | base_url 归一化 | `python -c "from core.ask_gpt import fix_base_url; print(fix_base_url('https://ark.cn-beijing.volces.com'))"` → `https://ark.cn-beijing.volces.com/api/v3` |
 
 ## 十、相关文档
