@@ -9,7 +9,7 @@ source_files:
  - core/all_whisper_methods/tos_service.py
  - core/all_whisper_methods/demucs_vl.py
 status: verified
-last_verified: 2026-09-16
+last_verified: 2026-09-21
 ---
 
 # 语音识别 ASR（step2）
@@ -232,7 +232,7 @@ transcribe core/step2_whisperX.py
 | CPU 参数 | | `batch_size = 1`，`compute_type = "int8"` |
 | 模型名 | | `load_whisper_model_name(WHISPER_LANGUAGE)`：`zh` 强制 `Huan69/Belle-whisper-large-v3-zh-punct-fasterwhisper`，其余用 `load_key("whisper.model")` |
 | 本地模型优先 | | `resolve_whisper_model(model_name, MODEL_DIR)`：先用 `_complete_model_directory`（，要求 `config.json`/`model.bin`/`tokenizer.json` **都存在且非空**）判断本地目录是否完整，不完整则打印警告并交回 HF 仓库名 |
-| VAD / ASR 选项 | | `vad_options = {"vad_onset": 0.500, "vad_offset": 0.363}`；`asr_options = {"temperatures": [0], "initial_prompt": ""}` |
+| VAD / ASR 选项 | | `vad_options = {"vad_onset": 0.500, "vad_offset": 0.363}`；`asr_options = {"temperatures": [0], "initial_prompt": <见下>}`。`initial_prompt` 的取值是 `load_key_or("whisper.initial_prompt", "") or default_initial_prompt(WHISPER_LANGUAGE)`：**留空**时按识别语言取一句**中性**示例（`default_initial_prompt`，内置表只覆盖 ja/zh/en/ko/es/fr/de/it/pt/ru；其他语种返回空串）——目的只是让 Whisper 输出**带标点**（2026-09-20 实测：留空时日语 6 分钟只出 27 个「。」，下游 step3 没有边界可用 → 只能按宽度硬切，一句话被劈成两条，见 `core/subtitle_split.py` 与 [`05-字幕切分与时间轴.md`](05-字幕切分与时间轴.md)）。⚠️ 本行此前写的 `"initial_prompt": ""` **已过时**；也**没有**"设成空就等于旧行为"这回事——留空即回落到内置默认，只有未被内置表覆盖的语种才是真空 |
 | auto 语言 | | `whisper_language = None if 'auto' in WHISPER_LANGUAGE else WHISPER_LANGUAGE`（`in` 是子串判断） |
 | 加载模型 | | `whisperx.load_model(model_name, device, compute_type=compute_type, language=whisper_language, vad_options=vad_options, asr_options=asr_options, download_root=MODEL_DIR)` |
 | 临时 wav | | `tempfile.NamedTemporaryFile(suffix='.wav', delete=False)` |
@@ -245,7 +245,7 @@ transcribe core/step2_whisperX.py
 | 释放显存 ① | | `gc.collect` + `torch.cuda.empty_cache` + `del model` |
 | 写回语言 | | `save_language(result['language'])` → 过滤后 `update_key("whisper.detected_language", language)` |
 | 中文一致性检查 | | `if result['language'] == 'zh' and WHISPER_LANGUAGE != 'zh': raise ValueError("Please specify the transcription language as zh and try again!")`（**先写配置再抛错**） |
-| 对齐 | | `core/align_model.load_align_model(language_code=result["language"], device=device, model_dir=MODEL_DIR)` —— **2026-09-20 起不再直接调 `whisperx.load_align_model`**，随后仍是 `whisperx.align(result["segments"], model_a, metadata, audio_tensor, device, return_char_alignments=False)`。包这一层是因为对齐模型**要联网下**、而上游失败时给的报错全是误导（见 [`../05-guides/05-常见故障排查.md`](../05-guides/05-常见故障排查.md)「对齐模型」一节）。取模型的顺序：① 本地目录 `<model_dir>/align/<语言>/`（手动下载放这里，完全离线）；② 按端点顺序（官方 → hf-mirror）把 HF 权重下进 `_model_cache`（`models--<org>--<name>` 布局），成功后用 `model_cache_only=True` 加载；③ 全失败抛 `AlignModelUnavailable`，消息里带下载页 / 文件清单 / 放置目录。语种表来自 whisperx：**en/fr/de/es/it 走 torchaudio**（`WAV2VEC2_*`，认 `TORCH_HOME`），**ja/zh/ko 等走 HF**（`DEFAULT_ALIGN_MODELS_HF`，如 `jonatasgrosman/wav2vec2-large-xlsr-53-japanese`）；列全部用 `python -m core.align_model`，预下载用 `python -m core.align_model ja`。whisperx 对没有默认对齐模型的语言照旧抛 `ValueError("No default align-model for language: …")`。<br>⚠️ 本行此前写的"**没有传 `model_dir`**、对齐模型落在 `~/.cache/torch|huggingface`、**不进 `_model_cache`**"**已过时**：`runtime_libraries.apply_cache_env()` 把 `HF_HOME`/`TORCH_HOME` 指到项目内，调用处也显式传了 `model_dir=MODEL_DIR` —— 实测日语对齐权重落在 `_model_cache\models--jonatasgrosman--wav2vec2-large-xlsr-53-japanese`，英语的 torchaudio 权重在 `_model_cache\wav2vec2_fairseq_base_ls960_asr_ls960.pth` |
+| 对齐 | | `core/align_model.load_align_model(language_code=result["language"], device=device, model_dir=MODEL_DIR)` —— **2026-09-20 起不再直接调 `whisperx.load_align_model`**，随后仍是 `whisperx.align(result["segments"], model_a, metadata, audio_tensor, device, return_char_alignments=False)`。包这一层是因为对齐模型**要联网下**、而上游失败时给的报错全是误导（见 [`../05-guides/05-常见故障排查.md`](../05-guides/05-常见故障排查.md)「对齐模型」一节）。取模型的顺序：① 本地目录 `<model_dir>/align/<语言>/`（手动下载放这里，完全离线）；② 按端点顺序（官方 → hf-mirror）把 HF 权重下进 `_model_cache`（`models--<org>--<name>` 布局），成功后用 `model_cache_only=True` 加载；③ 全失败抛 `AlignModelUnavailable`，消息里带下载页 / 文件清单 / 放置目录。语种表来自 whisperx：**en/fr/de/es/it 走 torchaudio**（`WAV2VEC2_*`，认 `TORCH_HOME`），**ja/zh/ko 等走 HF**（`DEFAULT_ALIGN_MODELS_HF`，如 `jonatasgrosman/wav2vec2-large-xlsr-53-japanese`）；列全部用 `python -m core.align_model`，预下载用 `python -m core.align_model ja`。whisperx 对没有默认对齐模型的语言照旧抛 `ValueError("No default align-model for language: …")`。<br>⚠️ 本行此前写的"**没有传 `model_dir`**、对齐模型落在 `~/.cache/torch\|huggingface`、**不进 `_model_cache`**"**已过时**：`runtime_libraries.apply_cache_env()` 把 `HF_HOME`/`TORCH_HOME` 指到项目内，调用处也显式传了 `model_dir=MODEL_DIR` —— 实测日语对齐权重落在 `_model_cache\models--jonatasgrosman--wav2vec2-large-xlsr-53-japanese`，英语的 torchaudio 权重在 `_model_cache\wav2vec2_fairseq_base_ls960_asr_ls960.pth` |
 | 释放显存 ② | | 再次 `gc.collect` + `empty_cache` + `del model_a` |
 | 时间戳回加偏移 | | 对每个 `segment` 的 `start`/`end` 以及每个 `word` 的 `start`/`end` 统一 `+= start`（段内相对时间 → 全音频绝对时间） |
 | 异常 | | 打印后原样 `raise`（无重试、无降级） |
@@ -413,6 +413,7 @@ UI 的「识别语言」下拉框现在**有**「🌐 自动检测」选项（�
 | `whisper.model` | `core/step2_whisperX.py` | 默认 `'large-v3'`；**仅非中文生效**（中文强制 Belle，） |
 | `whisper.language` | `core/step2_whisperX.py, 168, 240` | 指定识别语言；含 `'auto'` 时向 WhisperX 传 `language=None` |
 | `whisper.detected_language` | 写：`core/all_whisper_methods/whisperX_utils.py`（两个引擎都会写，但先过滤 `None`/空串/`'auto'`）；读：统一走 `core/config_utils.py` `get_source_language` | 由 `save_language` 回写；`update_key("whisper.language", ...)` 时会同步本键（选 auto 除外） |
+| `whisper.initial_prompt` | `core/step2_whisperX.py`（`transcribe_audio_with_whisper`，`load_key_or` 读） | **2026-09-20 新增**，模板默认 `''`：留空 = 按识别语言用 `default_initial_prompt` 的内置中性示例（让 Whisper 出标点）；非空 = 原样传入。⚠️ 只影响**新跑**的识别（`cleaned_chunks.xlsx` 或转录缓存命中时根本不经过这里）；**不改** `_asr_cache_settings` 的缓存身份，所以改它不会让旧缓存失效 |
 | `model_dir` | `core/step2_whisperX.py, 119, 170` | 默认 `'./_model_cache'`（`config.yaml`），同时作为 `download_root` 与本地模型目录前缀 |
 | `volcano_asr.app_id` | `volcano_asr.py`；校验 `step2_whisperX.py` | 缺失 → 回退 Whisper |
 | `volcano_asr.access_token` | `volcano_asr.py`；校验 `step2_whisperX.py` | 缺失 → 回退 Whisper |

@@ -11,7 +11,7 @@ source_files:
  - .streamlit/config.toml
  - st.py
 status: partially-obsolete
-last_verified: 2026-09-16
+last_verified: 2026-09-21
 ---
 
 > ## ⚠️ 本文部分内容已在「重构 Round 1」后失效
@@ -290,7 +290,7 @@ def config_input(label, key, help=None):
 
 > ⚠️ 旧版本此处还列有 `tts_method` 与各 TTS 引擎子键（`sf_fish_tts.*` / `openai_tts.*` / `fish_tts.*` / `azure_tts.*` / `gpt_sovits.*` / `edge_tts.*`）——Dubbing Settings 已删除，这些键也不在 `config.example.yaml` 中，UI 无法再读写它们。
 >
-> 另外 `max_split_length` 与 `subtitle.max_length` 的控件在**侧边栏**的「✂️ 字幕长度调节」expander 里（`st_components/sidebar_setting.py::subtitle_length_controls`，2026-09-20 从主区搬过来）；这两个值默认由 `core/subtitle_limits.py` 按语言档位自动管理（切「识别语言」/改「目标语言」即覆盖，见 [`../01-entrypoints/01-Streamlit主应用入口.md`](../01-entrypoints/01-Streamlit主应用入口.md) §5）。1。
+> **「✂️ 字幕长度调节」面板**（`st_components/sidebar_setting.py::subtitle_length_controls`，2026-09-20 从主区搬进侧边栏）是另一处写侧，它读写三个键：`subtitle.auto_length_by_language`（开关「按语言自动设置（切换语言即覆盖）」）、`max_split_length`、`subtitle.max_length`（两个 `st.number_input`，自动模式或"仅转录+关断句"时置灰），另有「保存手填值」与「恢复当前语言推荐值」（`subtitle_limits.apply_language_profile(force=True)`）两个按钮；切「识别语言」/改「目标语言」/切「仅转录」时由 `sync_subtitle_lengths()` 按档位覆盖，详见 [`../01-entrypoints/01-Streamlit主应用入口.md`](../01-entrypoints/01-Streamlit主应用入口.md) §5 与 [`../04-interfaces/01-配置文件与参数.md`](01-配置文件与参数.md) §6.2。
 
 ### 6.2 只在 `config.yaml` 里、UI 不暴露的键
 
@@ -300,8 +300,8 @@ def config_input(label, key, help=None):
 | --- | --- |
 | 版本/元信息 | `version` |
 | 下载 | `ytb_resolution`*（只作默认值，UI 不回写）、`youtube.cookies_path`、`youtube.proxy`（**合并新增**，无控件）、`allowed_video_formats`、`allowed_audio_formats`（只作 `file_uploader` 的 `type`） |
-| ASR | `whisper.model`*、`whisper.detected_language`、`whisper.cache`（合并新增，可缺省） |
-| 字幕/翻译 | `subtitle.target_multiplier`*、`subtitle.align_on_mismatch`、`summary_length`*、`max_workers`*、`reflect_translate`*、`pause_before_translate`*（`max_split_length` 与 `subtitle.max_length` 见 §6.1 的说明） |
+| ASR | `whisper.model`*、`whisper.detected_language`、`whisper.cache`（合并新增，可缺省）、`whisper.initial_prompt`（**2026-09-20 新增**，留空=按语言用内置中性示例） |
+| 字幕/翻译 | `subtitle.target_multiplier`*、`subtitle.align_on_mismatch`*、`subtitle.align_validate`、`subtitle.align_allow_rewrite`、`subtitle.boundary_window`、`subtitle.merge_short_cues`、`subtitle.short_cue_min_duration`、`subtitle.merge_max_gap`、`subtitle.strip_punctuation_in_source`、`subtitle.merge_broken_lines`、`subtitle.length_profiles`（以上九个为 **2026-09-20 新增**，均无控件）、`summary_length`*、`max_workers`*、`reflect_translate`*、`pause_before_translate`*（`max_split_length` / `subtitle.max_length` / `subtitle.auto_length_by_language` 见 §6.1） |
 | 其它 | `model_dir`、`llm_support_json`、`spacy_model_map`、`language_split_with_space`、`language_split_without_space`、`tos.public_url_prefix`、`min_trim_duration`、`speed_factor.max` |
 | API 预设源 | `deepseek_api.*`、`qwen_api.*`、`siliconflow_api.*`、`ollama_api.*`（仅被 `apply_config` 读取，不作为运行时配置） |
 

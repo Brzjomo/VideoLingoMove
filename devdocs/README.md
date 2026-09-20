@@ -3,7 +3,7 @@
 > 本目录是给**开发者**看的工程文档（与面向用户的 `README.md`、官网文档 `docs/` 区分开）。
 > 目标：读完本文件 + `00-overview/` 即可理解全局；按需跳转到具体模块文档即可动手改代码。
 
-- 项目：VideoLingo（视频翻译 / 本地化字幕工具），配置版本 `2.1.2`
+- 项目：VideoLingo（视频翻译 / 本地化字幕工具），配置版本 `3.0.4`
 - 技术栈：Python 3.10–3.13（推荐 3.11）+ torch 2.8.0 + WhisperX 3.8.6 + Streamlit ≥1.49 + spaCy 3.8 + OpenAI 兼容 LLM API + FFmpeg 4–7（共享库构建）
 - 环境：**uv 建的项目内 `.venv`**（不再用 conda；`Install.bat` 一键装，`OneKeyStart.bat` 启动）
 - 流水线：**单阶段字幕链路** step1 → step7（配音链路早在重构 Round 1 中整体删除，本次清理已把相关文档一并移除）

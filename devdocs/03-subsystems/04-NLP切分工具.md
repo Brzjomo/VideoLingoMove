@@ -11,7 +11,7 @@ source_files:
  - core/step3_2_splitbymeaning.py
  - config.example.yaml
 status: verified
-last_verified: 2026-09-16
+last_verified: 2026-09-21
 ---
 
 # NLP 切分工具（core/spacy_utils/ 逐函数手册）
@@ -78,12 +78,15 @@ flowchart TD
  W3 --> R
  R --> W4["write sentence_splitbynlp.txt<br/>os.remove(sentence_splitbyconnector.txt)"]
 
- W4 --> SM["step3_2_splitbymeaning.py<br/>split_sentences_by_meaning"]
+ W4 --> GUARD["step3_1_spacy_split.py<br/>merge_broken_cuts_in_file(nlp)<br/>出口守卫：切在词中的行并回去（2026-09-20）"]
+ GUARD --> SM["step3_2_splitbymeaning.py<br/>split_sentences_by_meaning"]
  SM --> TS["step3_2:16 tokenize_sentence(nlp)"]
  SM --> SS["step3_2:52 split_sentence"]
  SS --> FSP["step3_2:21 find_split_positions<br/>get_source_language + get_joiner"]
  S5["core/step5_splitforsub.py<br/>from core.step3_2_splitbymeaning import split_sentence"] --> SS
 ```
+
+> 📌 **出口守卫不在 `core/spacy_utils/` 里**：四个切分函数之上由 `core/step3_1_spacy_split.py::merge_broken_cuts_in_file(nlp)` 收尾（2026-09-20 新增）——用 `core/subtitle_split.merge_broken_cuts` + `spaCy_boundaries` 把"切点落在词中间"的相邻行并回一行（开关 `subtitle.merge_broken_lines`，默认 `true`）；`step3_2_splitbymeaning.py` 的 LLM 分支出口也有同一个守卫，而"关掉 LLM 断句"的直通分支没有。判定细节、以及"已有产物不会被补跑"这点见 [`../02-pipeline/03-句子切分NLP.md`](../02-pipeline/03-句子切分NLP.md) 七.15。
 
 调用方式上的不对称（读代码时最容易困惑的一点）：
 
@@ -241,7 +244,7 @@ flowchart TD
 | 上下文门槛 | `left_words`/`right_words` 各取 `context_words`（默认 5）个 token 并去标点（-），要求 `len(left_words) >= 5 and len(right_words) >= 5` 且 `split_before` 为真才切 |
 | 尾部 | `if start < len(doc): new_sentences.append(doc[start:].text.strip)`（-） |
 | 收敛 | 本轮无任何切分则 `break`（-），否则 `sentences = new_sentences` 再来一轮 |
-| 打印 | 每次切分打印 `✂️ Split before '{token.text}': <左5词>| <token.text> <右5词>` |
+| 打印 | 每次切分打印 `✂️ Split before '{token.text}': <左5词>\| <token.text> <右5词>` |
 
 切分发生在连接词**之前**（`start = token.i`，），所以保留下来的行以连接词开头。
 

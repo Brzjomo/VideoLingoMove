@@ -4,6 +4,8 @@ layer: 02-pipeline
 source_files:
  - core/step3_1_spacy_split.py
  - core/step3_2_splitbymeaning.py
+ - core/subtitle_split.py
+ - core/subtitle_limits.py
  - core/spacy_utils/load_nlp_model.py
  - core/spacy_utils/split_by_mark.py
  - core/spacy_utils/split_by_comma.py
@@ -13,7 +15,7 @@ source_files:
  - core/config_utils.py
  - config.yaml
 status: verified
-last_verified: 2026-09-16
+last_verified: 2026-09-21
 ---
 
 # step3 句子切分（spaCy 规则切分 + LLM 语义切分）
@@ -32,8 +34,10 @@ step3 把 step2 产出的**逐词**转写表 `output/log/cleaned_chunks.xlsx` �
 
 | 文件路径 | 规模 | 主要职责 |
 | --- | --- | --- |
-| `core/step3_1_spacy_split.py` | ~1K | 阶段一入口 `split_by_spacy`：幂等检查 + 串联 4 个 spaCy 切分函数 |
-| `core/step3_2_splitbymeaning.py` | ~9K | 阶段二入口 `split_sentences_by_meaning`：LLM 开关判定 + 三轮 retry + 线程池 + 语义切分；另含不调 LLM 的 `split_by_punctuation`与 `split_sentences_mechanically` |
+| `core/step3_1_spacy_split.py` | ~2K | 阶段一入口 `split_by_spacy`：幂等检查 + 串联 4 个 spaCy 切分函数 + **出口守卫 `merge_broken_cuts_in_file`**（不许把词切开，2026-09-20 新增） |
+| `core/step3_2_splitbymeaning.py` | ~11K | 阶段二入口 `split_sentences_by_meaning`：LLM 开关判定 + 三轮 retry + 线程池 + 语义切分 + **出口守卫**（同一个 `merge_broken_cuts`）；另含不调 LLM 的 `split_by_punctuation` 与 `split_sentences_mechanically`（**step5 已不再调用它们**，只在本阶段与仅转录模式使用） |
+| `core/subtitle_split.py` | ~24K | 出口守卫的实现处：`merge_broken_cuts` / `spaCy_boundaries` / `_starts_with_particle`；另有 step5 用的 `split_at_boundaries`、`merge_short_cues`、`check_align_parts`、`strip_terminal_punctuation` |
+| `core/subtitle_limits.py` | ~18K | 按语言的字幕长度档位（`resolve_limits`）——阶段二的 `max_split_length` 由它给出，不再是 `config.yaml` 里的裸值 |
 | `core/spacy_utils/load_nlp_model.py` | ~1K | `init_nlp`/ `get_spacy_model`：语言 → spaCy 模型名 → 加载（缺失则下载） |
 | `core/spacy_utils/split_by_mark.py` | ~2K | 第 1 步：按句末标点切分（`doc.sents`） |
 | `core/spacy_utils/split_by_comma.py` | ~3K | 第 2 步：按逗号 / 冒号切分（带主谓检查） |
@@ -68,19 +72,21 @@ flowchart TD
  F3 --> R["split_long_by_root.py split_long_by_root_main(nlp)"]
  R -.->|"os.remove 删除输入"| F3
  R --> F4["output/log/sentence_splitbynlp.txt"]
- F4 --> SM["step3_2_splitbymeaning.py<br/>split_sentences_by_meaning"]
+ F4 --> GUARD1["merge_broken_cuts_in_file<br/>出口守卫：切在词中的行并回去（就地重写）"]
+ GUARD1 --> SM["step3_2_splitbymeaning.py<br/>split_sentences_by_meaning"]
  SM --> GATE{"use_llm_sentence_split<br/>config_utils.py"}
- GATE -- 否 --> COPY["原样写出 spaCy 结果<br/>（零 LLM 调用，step3_2:204-209）"]
+ GATE -- 否 --> COPY["原样写出 spaCy 结果<br/>（零 LLM 调用，不走出口守卫）"]
  GATE -- 是 --> INIT2["init_nlp 第二次加载模型"]
  INIT2 --> RETRY["for retry_attempt in range(3)<br/>parallel_split_sentences"]
  RETRY --> TOK["tokenize_sentence 数 token"]
  TOK -- "len(tokens) &gt; max_split_length" --> LLM["split_sentence → get_split_prompt<br/>→ ask_gpt(log_title='sentence_splitbymeaning')"]
  TOK -- "否则" --> KEEP["原句直接保留, 不调 LLM"]
  LLM --> FSP["find_split_positions<br/>SequenceMatcher 映射 [br]"]
- FSP --> OUT["output/log/sentence_splitbymeaning.txt"]
+ FSP --> OUT
  KEEP --> OUT
- COPY --> OUT
- OUT --> D["step4_1:9 / step4_2:19 / step5 / step6<br/>以及 zip 导出"]
+ OUT["merge_broken_cuts（出口守卫，2026-09-20）"] --> F5["output/log/sentence_splitbymeaning.txt"]
+ COPY --> F5
+ F5 --> D["step4_1 / step4_2 / step5 / step6<br/>以及 zip 导出"]
 ```
 
 ### 3.1 四步顺序为什么不能换
@@ -148,9 +154,10 @@ flowchart TD
 | 项 | 内容 |
 | --- | --- |
 | 签名 | `split_by_spacy` → `None` |
-| 幂等 | `if os.path.exists('output/log/sentence_splitbynlp.txt')` 成立就打印 `File 'sentence_splitbynlp.txt' already exists. Skipping split_by_spacy.` 并 `return`（-） |
-| 模型加载 | `nlp = init_nlp` **只调用一次**，随后 4 步共用同一个 `nlp` 对象 |
-| 执行体 | `split_by_mark(nlp)` → `split_by_comma_main(nlp)` → `split_sentences_main(nlp)` → `split_long_by_root_main(nlp)`（-） |
+| 幂等 | `if os.path.exists('output/log/sentence_splitbynlp.txt')` 成立就打印 `File 'sentence_splitbynlp.txt' already exists. Skipping split_by_spacy.` 并 `return`（**出口守卫也因此不会跑**，见七.15） |
+| 模型加载 | `nlp = init_nlp` **只调用一次**，随后 4 步与出口守卫共用同一个 `nlp` 对象 |
+| 执行体 | `split_by_mark(nlp)` → `split_by_comma_main(nlp)` → `split_sentences_main(nlp)` → `split_long_by_root_main(nlp)` → `merge_broken_cuts_in_file(nlp)`（**2026-09-20 新增的最后一步**） |
+| 出口守卫 | `merge_broken_cuts_in_file(nlp)`：读回 `sentence_splitbynlp.txt`，用 `subtitle_split.merge_broken_cuts(lines, lambda text: spaCy_boundaries(nlp, text))` 把"切点落在词中间"的相邻行并回去；只有行数真的变了才**就地重写**该文件并打印 `🧩 合并被切在词中的行：before → after`。开关 `subtitle.merge_broken_lines`（`load_key_or` 读，默认 `true`）；文件不存在直接返回 |
 | 副作用 | 读写 `output/log/` 下 5 个文件；删除 3 个中间文件；首次运行可能触发 spaCy 模型下载 |
 | 无返回值 | 函数把结果留在硬盘上，不返回句子列表 |
 
@@ -165,7 +172,8 @@ flowchart TD
 | LLM 开关 | `core.config_utils.use_llm_sentence_split`（`core/config_utils.py`）：翻译模式强制 `True`；仅转录模式读 `llm_sentence_split`。为假时把 spaCy 结果原样写出并 `return`（，**零 LLM 调用**） |
 | 模型 | `nlp = init_nlp`——**本阶段第二次加载 spaCy 模型**（阶段一已加载过一次） |
 | 主循环 | `limits = resolve_limits()`（`core/subtitle_limits.py`）→ 打印 `📐 字幕长度档位：…` → `for retry_attempt in range(3):`→ `parallel_split_sentences(sentences, max_length=limits.max_split_length, max_workers=load_key("max_workers"), nlp=nlp, retry_attempt=retry_attempt)`。**2026-09-20 起**：粗切上限不再直接读 `max_split_length`，而是按语言档位解析（关闭"按语言自动设置"时才是 config 里的手填值） |
-| 输出 | `'\n'.join(sentences)` 写入 `output/log/sentence_splitbymeaning.txt`（-） |
+| 出口守卫 | **仅 LLM 分支**（关掉 LLM 断句的那条会提前 `return`，不走守卫）：`subtitle.merge_broken_lines` 为真时 `merge_broken_cuts(sentences, lambda text: spaCy_boundaries(nlp, text))`，行数变了就打印 `🧩 合并被切在词中的行：before → after`。这里用 `load_key` 读键、**只吞 `KeyError`**（旧 `config.yaml` 缺这个键时不炸，只是不合并） |
+| 输出 | `'\n'.join(sentences)` 写入 `output/log/sentence_splitbymeaning.txt`（守卫的合并结果就是被写出的内容） |
 | 幂等 | **没有**文件存在检查：本函数每次调用都重跑（见七.1） |
 
 三轮循环不是"网络重试"，而是**收敛循环**：第 1 轮只切超长句；若 LLM 没有按要求给出足够的 `[br]`（例如 `num_parts=3` 却只切了 1 刀，或答案被 `valid_split` 判为不合格），切片后仍可能超长，于是在第 2、3 轮被再次送入。3 轮是硬上限，循环结束后无论是否还超长都直接落盘。
@@ -204,7 +212,7 @@ flowchart TD
 | LLM 调用 | `ask_gpt(split_prompt, response_json=True, valid_def=valid_split, log_title='sentence_splitbymeaning', bypass_cache=retry_attempt > 0)`；缓存文件 `output/gpt_log/sentence_splitbymeaning.json` |
 | 位置映射 | `split_points = find_split_positions(sentence, best_split)` |
 | 插入 `\n` | 第 1 个切点：`sentence[:p] + '\n' + sentence[p:]`；第 i>0 个切点：取 `best_split` 的**最后一行**，在 `split_point - split_points[i-1]` 偏移处插入——即把"相对原句的绝对偏移"换算成"当前最后一行的行内偏移" |
-| 打印 | rich `Table` 输出 `Original` / `Split` 两行，`\n` 显示为 ` ||`；仅日志用途 |
+| 打印 | rich `Table` 输出 `Original` / `Split` 两行，`\n` 显示为 ` \|\|`；仅日志用途 |
 | `index` | 不等于 -1 时打印 `✅ Sentence {index} has been successfully split`，仅日志用途 |
 | 默认值 `word_limit=18` | 阶段二总是显式传 `max_length`（= `max_split_length`），18 只对 `__main__` 里的示例调用有效——而该示例当前**已被注释** |
 
@@ -250,6 +258,7 @@ flowchart TD
 | `whisper.detected_language` | | `'zh'` | 由 step2 写入（`core/step2_whisperX.py` / → `save_language` → `update_key`，`core/all_whisper_methods/whisperX_utils.py`）；决定 joiner、spaCy 模型、提示词语言 |
 | `max_split_length` | | 自动档位（中日 30 / 韩 28 / 拉丁 26；关闭自动时为 config 值，历史默认 20） | 阶段二的目标句长（spaCy token 数）；也是 `num_parts = math.ceil(len(tokens)/max_length)` 的分母；同时也是传给 LLM 的 `word_limit`。取值来源见 `core/subtitle_limits.py` |
 | `max_workers` | | `1000` | `ThreadPoolExecutor(max_workers=...)`；被 step4/step5 共用同一个键 |
+| `subtitle.merge_broken_lines` | | `true` | **2026-09-20 新增**：step3_1 / step3_2 出口守卫的开关（`load_key_or` / `load_key` 读）。为 `false` 时不做"切点落在词中"的合并，`フィギュアとし \| て` 这类坏切点会原样进入 step4 并放大成重复译文（见七.15） |
 | `llm_sentence_split` | | `true` | 只在 `transcription_only: true` 时生效（`core/config_utils.py`）；为 `false` 时阶段二直接复制 spaCy 结果，零 LLM 调用 |
 | `spacy_model_map` | - | 10 种语言 → `*_core_news_md` / `en_core_web_md` / `zh_core_web_md` | 语言 → 模型名映射，见 `03-subsystems/04-NLP切分工具.md` |
 | `language_split_with_space` | - | en, es, fr, de, it, ru, ko, pt | joiner = `" "` |
@@ -273,6 +282,11 @@ flowchart TD
 12. **`assert doc.has_annotation("SENT_START")`**（`split_by_mark.py`）要求模型带句法分析（parser/senter）。换成无 parser 的模型（如 `*_sm` 精简模型或自定义模型）时 `doc.sents` 会直接报错；`python -O` 运行时该断言被跳过，错误会更晚、更难懂。
 13. **改提示词必须同步改校验**：`get_split_prompt` 的双候选契约（`split1`/`split2`/`choice` + `[br]`）与 `valid_split`（`step3_2_splitbymeaning.py`）是一对；只改提示词会让每个长句都校验失败并按 `ask_gpt` 的 `max_retries` 重试，token 成本翻几倍。
 14. **"停止"在断句阶段也能及时生效**：`split_sentence` 入口、`parallel_split_sentences` 的提交循环与结果收集循环都插了 `eu.check_cancel`（`step3_2_splitbymeaning.py`），并在取消时 `cancel` 掉尚未开始的 future。这一段由提交 `d9aae68` 补齐，早于它的文档只提"每段重新加载模型"的耗时，不提取消语义。
+15. **"不许把词切开"的出口守卫（2026-09-20 新增，`subtitle.merge_broken_lines`）**：事故链条是"step3_1 是**纯规则切分、没有提示词**→ 把 `…そのキャラクターやイラストの魅力を探り、フィギュアとし | てその…` 从「として」中间劈开 → step4 只能把两个半句**各自翻译完整** → 出现"…同时注重这一点" + "同时也注重…" 的重复译文"。提示词改不动这一层，所以在两个阶段各自用 spaCy token 边界做出口校验（`subtitle_split.merge_broken_cuts` + `spaCy_boundaries`）：拼接点必须是合法切点，否则两行并回一行；下一行以日语助词/接续开头（`_LEADING_PARTICLES`：`て/で/に/を/は/が/と/も/…`）时**无条件**判为坏切点。三条必须记住的边界条件：
+    - **阶段一的守卫只在"本次真的跑了 4 步切分"时执行**（它在 `split_by_spacy` 里、幂等 `return` 之后）；已有 `sentence_splitbynlp.txt` 时不会补跑，要让守卫生效得删掉该文件重跑阶段一。
+    - **阶段二只在 LLM 分支执行**：`llm_sentence_split: false`（仅转录模式）那条直通分支照样提前 `return`。
+    - 合并会**减少行数**，因此 `sentence_splitbymeaning.txt` 的行数与 `sentence_splitbynlp.txt` 可能不同（正常，step6 是按文本重新对齐的，不依赖行数一一对应）。
+16. **守卫的判定是"保守"的**：`merge_broken_cuts` 拿不到边界信息（`boundary_offsets` 抛异常）时**不动**（宁可少并）；并法是**贪心累加**——一旦把下一行并回 `result[-1]`，这个"合并后的行"还能继续吸收再下一行（有可能并出 3 行以上的一条），但**不回溯**已输出的行。它拦的是"切点在词里"，不拦"切点虽在 token 边界但语义被劈开"——后者要靠 `get_split_prompt` 的规则与 step5 的对齐校验。回归用例：`tests/test_subtitle_split.py`（`merge_broken_cuts` 的 5 组，含"拿不到边界就不动"与"任意位置都合法切点"两种极端）。
 
 ## 八、扩展点
 
@@ -285,6 +299,7 @@ flowchart TD
 | 降低 0.9 的误报 / 提高映射可靠性 | `core/step3_2_splitbymeaning.py` 阈值、 的归一化方式 | 阈值只影响告警文案，不改切点；真正能减少漂移的是改 的归一化（例如保留空格差异、或改用 token 级对齐） |
 | 控制并发 / 成本 | `config.yaml` `max_workers` | 本地 LLM 设为 1；该键被 step4/step5 共用 |
 | 只转录时省掉全部断句 token | `config.yaml` `llm_sentence_split: false` | 只在 `transcription_only: true` 下生效（`core/config_utils.py`）；此时用 `split_by_punctuation`（`step3_2_splitbymeaning.py`）按标点就近断开 |
+| 关掉"不许把词切开"的出口守卫 | `config.yaml` `subtitle.merge_broken_lines: false` | 只在排查"是不是守卫并错了行"时临时关掉；关掉后坏切点会进 step4 被翻译成重复内容（见七.15）。守卫本体是 `core/subtitle_split.merge_broken_cuts`，改判定要同步 `tests/` |
 | 断点续跑优化 | `core/step3_1_spacy_split.py`、`core/spacy_utils/*.py` 中 3 处 `os.remove` | 现状是"消费即删除"，若想去掉 `os.remove` 让中间产物留存，注意 `split_by_comma_main` 等函数是覆盖写（`w` 模式），重复执行会得到同内容文件 |
 | 减少一次模型加载 | `core/step3_2_splitbymeaning.py` | 可由 `st.py`- 的调用方把 step3_1 的 `nlp` 传进来，或给 `init_nlp` 加缓存（`core/spacy_utils/load_nlp_model.py`） |
 | 换掉 spaCy 阶段（例如全交给 LLM） | `core/step3_1_spacy_split.py`- | 阶段二只读 `sentence_splitbynlp.txt`（`step3_2_splitbymeaning.py`），只要保证该文件存在且每行一句，就可以整体替换阶段一 |
@@ -342,6 +357,15 @@ print("空行数:", sum(1 for l in lines if not l.strip))
 ```
 
 `output/gpt_log/sentence_splitbymeaning.json` 是排查看不到"LLM 到底回了什么"的入口（每次成功应答一条，含 `model/prompt/response`，`core/ask_gpt.py`）；解析失败/校验失败的原始应答在 `output/gpt_log/error.json`（`core/ask_gpt.py`）。
+
+检查"有没有被切在词中"（复现出口守卫的判据；需要 spaCy 模型与产物都在）：
+
+```powershell
+# 直接重跑一次守卫，看它还想并几行：打印 before → after（不改文件）
+python -c "from core.spacy_utils.load_nlp_model import init_nlp; from core.subtitle_split import merge_broken_cuts, spaCy_boundaries; nlp=init_nlp(); lines=[l.rstrip('\n') for l in open('output/log/sentence_splitbymeaning.txt', encoding='utf-8')]; kept=merge_broken_cuts(lines, lambda t: spaCy_boundaries(nlp, t)); print('before', len(lines), 'after', len(kept))"
+```
+
+若 `after` 明显小于 `before`，说明 `sentence_splitbymeaning.txt` 是**旧产物**（守卫上线前生成的）——删掉它与 `sentence_splitbynlp.txt` 重跑 step3 即可让守卫生效。
 
 > 本节命令与代码片段基于源码静态确认，未在本机执行：当前 `python` 环境未安装 spaCy（`import spacy` → `ModuleNotFoundError`）。
 
