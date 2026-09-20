@@ -155,20 +155,16 @@ def apply_config(config_name):
 def subtitle_length_controls():
     """字幕长度面板（2026-09-20 从主区移到侧边栏，和"字幕设置"挨着）。
 
-    两个旋钮 + 「按语言自动设置」开关：
-      * 开关打开（默认）：切「识别语言」/改「目标语言」即按 `core/subtitle_limits.py`
-        的档位覆盖这两个值，且 step3_2/step5 运行期按当前语言现算 —— 手改无效；
-      * 开关关闭：完全按手填值走（单一 max_length：源文按字符数、译文按宽度×multiplier），
-        切换语言不改动。
+    两个旋钮 + 「按语言自动设置」开关：打开（默认）时切语言即按 `core/subtitle_limits.py` 的档位
+    覆盖这两个值、运行期现算（手改无效）；关闭时完全按手填值走，切换语言不改动。
+    文案刻意保持一行说明（2026-09-21 用户要求与侧边栏其他项一致）。
     """
     with st.expander("✂️ 字幕长度调节", expanded=False):
         auto_length = st.toggle(
-            "按语言自动设置（切换语言即覆盖）",
+            "按语言自动设置",
             value=auto_length_by_language(),
             key="auto_length_by_language",
-            help="打开：切「识别语言」/改「目标语言」时按该语言的推荐档位自动改写下面两个值，"
-                 "运行期也按当前语言现算 —— 手改无效（要手填请关掉本开关）。"
-                 "关闭：完全按下面手填的值走，切换语言不改动。",
+            help="切语言即按推荐档位覆盖下面两个值，手改无效。",
         )
         if auto_length != auto_length_by_language():
             update_key("subtitle.auto_length_by_language", bool(auto_length))
@@ -179,33 +175,27 @@ def subtitle_length_controls():
             st.rerun(scope="app")
 
         limits = subtitle_limits.resolve_limits()
-        st.caption(f"📐 当前：{limits.label}")
-        if auto_length:
-            st.caption("ℹ️ 自动档位已开启 —— 下面两个值由语言档位决定（手改无效，"
-                       "要手填请先关掉上面的开关）。")
+        st.caption(f"📐 {limits.label}")
 
         # 仅转录模式 + 关闭 LLM 断句时，粗切参数根本不参与（step3_2 直接用 spaCy 结果）
         split_inactive = load_key_or("transcription_only", False) and not use_llm_sentence_split()
         if split_inactive:
-            st.caption("ℹ️ 当前是「只生成原语言字幕」且已关闭「使用 LLM 优化断句」，"
-                       "粗切词数上限不参与切分（step3_2 直接采用 spaCy 结果）。")
+            st.caption("ℹ️ 仅转录 + 关闭 LLM 断句：本项不参与")
 
         max_split_length = st.number_input(
-            "首次粗切词数上限 (max_split_length)",
+            "首次粗切词数上限",
             min_value=8, max_value=60,
             value=int(load_key_or("max_split_length", 20)),
             disabled=bool(auto_length) or bool(split_inactive),
-            help="单位是「词」（spaCy token，也是提示词里的 word_limit）："
-                 "一句大约切到 2 行字幕的量。自动模式按语言取（中日 18 / 韩 16 / 拉丁 14）。",
+            help="单位＝词（spaCy token）；自动模式按语言取。键 `max_split_length`。",
         )
         subtitle_cfg = load_key_or("subtitle", {}) or {}
         max_length = st.number_input(
-            "单行最大字符数 (subtitle.max_length)",
+            "单行最大字符数",
             min_value=10, max_value=200,
             value=int(subtitle_cfg.get("max_length", 75)),
             disabled=bool(auto_length),
-            help="自动模式下按语言取（中日 26≈15 字 / 韩 24 / 拉丁 40 / 俄与 RTL 38）；"
-                 "手动模式下源文按字符数、译文按显示宽度×target_multiplier 比较。",
+            help="自动模式按语言取；手动模式源文按字符数、译文按显示宽度。键 `subtitle.max_length`。",
         )
 
         if st.button("保存手填值", key="save_subtitle_length", type="primary",
@@ -233,30 +223,19 @@ def subtitle_length_controls():
 
 
 def polish_controls():
-    """字幕润色面板（2026-09-21 用户要求："加个开关，打开后才做这步润色优化"）。
+    """字幕润色面板（2026-09-21）：总开关 + 两个取舍开关，默认关，文案保持一行说明。
 
-    三个开关，依次是"做不做 → 质量/花费取舍 → 润色范围"：
-      * `polish_translation`（默认关）：打开后 step5.2 才调用 LLM；
-      * `polish_thinking`（默认开）：**只作用于润色那一次调用**（用户 2026-09-21 明确："思考开关只管
-        润色，其他包括审校默认都开思考"）—— 实测润色 20 行/批从 ~20,600 tokens 降到 1,788（−91%），
-        审校仍按默认档跑（≈860 tokens/次）；但关思考版更激进、会丢词
-        （`自由职业手办原型师` → `自由手办原型师`），所以关掉时 step5.2 自动把覆盖率门槛提到 0.85，
-        回退的行更多；
-      * `polish_long_lines_only`（默认关）：只润色"有分句的长行"，短句与无逗号的行原样保留
-        （`subtitle_split.needs_polish_long_line`），用来省 token。
-
+    总开关关着时后两个置灰；思考开关只管润色那一次调用，审校始终按默认档（用户要求）。
     润色结果另存为 `output/log/translation_results_polished.xlsx`，step6 只在开关打开且行数一致时
-    才用它 —— 所以关掉开关重跑一次即可恢复未润色字幕。
+    才用它 —— 关掉开关重跑一次即可恢复未润色字幕。
     """
-    with st.expander("✨ 字幕润色（可选，会额外调用 LLM）", expanded=False):
+    with st.expander("✨ 字幕润色（可选）", expanded=False):
         current = bool(load_key_or("subtitle.polish_translation", False))
         enabled = st.toggle(
             "翻译后润色字幕措辞",
             value=current,
             key="polish_translation",
-            help="打开：step5.2 把最终字幕逐行润色，让每条读起来更自然（只改措辞 —— 语序、连接词、"
-                 "语气助词；不许增删信息，仍有长度/数字/重复护栏，并对改动过的行做一次批量审校）。"
-                 "关闭：完全不调用 LLM，成片字幕保持翻译原样。",
+            help="额外调用 LLM 逐行润色：只改措辞、不改信息。",
         )
         if enabled != current:
             update_key("subtitle.polish_translation", bool(enabled))
@@ -265,16 +244,11 @@ def polish_controls():
         # 下面两个开关只在润色打开时生效（关闭时置灰，避免误以为改了会有效果）
         thinking = bool(load_key_or("subtitle.polish_thinking", True))
         allow_thinking = st.toggle(
-            "允许模型思考（更忠实，但贵约 10 倍）",
+            "允许模型思考",
             value=thinking,
             key="polish_thinking",
             disabled=not enabled,
-            help="开（默认）：润色只做最小改动、几乎不丢词，实测 20 行/批约 2 万 tokens"
-                 "（其中 95% 是思考 token）。\n"
-                 "关：**润色那一次调用**省约 91% 的 token（审校不受影响，仍按默认档思考，"
-                 "约 860 tokens/次），但模型会明显更激进地压缩，容易丢词"
-                 "（实测 `自由职业手办原型师` → `自由手办原型师`、`制作GK套件` → `做GK`）——"
-                 "因此关掉时覆盖率门槛自动从 0.70 收紧到 0.85，被拦下的行会保持原译文。",
+            help="关掉省约 90% 润色 token，但更容易丢词（回退的行更多）。审校不受影响。",
         )
         if allow_thinking != thinking:
             update_key("subtitle.polish_thinking", bool(allow_thinking))
@@ -286,17 +260,13 @@ def polish_controls():
             value=long_only,
             key="polish_long_lines_only",
             disabled=not enabled,
-            help="打开：宽度不足一行（约 8~9 个汉字以内）的短句、以及整行没有逗号/顿号（没有分句）"
-                 "的行都原样保留，只把长且带分句的行送去润色 —— 这类行才是读起来容易断的。\n"
-                 "关闭（默认）：每一行都送。判据见 subtitle_split.needs_polish_long_line。",
+            help="短句与无分句的行原样保留，省 token。",
         )
         if only_long != long_only:
             update_key("subtitle.polish_long_lines_only", bool(only_long))
             st.rerun(scope="app")
 
-        st.caption("ℹ️ 每 20 行一次调用（审校只在有改动时再调一次，且始终按默认档思考）；"
-                   "润色后行数不变，超长/丢数字/丢信息会被拦下并回退原译文。"
-                   "「只生成原语言字幕」模式下自动跳过。")
+        st.caption("ℹ️ 每 20 行一次调用；超长/丢数字/丢信息会被拦下并回退原译文。")
 
 
 def page_setting():
