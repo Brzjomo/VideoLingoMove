@@ -288,7 +288,7 @@ stateDiagram-v2
 | `text_processing_section` | `st.py` | 渲染「翻译和生成字幕」/「音频转录和生成原语言字幕」区块 | 读 `transcription_only` 决定标题、步骤文案、按钮文案与成功文案；`runner.state != "idle"` 时只画控制面板并 `return`；**无返回值**（返回值在 `st.py` 被忽略） |
 | `cache_maintenance_section` | `st.py` | 缓存清理入口，**与是否有素材无关** | 两个 expander：火山二级缓存 `output/log/asr_results/*.json`、内容寻址转录缓存 `.cache/asr`（，调 `transcription_cache.clear_cache`） |
 | `subtitle_length_controls` | `st_components/sidebar_setting.py`（2026-09-20 从 `st.py` 主区**移到侧边栏**） | 字幕长度面板 expander「✂️ 字幕长度调节」 | ① 开关「按语言自动设置（切换语言即覆盖）」→ `subtitle.auto_length_by_language`，打开时立刻按当前语言下发一次档位并 `st.rerun`；② caption 显示 `📐 当前：<档位说明>`；③ 两个 `st.number_input`（`max_split_length` / `subtitle.max_length`）在自动模式或"仅转录+关断句"时**置灰**；④「保存手填值」（自动模式禁用）与「恢复当前语言推荐值」（`apply_language_profile(force=True)`，开关关着也能一键套用）；宽度用官方新写法 `width="stretch"` |
-| `polish_controls` | `st_components/sidebar_setting.py`（2026-09-21 新增，紧跟「✂️ 字幕长度调节」之后） | 字幕润色面板 expander「✨ 字幕润色（可选，会额外调用 LLM）」 | 一个 `st.toggle("翻译后润色字幕措辞")` 写 `subtitle.polish_translation`（默认关，`load_key_or` 读），改动即 `update_key` + `st.rerun(scope="app")`；caption 写明"约每 20 行一次调用 / 行数不变 / 超长·丢数字·丢信息会回退原译文 / 仅转录模式跳过"。打开后 step5.2 才会真的调 LLM |
+| `polish_controls` | `st_components/sidebar_setting.py`（2026-09-21 新增，紧跟「✂️ 字幕长度调节」之后） | 字幕润色面板 expander「✨ 字幕润色（可选，会额外调用 LLM）」 | **三个** `st.toggle`（做不做 → 是否允许思考 → 润色范围）：① `翻译后润色字幕措辞` → `subtitle.polish_translation`（默认关）；② `允许模型思考（更忠实，但贵约 10 倍）` → `subtitle.polish_thinking`（默认开）；③ `只润色有分句的长行` → `subtitle.polish_long_lines_only`（默认关）。②③ 在 ① 关闭时 `disabled` 置灰；每个 toggle 改动即 `update_key` + `st.rerun(scope="app")`（`load_key_or` 读默认值）；caption 写明"每 20 行一次调用 / 行数不变 / 超长·丢数字·丢信息会回退原译文 / 仅转录模式跳过"。打开 ① 后 step5.2 才会真的调 LLM |
 | `main` | `st.py` | 组装页面 | `st.set_page_config` 必须在最前；`download_video_section` 的返回值决定是否渲染处理区块；`cache_maintenance_section` 无条件调用 |
 
 ### 5.2 `st_components/imports_and_utils.py`
@@ -329,6 +329,7 @@ stateDiagram-v2
 | `subtitle.auto_length_by_language` | `st_components/sidebar_setting.py`（侧边栏「✂️ 字幕长度调节」） | 字幕长度面板的开关（默认 `true`）：开=切语言即按 `core/subtitle_limits.py` 的档位覆盖下面两个值，step3_2/step5 运行期也按当前语言现算（手改无效）；关=完全按手填值走 |
 | `max_split_length` | `st_components/sidebar_setting.py`；`core/step3_2_splitbymeaning.py`（经 `resolve_limits`） | 字幕长度面板的「首次粗切词数上限」。自动模式由语言档位给出（中日 30 / 韩 28 / 拉丁 26 / 泰 20），只有关闭自动时才读这里的手填值（`load_key_or(..., 20)`） |
 | `subtitle.polish_translation` | `st_components/sidebar_setting.py`（侧边栏「✨ 字幕润色（可选，会额外调用 LLM）」） | step5.2 字幕润色的开关（**2026-09-21 新增，默认 `false`**）：打开后 step5 与 step6 之间多跑一步 LLM 润色（每 20 行一次调用 + 每个有改动的批次一次审校）；关着时该步零调用，step6 立刻回到未润色的字幕表 |
+| `subtitle.polish_thinking` / `subtitle.polish_long_lines_only` | 同一个面板里的后两个 toggle（**2026-09-21 新增**，仅在 `subtitle.polish_translation` 打开时可用） | 决定这一步的**花费与范围**：`polish_thinking` 默认 `true`，关掉则润色调用带 `extra_body={"thinking": {"type": "disabled"}}`（省约 91% token）、覆盖率门槛自动收紧到 0.85；`polish_long_lines_only` 默认 `false`，打开则只送"有分句的长行"、其余行原样保留（见 [`../02-pipeline/05-字幕切分与时间轴.md`](../02-pipeline/05-字幕切分与时间轴.md) §5.2、§7.8） |
 | `subtitle.max_length` | `st_components/sidebar_setting.py`；`core/step5_splitforsub.py`（经 `resolve_limits`） | 字幕长度面板的「单行最大字符数」。自动模式=按语言档位（中日 60 宽度≈34 字 / 韩 48 / 拉丁 70 / 俄与 RTL 65）；手动模式=源文按字符数、译文按宽度×`target_multiplier` |
 
 其他被间接依赖的键：
