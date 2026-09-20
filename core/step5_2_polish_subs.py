@@ -70,11 +70,13 @@ def _chunks(items: Sequence, size: int) -> List[Sequence]:
 
 
 def _log_title(base: str, extra_body: Optional[dict]) -> str:
-    """按"思考开关"给缓存分区改名：开思考 `polish_subs`，关思考 `polish_subs_nothink`。
+    """按"思考开关"给**润色调用**的缓存分区改名：开思考 `polish_subs`，关思考 `polish_subs_nothink`。
 
     为什么要改名：`ask_gpt` 的缓存键只看 `(model, prompt)`（分区内），`extra_body` 既不进键也不进
     日志。不改名的话，用户切换"允许模型思考"后会**命中上一次档位的缓存**，看起来"开关没反应"。
     改名让两档各存各的缓存，切换立即生效（代价是两档各花一次钱）。
+
+    只用于润色调用：审校固定按默认档跑，分区恒为 `polish_audit`（见 `_audit_info_changes`）。
     """
     return base if extra_body is None else f"{base}_nothink"
 
@@ -97,14 +99,13 @@ def _parse_polish_response(data, expected_ids: Sequence[int]) -> Optional[Dict[i
     return parsed if len(parsed) == len(expected_ids) else None
 
 
-def _audit_info_changes(pairs: Sequence[Tuple[int, str, str]], stats: Dict[str, int],
-                        extra_body: Optional[dict] = None) -> set:
+def _audit_info_changes(pairs: Sequence[Tuple[int, str, str]], stats: Dict[str, int]) -> set:
     """批量审校：返回"被判定为增删/篡改了信息"的 id 集合（异常时返回空集 = 全部放行）。
 
-    `extra_body` 与润色调用共用同一个"思考开关"：用户关掉思考时，审校也一起不思考 ——
-    否则会出现"我明明关了思考，怎么还在花思考 token"的困惑（2026-09-21 用户要求这个开关时
-    的语义就是"控制这一步的思考"）。安全网仍在：机械护栏 `subtitle_split.polish_ok`
-    （关思考时它自动把覆盖率门槛收紧到 0.85）+ 本审校调用本身。
+    **审校固定按模型默认档（思考开）跑，不跟随"允许模型思考"开关** —— 用户 2026-09-21 明确：
+    "思考开关只管润色，其他包括审校默认都开思考"。审校是这一步的安全网（兜住机械护栏拦不住的
+    "换词式增补"），保持默认档更可靠；而且它本身很便宜：实测一次 3 行审校 ≈ 860 tokens，
+    相比润色那一次的 1,788~20,600 tokens 可以忽略。因此它的缓存分区也固定是 `polish_audit`。
     """
     if not pairs:
         return set()
@@ -116,8 +117,7 @@ def _audit_info_changes(pairs: Sequence[Tuple[int, str, str]], stats: Dict[str, 
         return {"status": "success", "message": "audit ok"}
 
     try:
-        data = ask_gpt(prompt, response_json=True, valid_def=valid_audit,
-                       log_title=_log_title('polish_audit', extra_body), extra_body=extra_body)
+        data = ask_gpt(prompt, response_json=True, valid_def=valid_audit, log_title='polish_audit')
     except Exception as exc:  # noqa: BLE001 - 审校不可用不能变成"整批丢词"
         console.print(f"[yellow]⚠️ 润色审校不可用（{type(exc).__name__}），本批改动按原样保留[/yellow]")
         stats['audit_failed'] += 1
@@ -220,7 +220,7 @@ def polish_lines(sources: Sequence[str], translations: Sequence[str],
             if subtitle_split.normalize_text(polished) != subtitle_split.normalize_text(original):
                 changed_pairs.append((row_id, original, polished))
 
-        for row_id in _audit_info_changes(changed_pairs, stats, extra_body):
+        for row_id in _audit_info_changes(changed_pairs, stats):
             result[row_id] = current[row_id]
             stats['reverted'] = stats.get('reverted', 0) + 1
 
@@ -261,7 +261,8 @@ def polish_subs_main():
     console.print(f"[cyan]📐 字幕长度档位：[/cyan]{limits.label}")
     use_thinking = config_utils.polish_thinking()
     long_lines_only = config_utils.polish_long_lines_only()
-    console.print(f"[cyan]🧠 思考：{'开（更忠实，约 20 行/批 2 万 tokens）' if use_thinking else '关（省约 91% token，覆盖率门槛自动提到 0.85）'}[/cyan]")
+    console.print(f"[cyan]🧠 润色思考：{'开（更忠实，约 20 行/批 2 万 tokens）' if use_thinking else '关（省约 91% token，覆盖率门槛自动提到 0.85）'}"
+                  f"｜审校始终按默认档（思考开，约 860 tokens/次）[/cyan]")
     console.print(f"[cyan]✂️ 润色范围：{'只润色有分句的长行' if long_lines_only else '全部行'}[/cyan]")
 
     polished, stats = polish_lines(df['Source'].tolist(), df['Translation'].tolist(),

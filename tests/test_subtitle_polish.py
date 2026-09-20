@@ -131,8 +131,8 @@ class TestPolishThinkingAndScopeSwitches(unittest.TestCase):
         self.assertFalse(ss.needs_polish_long_line("由ALTER公司以成品手办形式发售"))  # 够长但无逗号
         self.assertTrue(ss.needs_polish_long_line("大学时我主修雕塑，大三开始制作GK套件，"))
 
-    def test_audit_follows_the_thinking_switch_and_uses_its_own_cache_partition(self):
-        """审校也要跟随思考开关（否则"我关了思考怎么还在花思考 token"），且两档缓存分区不同。"""
+    def test_audit_always_runs_with_the_default_thinking_mode(self):
+        """思考开关**只管润色**（用户 2026-09-21 明确）：审校不传 extra_body、分区恒为 polish_audit。"""
         calls = []
 
         def fake_ask(prompt, **kwargs):
@@ -150,10 +150,10 @@ class TestPolishThinkingAndScopeSwitches(unittest.TestCase):
 
         self.assertEqual(len(calls), 2, "一次润色 + 一次审校")
         polish_call, audit_call = calls
-        self.assertEqual(polish_call['log_title'], 'polish_subs_nothink')
-        self.assertEqual(audit_call['log_title'], 'polish_audit_nothink')
+        self.assertEqual(polish_call['log_title'], 'polish_subs_nothink')      # 润色按档位分区
         self.assertEqual(polish_call['extra_body'], {"thinking": {"type": "disabled"}})
-        self.assertEqual(audit_call['extra_body'], {"thinking": {"type": "disabled"}})
+        self.assertEqual(audit_call['log_title'], 'polish_audit')              # 审校分区恒定
+        self.assertIsNone(audit_call.get('extra_body'), "审校必须按模型默认档（思考开）跑")
 
     def test_thinking_on_uses_the_plain_cache_partition(self):
         calls = []
